@@ -1,0 +1,5 @@
+/target
+*.bin
+*.BIN
+!tests/fixtures/*.bin
+.DS_Store
