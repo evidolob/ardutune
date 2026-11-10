@@ -91,6 +91,43 @@ impl Table {
         }
     }
 
+    /// Removes rows whose timestamp is impossible: beyond any plausible time
+    /// since boot, or a lone jump away from two agreeing neighbours. Such rows
+    /// are corrupt messages that happened to be framed correctly.
+    fn drop_timestamp_spikes(&mut self) -> usize {
+        const MAX_TIME_S: f64 = 1e7;
+        const SPIKE_S: f64 = 5.0;
+        let Some(t) = self.time_s() else { return 0 };
+        let n = t.len();
+        let keep: Vec<bool> = (0..n)
+            .map(|i| {
+                if t[i] > MAX_TIME_S {
+                    return false;
+                }
+                if i == 0 || i + 1 >= n {
+                    return true;
+                }
+                let (p, x, q) = (t[i - 1], t[i], t[i + 1]);
+                !((x - p).abs() > SPIKE_S && (x - q).abs() > SPIKE_S && (q - p).abs() <= SPIKE_S)
+            })
+            .collect();
+        let dropped = keep.iter().filter(|k| !**k).count();
+        if dropped > 0 {
+            fn retain<T>(v: &mut Vec<T>, keep: &[bool]) {
+                let mut k = keep.iter();
+                v.retain(|_| *k.next().unwrap());
+            }
+            for c in &mut self.columns {
+                match c {
+                    Column::Num(v) => retain(v, &keep),
+                    Column::Text(v) => retain(v, &keep),
+                    Column::I16x32(v) => retain(v, &keep),
+                }
+            }
+        }
+        dropped
+    }
+
     /// Timestamps in seconds, from `TimeUS` or (older logs) `TimeMS`.
     pub fn time_s(&self) -> Option<Vec<f64>> {
         if let Some(t) = self.num("TimeUS") {
@@ -110,6 +147,8 @@ pub struct ParseStats {
     pub undecodable: usize,
     /// The file ended in the middle of a message.
     pub truncated: bool,
+    /// Messages dropped because their timestamp was impossible (corrupt data).
+    pub bad_timestamps: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -158,6 +197,18 @@ impl Firmware {
     }
 }
 
+/// Where [`Log::flight`] got the flight periods from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlightSource {
+    /// ARM messages or armed/disarmed events.
+    Arming,
+    /// Arming wasn't logged; periods with the motors spinning.
+    MotorOutput,
+    /// Nothing to go on; the whole log.
+    WholeLog,
+}
+
 /// A time span in seconds since boot.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Interval {
@@ -190,12 +241,19 @@ pub struct Log {
     pub stats: ParseStats,
 }
 
+/// Motor-running periods closer than this are merged.
+const MERGE_GAP_S: f64 = 3.0;
+const MIN_LEN_S: f64 = 2.0;
+
 // ARM/EV ids used by every Copter version since 3.x.
 const EV_ARMED: f64 = 10.0;
 const EV_DISARMED: f64 = 11.0;
 
 impl Log {
-    pub(crate) fn new(tables: BTreeMap<String, Table>, stats: ParseStats) -> Self {
+    pub(crate) fn new(mut tables: BTreeMap<String, Table>, mut stats: ParseStats) -> Self {
+        for t in tables.values_mut() {
+            stats.bad_timestamps += t.drop_timestamp_spikes();
+        }
         let mut params = BTreeMap::new();
         if let Some(parm) = tables.get("PARM") {
             if let (Some(names), Some(values)) = (parm.text("Name"), parm.num("Value")) {
@@ -267,6 +325,46 @@ impl Log {
             }
         }
         span
+    }
+
+    /// The periods to analyse as flight: armed periods when the log records
+    /// arming, otherwise periods with motor output, otherwise the whole log.
+    /// Logs often miss arming: logging starts at arming and the end of the
+    /// file can be lost.
+    pub fn flight(&self) -> (Vec<Interval>, FlightSource) {
+        let armed = self.armed_intervals();
+        if !armed.is_empty() {
+            return (armed, FlightSource::Arming);
+        }
+        let motors = self.motor_running_intervals();
+        if !motors.is_empty() {
+            return (motors, FlightSource::MotorOutput);
+        }
+        (self.time_span().into_iter().collect(), FlightSource::WholeLog)
+    }
+
+    /// Periods with the motors spinning, from ESC RPM telemetry or, without
+    /// it, throttle output (CTUN.ThO). Short dips are merged.
+    fn motor_running_intervals(&self) -> Vec<Interval> {
+        let series = |table: &str, field: &str| {
+            let t = self.table(table)?;
+            Some((t.time_s()?, t.num(field)?.to_vec()))
+        };
+        let Some((t, v)) = series("ESC", "RPM").or_else(|| series("CTUN", "ThO")) else { return Vec::new() };
+        let mut samples: Vec<(f64, f64)> = t.into_iter().zip(v).collect();
+        samples.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut out: Vec<Interval> = Vec::new();
+        for (t, v) in samples {
+            if v <= 0.0 {
+                continue;
+            }
+            match out.last_mut() {
+                Some(last) if t - last.end <= MERGE_GAP_S => last.end = t,
+                _ => out.push(Interval { start: t, end: t }),
+            }
+        }
+        out.retain(|i| i.duration() >= MIN_LEN_S);
+        out
     }
 
     /// Armed periods, from ARM messages (4.1+) or EV armed/disarmed events.
@@ -350,6 +448,36 @@ mod tests {
         let log = Log::from_bytes(&w.into_bytes());
         let a = log.armed_intervals();
         assert_eq!(a, vec![Interval { start: 1.0, end: 5.0 }, Interval { start: 8.0, end: 10.0 }]);
+    }
+
+    #[test]
+    fn drops_corrupt_timestamps() {
+        let mut w = LogWriter::new();
+        let t = w.define("X", "Qf", "TimeUS,V");
+        for (us, v) in [(1_000_000, 1.0), (1_002_500, 2.0), (2_590_106_135_395, 9.0), (1_007_500, 3.0), (20_000_000_000_000, 9.0)] {
+            w.write(t, &[V::I(us), V::F(v)]);
+        }
+        let log = Log::from_bytes(&w.into_bytes());
+        assert_eq!(log.table("X").unwrap().num("V").unwrap(), &[1.0, 2.0, 3.0]);
+        assert_eq!(log.stats.bad_timestamps, 2);
+    }
+
+    #[test]
+    fn flight_from_motor_output_when_arming_missing() {
+        let mut w = LogWriter::new();
+        let ctun = w.define("CTUN", "Qf", "TimeUS,ThO");
+        for i in 0..400 {
+            let t = i as f64 * 0.1;
+            // Throttle 5-20 s and 30-35 s, with a 1 s dip at 10 s.
+            let th = if (5.0..20.0).contains(&t) && !(10.0..11.0).contains(&t) || (30.0..35.0).contains(&t) { 0.3 } else { 0.0 };
+            w.write(ctun, &[V::I((t * 1e6) as i64), V::F(th)]);
+        }
+        let log = Log::from_bytes(&w.into_bytes());
+        let (flight, source) = log.flight();
+        assert_eq!(source, FlightSource::MotorOutput);
+        assert_eq!(flight.len(), 2);
+        assert!((flight[0].start - 5.0).abs() < 1e-6 && (flight[0].end - 19.9).abs() < 1e-6);
+        assert!((flight[1].start - 30.0).abs() < 1e-6);
     }
 
     #[test]

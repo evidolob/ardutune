@@ -6,7 +6,7 @@
 
 use serde::Serialize;
 
-use crate::log::{in_any, total_duration, Interval, Log, Table, Vehicle};
+use crate::log::{in_any, total_duration, FlightSource, Interval, Log, Table, Vehicle};
 use crate::stats;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -48,7 +48,9 @@ pub struct ParamChange {
 pub struct Report {
     pub firmware: Option<String>,
     pub log_duration_s: f64,
-    pub armed_duration_s: f64,
+    /// Time analysed as flight, and how it was found.
+    pub flight_duration_s: f64,
+    pub flight_source: FlightSource,
     pub checks: Vec<Check>,
     /// The log has what gyro-noise / notch filter analysis needs.
     pub filter_ready: bool,
@@ -110,8 +112,9 @@ const REQUIRED_LOG_BITS: [(u32, &str); 6] = [
 const RAW_LOG_OPT_RECOMMENDED: f64 = 9.0;
 const RAW_LOG_OPT_PRE_POST_BIT: u32 = 3;
 /// INS_LOG_BAT_OPT value for pre- and post-filter batch sampling.
-const BAT_OPT_PRE_POST: f64 = 4.0;
-const BAT_OPT_POST_ONLY: f64 = 2.0;
+/// INS_LOG_BAT_OPT bits: sensor-rate sampling, post-filter only, pre and post filter.
+const BAT_OPT_POST_ONLY_BIT: u32 = 1;
+const BAT_OPT_PRE_POST_BIT: u32 = 2;
 
 const MIN_ARMED_S: f64 = 30.0;
 const VIBE_OK: f64 = 30.0;
@@ -124,6 +127,11 @@ const HOVER_MIN_S: f64 = 10.0;
 const HOVER_BLOCK_S: f64 = 2.0;
 const HOVER_MIN_THROTTLE: f64 = 0.1;
 const HOVER_MAX_THROTTLE_STD: f64 = 0.04;
+const HOVER_MIN_HEIGHT_M: f64 = 1.0;
+const HOVER_MAX_ALT_STD_M: f64 = 0.3;
+const HOVER_MAX_RATE_DEG_S: f64 = 30.0;
+/// PID targets this small across a whole flight must be rad/s, not deg/s.
+const MAX_RAD_S_TARGET: f64 = 30.0;
 const PID_RATE_OK_HZ: f64 = 100.0;
 /// A 1 s window counts as a stick input when the rate target spans this much.
 const SNAP_RANGE_DEG_S: [f64; 3] = [60.0, 60.0, 30.0];
@@ -176,14 +184,14 @@ impl Ctx<'_> {
 /// Runs every readiness check on a parsed log.
 pub fn assess(log: &Log) -> Report {
     let span = log.time_span();
-    let armed = log.armed_intervals();
-    let flight = if armed.is_empty() { span.into_iter().collect() } else { armed.clone() };
+    let (flight, flight_source) = log.flight();
     let flight_s = total_duration(&flight);
+    let armed_check = check_flight(&flight, flight_source, flight_s);
     let ctx = Ctx { log, flight, flight_s };
 
     let mut checks = vec![
         check_firmware(log),
-        check_armed(&armed, total_duration(&armed)),
+        armed_check,
         check_integrity(log),
         check_vibration(&ctx),
         check_clipping(&ctx),
@@ -209,7 +217,8 @@ pub fn assess(log: &Log) -> Report {
     Report {
         firmware: log.firmware().map(|f| f.text).filter(|t| !t.is_empty()),
         log_duration_s: span.map_or(0.0, |s| s.duration()),
-        armed_duration_s: total_duration(&armed),
+        flight_duration_s: flight_s,
+        flight_source,
         checks,
         filter_ready,
         pid_ready,
@@ -259,25 +268,31 @@ fn check_firmware(log: &Log) -> Check {
     }
 }
 
-fn check_armed(armed: &[Interval], armed_s: f64) -> Check {
+fn check_flight(flight: &[Interval], source: FlightSource, flight_s: f64) -> Check {
     let id = "general.armed";
-    if armed.is_empty() {
+    if source == FlightSource::WholeLog {
         return check(
             id,
             Area::General,
             Status::Warn,
-            "Arming not recorded",
-            "No ARM/EV arming events found; analysing the whole log as if it were flight.",
+            "Flight not found",
+            "No arming events or motor output found; analysing the whole log as if it were flight.",
         );
     }
-    let status = if armed_s >= MIN_ARMED_S { Status::Pass } else { Status::Warn };
-    check(
-        id,
-        Area::General,
-        status,
-        format!("Armed for {armed_s:.0} s in {} period(s)", armed.len()),
-        if status == Status::Pass { "Enough flight time to analyse." } else { "Short flight: aim for at least 60 s in the air." },
-    )
+    let status = if flight_s >= MIN_ARMED_S { Status::Pass } else { Status::Warn };
+    let title = match source {
+        FlightSource::Arming => format!("Armed for {flight_s:.0} s in {} period(s)", flight.len()),
+        _ => format!("Motors running for {flight_s:.0} s in {} period(s)", flight.len()),
+    };
+    let mut detail = if status == Status::Pass {
+        "Enough flight time to analyse.".to_owned()
+    } else {
+        "Short flight: aim for at least 60 s in the air.".to_owned()
+    };
+    if source == FlightSource::MotorOutput {
+        detail = format!("Arming isn't recorded in this log, so flight was found from motor output. {detail}");
+    }
+    check(id, Area::General, status, title, detail)
 }
 
 fn check_integrity(log: &Log) -> Check {
@@ -299,6 +314,9 @@ fn check_integrity(log: &Log) -> Check {
     }
     if s.undecodable > 0 {
         problems.push(format!("{} messages with unreadable formats", s.undecodable));
+    }
+    if s.bad_timestamps > 0 {
+        problems.push(format!("{} corrupt messages dropped", s.bad_timestamps));
     }
     if s.truncated {
         problems.push("the file ends mid-message".to_owned());
@@ -407,10 +425,10 @@ fn check_gyro_data(ctx: &Ctx) -> Check {
     if let Some(isbh) = log.table("ISBH") {
         let gyro_batches = isbh.num("type").map_or(isbh.len(), |t| t.iter().filter(|t| **t == 1.0).count());
         let rate = isbh.num_any(&["smp_rate", "SmpRate"]).and_then(stats::median);
-        let opt = log.param("INS_LOG_BAT_OPT").unwrap_or(0.0);
-        let (pre_post, note) = if opt == BAT_OPT_PRE_POST {
+        let opt = log.param("INS_LOG_BAT_OPT").unwrap_or(0.0) as u32;
+        let (pre_post, note) = if opt & (1 << BAT_OPT_PRE_POST_BIT) != 0 {
             (true, "Pre- and post-filter batches present.")
-        } else if opt == BAT_OPT_POST_ONLY {
+        } else if opt & (1 << BAT_OPT_POST_ONLY_BIT) != 0 {
             (false, "Only post-filter batches: fine for verifying filters, but noise analysis needs pre-filter data (INS_LOG_BAT_OPT=4).")
         } else {
             (false, "Pre-filter batches only. INS_LOG_BAT_OPT=4 adds post-filter data for verifying filters.")
@@ -470,25 +488,20 @@ fn raw_gyro_rate(gyr: &Table) -> Option<f64> {
 
 fn check_hover(ctx: &Ctx) -> Check {
     let id = "filters.hover";
-    let Some((t, th)) = ctx.log.table("CTUN").and_then(|c| ctx.flight_series(c, "ThO")) else {
+    let ctun = ctx.log.table("CTUN");
+    let (hover_s, method) = if let Some((t, alt)) = ctun.and_then(|c| ctx.flight_series(c, "Alt")) {
+        (hover_from_altitude(ctx, &t, &alt), "altitude held, no manoeuvres")
+    } else if let Some((t, th)) = ctun.and_then(|c| ctx.flight_series(c, "ThO")) {
+        (hover_from_throttle(ctx, &t, &th), "steady throttle")
+    } else {
         return check(
             id,
             Area::Filters,
             Status::Warn,
-            "Hover not checked (no CTUN.ThO)",
+            "Hover not checked (no CTUN data)",
             "Enable the CTUN bit in LOG_BITMASK so steady hover can be found.",
         );
     };
-    let hover_s = ctx
-        .windows(&t, &th, HOVER_BLOCK_S)
-        .iter()
-        .filter(|w| {
-            w.len() >= 5
-                && stats::mean(w).is_some_and(|m| m > HOVER_MIN_THROTTLE)
-                && stats::std_dev(w).is_some_and(|s| s < HOVER_MAX_THROTTLE_STD)
-        })
-        .count() as f64
-        * HOVER_BLOCK_S;
     let status = if hover_s >= HOVER_OK_S {
         Status::Pass
     } else if hover_s >= HOVER_MIN_S {
@@ -500,13 +513,56 @@ fn check_hover(ctx: &Ctx) -> Check {
         id,
         Area::Filters,
         status,
-        format!("{hover_s:.0} s of steady hover"),
+        format!("{hover_s:.0} s of steady hover ({method})"),
         match status {
             Status::Pass => "Enough steady hover for a clean noise spectrum.",
             Status::Warn => "Some hover found; 30-60 s of hands-off hover gives a cleaner spectrum.",
             _ => "No steady hover found. Hover hands-off for 30-60 s in AltHold.",
         },
     )
+}
+
+/// Seconds in 2 s windows that are airborne, hold altitude and (when RATE
+/// is logged) have no large roll/pitch rate demands.
+fn hover_from_altitude(ctx: &Ctx, t: &[f64], alt: &[f64]) -> f64 {
+    let Some(ground) = stats::percentile(alt, 2.0) else { return 0.0 };
+    let alt_w = ctx.windows(t, alt, HOVER_BLOCK_S);
+    // Same flight intervals and window length, so window k lines up across signals.
+    let demand_w: Vec<Vec<Vec<f64>>> = ["RDes", "PDes"]
+        .iter()
+        .filter_map(|f| ctx.log.table("RATE").and_then(|r| ctx.flight_series(r, f)))
+        .map(|(t, v)| ctx.windows(&t, &v, HOVER_BLOCK_S))
+        .collect();
+    let calm = |k: usize| {
+        demand_w.iter().all(|w| {
+            let abs: Vec<f64> = w[k].iter().map(|v| v.abs()).collect();
+            stats::percentile(&abs, 95.0).is_none_or(|p| p < HOVER_MAX_RATE_DEG_S)
+        })
+    };
+    let blocks = alt_w
+        .iter()
+        .enumerate()
+        .filter(|(k, w)| {
+            w.len() >= 5
+                && stats::mean(w).is_some_and(|m| m - ground > HOVER_MIN_HEIGHT_M)
+                && stats::std_dev(w).is_some_and(|s| s < HOVER_MAX_ALT_STD_M)
+                && calm(*k)
+        })
+        .count();
+    blocks as f64 * HOVER_BLOCK_S
+}
+
+/// Fallback for logs without altitude: windows with steady throttle.
+fn hover_from_throttle(ctx: &Ctx, t: &[f64], th: &[f64]) -> f64 {
+    ctx.windows(t, th, HOVER_BLOCK_S)
+        .iter()
+        .filter(|w| {
+            w.len() >= 5
+                && stats::mean(w).is_some_and(|m| m > HOVER_MIN_THROTTLE)
+                && stats::std_dev(w).is_some_and(|s| s < HOVER_MAX_THROTTLE_STD)
+        })
+        .count() as f64
+        * HOVER_BLOCK_S
 }
 
 fn check_rpm_source(ctx: &Ctx) -> Check {
@@ -589,16 +645,28 @@ fn check_pid_logging(ctx: &Ctx) -> Check {
     }
 }
 
+/// Rate targets in deg/s for one axis: RATE.RDes/PDes/YDes when logged,
+/// otherwise the PID target, which some firmware logs in rad/s.
+fn rate_target_deg_s(ctx: &Ctx, rate_field: &str, pid_table: &str) -> Option<(Vec<f64>, Vec<f64>)> {
+    if let Some(series) = ctx.log.table("RATE").and_then(|r| ctx.flight_series(r, rate_field)) {
+        return Some(series);
+    }
+    let (t, tar) = ctx.log.table(pid_table).and_then(|p| ctx.flight_series(p, "Tar"))?;
+    let max = tar.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let scale = if max < MAX_RAD_S_TARGET { 180.0 / std::f64::consts::PI } else { 1.0 };
+    Some((t, tar.iter().map(|v| v * scale).collect()))
+}
+
 fn check_excitation(ctx: &Ctx) -> Vec<Check> {
-    const AXES: [(&str, &str, &str); 3] = [
-        ("PIDR", "pid.excitation.roll", "roll"),
-        ("PIDP", "pid.excitation.pitch", "pitch"),
-        ("PIDY", "pid.excitation.yaw", "yaw"),
+    const AXES: [(&str, &str, &str, &str); 3] = [
+        ("RDes", "PIDR", "pid.excitation.roll", "roll"),
+        ("PDes", "PIDP", "pid.excitation.pitch", "pitch"),
+        ("YDes", "PIDY", "pid.excitation.yaw", "yaw"),
     ];
     AXES.iter()
         .enumerate()
-        .map(|(axis, (table, id, name))| {
-            let Some((t, tar)) = ctx.log.table(table).and_then(|t| ctx.flight_series(t, "Tar")) else {
+        .map(|(axis, (rate_field, pid_table, id, name))| {
+            let Some((t, tar)) = rate_target_deg_s(ctx, rate_field, pid_table) else {
                 return check(id, Area::Pid, Status::Fail, format!("No {name} rate target logged"), "");
             };
             let snaps = ctx
@@ -667,7 +735,10 @@ fn recommend_params(param: &dyn Fn(&str) -> Option<f64>, gyro_complete: bool) ->
             set("INS_LOG_BAT_OPT", 0.0, format!("Batch sampler off: {why}"));
         } else {
             set("INS_LOG_BAT_MASK", 1.0, "Batch-sample the first IMU for noise analysis".to_owned());
-            set("INS_LOG_BAT_OPT", BAT_OPT_PRE_POST, "Sample gyro before and after filtering".to_owned());
+            // Keep sensor-rate sampling if set; pre-and-post replaces post-only.
+            let opt = param("INS_LOG_BAT_OPT").map_or(0, |v| v as u32);
+            let opt = (opt | (1 << BAT_OPT_PRE_POST_BIT)) & !(1 << BAT_OPT_POST_ONLY_BIT);
+            set("INS_LOG_BAT_OPT", opt as f64, "Sample gyro before and after filtering".to_owned());
         }
     }
     out
@@ -723,7 +794,8 @@ mod tests {
         assert!(r.recommended_params.is_empty(), "{:?}", r.recommended_params);
         assert!(r.flight_plan.is_empty());
         assert_eq!(r.firmware.as_deref(), Some("ArduCopter V4.6.2 (a1b2c3d4)"));
-        assert!((r.armed_duration_s - 60.0).abs() < 1e-6);
+        assert!((r.flight_duration_s - 60.0).abs() < 1e-6);
+        assert_eq!(r.flight_source, FlightSource::Arming);
         assert!(r.check("filters.gyro_data").unwrap().title.contains("2000 Hz"));
         assert!(r.check("pid.logging").unwrap().title.contains("400 Hz"));
     }
@@ -764,6 +836,37 @@ mod tests {
         let new_mask = get("LOG_BITMASK").unwrap() as u32;
         assert_eq!(new_mask & (1 << BIT_IMU_RAW), 0);
         assert_eq!(new_mask & 1, 1);
+    }
+
+    /// Mirrors a real 4.7 log: PID targets in rad/s, no RATE message, and a
+    /// throttle too small for throttle-based hover detection.
+    #[test]
+    fn handles_rad_s_targets_and_altitude_hover() {
+        use crate::synth::{LogWriter, V};
+        let mut w = LogWriter::new();
+        let ev = w.define("EV", "QB", "TimeUS,Id");
+        let ctun = w.define("CTUN", "Qff", "TimeUS,ThO,Alt");
+        let pidr = w.define("PIDR", "Qf", "TimeUS,Tar");
+        w.write(ev, &[V::I(0), V::I(10)]);
+        w.write(ev, &[V::I(60_000_000), V::I(11)]);
+        for i in 0..600 {
+            let t = i as f64 * 0.1;
+            let alt = if t < 5.0 { 0.0 } else { 3.0 + 0.05 * (t * 3.0).sin() };
+            w.write(ctun, &[V::I((t * 1e6) as i64), V::F(0.02), V::F(alt)]);
+        }
+        for i in 0..6000 {
+            let t = i as f64 * 0.01;
+            // 2.6 rad/s (150 deg/s) pulses during 45-55 s.
+            let tar = if (45.0..55.0).contains(&t) && t.fract() < 0.5 { 2.6 } else { 0.0 };
+            w.write(pidr, &[V::I((t * 1e6) as i64), V::F(tar)]);
+        }
+        let r = assess(&Log::from_bytes(&w.into_bytes()));
+        let hover = r.check("filters.hover").unwrap();
+        assert_eq!(hover.status, Status::Pass, "{hover:?}");
+        assert!(hover.title.contains("altitude"));
+        let roll = r.check("pid.excitation.roll").unwrap();
+        assert_eq!(roll.status, Status::Pass, "{roll:?}");
+        assert_eq!(roll.title, "10 sharp roll inputs");
     }
 
     #[test]

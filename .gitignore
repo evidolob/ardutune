@@ -3,3 +3,4 @@
 *.BIN
 !tests/fixtures/*.bin
 .DS_Store
+*.param

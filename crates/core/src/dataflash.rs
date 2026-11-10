@@ -121,7 +121,9 @@ fn parse_fmt(p: &[u8]) -> Format {
 
 /// Parses a whole log held in memory. Never fails: corrupt regions are
 /// skipped by scanning for the next message header, and counted in
-/// [`ParseStats`].
+/// [`ParseStats`]. A message is only accepted when the next one starts right
+/// after it (or the file ends), which rejects header bytes that occur by
+/// chance inside damaged data.
 pub fn parse(bytes: &[u8]) -> Log {
     let mut formats: HashMap<u8, Format> = HashMap::new();
     let mut tables: BTreeMap<String, Table> = BTreeMap::new();
@@ -141,6 +143,11 @@ pub fn parse(bytes: &[u8]) -> Log {
                 stats.truncated = true;
                 break;
             }
+            if !next_is_header(bytes, i + FMT_LEN) {
+                i += 1;
+                stats.skipped_bytes += 1;
+                continue;
+            }
             let fmt = parse_fmt(&bytes[i + HEADER_LEN..i + FMT_LEN]);
             if fmt.type_id != FMT_TYPE {
                 formats.insert(fmt.type_id, fmt);
@@ -158,6 +165,11 @@ pub fn parse(bytes: &[u8]) -> Log {
         if i + fmt.length > bytes.len() {
             stats.truncated = true;
             break;
+        }
+        if !next_is_header(bytes, i + fmt.length) {
+            i += 1;
+            stats.skipped_bytes += 1;
+            continue;
         }
         let payload = &bytes[i + HEADER_LEN..i + fmt.length];
         match &fmt.kinds {
@@ -179,6 +191,11 @@ pub fn parse(bytes: &[u8]) -> Log {
     }
 
     Log::new(tables, stats)
+}
+
+/// True when a message header starts at `pos`, or the file ends before one could.
+fn next_is_header(bytes: &[u8], pos: usize) -> bool {
+    pos + 2 > bytes.len() || (bytes[pos] == HEAD1 && bytes[pos + 1] == HEAD2)
 }
 
 fn decode_into(table: &mut Table, mut p: &[u8]) {
@@ -326,8 +343,10 @@ mod tests {
         bytes.extend_from_slice(&tail);
 
         let log = parse(&bytes);
-        assert_eq!(log.table("VAL").unwrap().num("X").unwrap(), &[1.0, 2.0]);
-        assert_eq!(log.stats.skipped_bytes, 5);
+        // The message right before the garbage is rejected too: nothing
+        // proves where it ends.
+        assert_eq!(log.table("VAL").unwrap().num("X").unwrap(), &[2.0]);
+        assert_eq!(log.stats.skipped_bytes, 15 + 5);
         assert!(log.stats.truncated);
     }
 

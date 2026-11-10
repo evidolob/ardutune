@@ -7,5 +7,5 @@ pub mod readiness;
 pub mod stats;
 pub mod synth;
 
-pub use log::{Firmware, Interval, Log, Table, Vehicle};
+pub use log::{FlightSource, Firmware, Interval, Log, Table, Vehicle};
 pub use readiness::{assess, Report};

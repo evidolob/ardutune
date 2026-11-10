@@ -222,11 +222,14 @@ fn info(log: &Log, fields: bool) {
     if let Some(span) = log.time_span() {
         println!("Duration: {:.1} s", span.duration());
     }
-    let armed = log.armed_intervals();
-    println!("Armed:    {:.1} s in {} period(s)", ardutune_core::log::total_duration(&armed), armed.len());
+    let (flight, source) = log.flight();
+    println!("Flight:   {:.1} s in {} period(s), from {source:?}", ardutune_core::log::total_duration(&flight), flight.len());
     println!("Params:   {}", log.params().len());
     let s = &log.stats;
-    println!("Messages: {} ({} skipped bytes, truncated: {})", s.messages, s.skipped_bytes, s.truncated);
+    println!(
+        "Messages: {} ({} skipped bytes, {} corrupt dropped, truncated: {})",
+        s.messages, s.skipped_bytes, s.bad_timestamps, s.truncated
+    );
     println!();
     for t in log.tables().filter(|t| !t.is_empty()) {
         if fields {
@@ -240,7 +243,7 @@ fn info(log: &Log, fields: bool) {
 fn print_report(r: &Report) {
     println!("ArduTune log readiness");
     println!("Firmware: {}", r.firmware.as_deref().unwrap_or("unknown"));
-    println!("Log {:.0} s, armed {:.0} s", r.log_duration_s, r.armed_duration_s);
+    println!("Log {:.0} s, flight {:.0} s", r.log_duration_s, r.flight_duration_s);
 
     for (area, heading) in [
         (Area::General, "General"),
