@@ -3,6 +3,7 @@
 pub mod dataflash;
 pub mod diagnose;
 pub mod log;
+pub mod noise;
 pub mod params;
 pub mod readiness;
 pub mod stats;

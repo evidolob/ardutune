@@ -169,7 +169,7 @@ fn motor_channels(log: &Log) -> Vec<(usize, u32)> {
 }
 
 /// ESC telemetry instances are numbered by output channel.
-fn motor_for_esc(log: &Log, instance: u32) -> u32 {
+pub(crate) fn motor_for_esc(log: &Log, instance: u32) -> u32 {
     motor_on_channel(log, instance as usize + 1).unwrap_or(instance + 1)
 }
 

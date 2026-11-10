@@ -1,9 +1,11 @@
+mod svg;
 mod vehicle;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ardutune_core::diagnose::{diagnose, Confidence, Diagnosis, Finding};
+use ardutune_core::noise::{self, NoiseReport, PeakClass, Source};
 use ardutune_core::params::format_value;
 use ardutune_core::readiness::{Area, Status};
 use ardutune_core::synth::{sample_flight, Preset};
@@ -53,6 +55,16 @@ enum Cmd {
         /// Print the diagnosis as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Analyse gyro noise: spectrum before/after filters, noise peaks, notch coverage
+    Noise {
+        log: PathBuf,
+        /// Print the analysis as JSON (includes full spectra and spectrogram)
+        #[arg(long)]
+        json: bool,
+        /// Write a plot of the spectrum and spectrogram to this SVG file
+        #[arg(long, value_name = "FILE")]
+        svg: Option<PathBuf>,
     },
     /// List serial ports and which look like flight controllers
     Ports,
@@ -160,6 +172,18 @@ fn main() -> Result<()> {
                 print_diagnosis(&d);
             }
         }
+        Cmd::Noise { log, json, svg } => {
+            let r = noise::analyse(&open(&log)?).map_err(anyhow::Error::msg)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                print_noise(&r);
+            }
+            if let Some(path) = svg {
+                std::fs::write(&path, svg::render(&r)).with_context(|| format!("writing {}", path.display()))?;
+                eprintln!("Wrote plot to {}", path.display());
+            }
+        }
         Cmd::Ports => vehicle::print_ports(),
         Cmd::Connect => {
             let mut link = vehicle::connect(&cli.conn)?;
@@ -253,6 +277,80 @@ fn info(log: &Log, fields: bool) {
         } else {
             println!("{:<6} {:>9}", t.name, t.len());
         }
+    }
+}
+
+fn print_noise(r: &NoiseReport) {
+    println!("ArduTune gyro noise analysis");
+    let source = match r.source {
+        Source::BatchSampler => "batch sampler",
+        Source::RawImu => "raw IMU logging",
+    };
+    println!("Data: {source} at {:.0} Hz, {}", r.sample_rate_hz, r.selection);
+    if let (Some(m), Some((lo, hi))) = (r.hover_motor_hz, r.hover_motor_range_hz) {
+        let each: Vec<String> = r.hover_motor_hz_by_motor.iter().map(|(n, f)| format!("{n}: {f:.0}")).collect();
+        println!("Motor speed: {m:.1} Hz on average ({lo:.0}-{hi:.0} Hz; per motor {})", each.join(", "));
+    }
+    match r.noise_rms_post {
+        Some(post) => println!(
+            "Gyro noise above {:.0} Hz: {:.1} °/s before filters, {post:.1} °/s after ({:.0} dB less)",
+            noise::MIN_NOISE_HZ,
+            r.noise_rms_pre,
+            20.0 * (r.noise_rms_pre / post.max(1e-9)).log10()
+        ),
+        None => println!("Gyro noise above {:.0} Hz: {:.1} °/s", noise::MIN_NOISE_HZ, r.noise_rms_pre),
+    }
+
+    println!("\nNoise peaks");
+    if r.peaks.is_empty() {
+        println!("  None stand out.");
+    } else {
+        println!("  {:>7}  {:>9}  {:>6}  {:<5}  {:<26}  {:>14}  Notched", "Freq", "Above flr", "Level", "Axis", "What", "Filters remove");
+    }
+    for p in &r.peaks {
+        let what = match p.class {
+            PeakClass::MotorHarmonic { harmonic, tracks_rpm } => format!(
+                "motor harmonic {harmonic}{}",
+                match tracks_rpm {
+                    Some(true) => " (tracks)",
+                    _ => "",
+                }
+            ),
+            PeakClass::FixedFrequency => "fixed frequency".to_owned(),
+            PeakClass::ControlBand => "control-band motion".to_owned(),
+            PeakClass::Unknown => "unclassified".to_owned(),
+        };
+        let removed = p.filter_reduction_db.map_or("-".to_owned(), |d| format!("{d:.0} dB"));
+        let notched = match p.notch_covered {
+            Some(true) => "yes",
+            Some(false) => "no",
+            None => "-",
+        };
+        println!(
+            "  {:>4.0} Hz  {:>6.0} dB  {:>3.0} dB  {:<5}  {what:<26}  {removed:>14}  {notched}",
+            p.freq_hz, p.prominence_db, p.level_db, p.axis
+        );
+    }
+
+    println!("\nHarmonic notch");
+    if r.notches.is_empty() {
+        println!("  None enabled.");
+    }
+    for n in &r.notches {
+        let centre = n.hover_center_hz.map_or("?".to_owned(), |c| format!("{c:.0} Hz"));
+        let bw = n.bandwidth_hz.map_or("?".to_owned(), |b| format!("{b:.0} Hz"));
+        let h: Vec<String> = n.harmonics.iter().map(u32::to_string).collect();
+        println!("  {}: {}, centre ≈ {centre} at hover, bandwidth {bw}, harmonics {}", n.name, n.mode, h.join(", "));
+    }
+
+    if !r.findings.is_empty() {
+        println!("\nFindings");
+        for f in &r.findings {
+            println!("  - {f}");
+        }
+    }
+    for n in &r.notes {
+        println!("\nNote: {n}");
     }
 }
 

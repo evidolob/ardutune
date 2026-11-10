@@ -116,7 +116,13 @@ System ID mode logs (`SID_*` params) when available.
     ruled out; flight-wide warnings (ESC telemetry error rate, EKF
     innovations). ✅ First validated on a real AutoTune crash: two motors'
     ESCs dropped out 0.11 s before the flip.
-2. Noise analyser (PSD, spectrogram, peak classification).
+2. Noise analyser (PSD, spectrogram, peak classification). ✅ Welch PSD of
+   batch-sampler or raw gyro data in steady flight, pre vs post filter;
+   spectrogram with motor speed; peaks matched to per-motor speed ranges
+   (harmonic k), RPM-tracking test, control-band and fixed-frequency classes;
+   notch coverage and filter attenuation per peak; per-motor hover speed
+   spread; SVG plot. Next: confirm the raw-IMU post-filter instance numbering
+   on a real log.
 3. Filter simulator + notch recommendations + noise-vs-lag view.
 4. Step-response analysis + PID diagnostics + `.param` export.
 5. System ID analysis + plant fit + predicted closed-loop response.
