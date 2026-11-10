@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli"]
+members = ["crates/core", "crates/link", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 ardutune-core = { path = "crates/core" }
+ardutune-link = { path = "crates/link" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

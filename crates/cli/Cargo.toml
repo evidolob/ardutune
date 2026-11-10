@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 ardutune-core.workspace = true
+ardutune-link.workspace = true
 anyhow.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
 serde_json.workspace = true

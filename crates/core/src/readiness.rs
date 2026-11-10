@@ -56,6 +56,8 @@ pub struct Report {
     pub pid_ready: bool,
     pub recommended_params: Vec<ParamChange>,
     pub flight_plan: Vec<String>,
+    #[serde(skip)]
+    gyro_complete: bool,
 }
 
 impl Report {
@@ -77,16 +79,15 @@ impl Report {
         }
         out
     }
-}
 
-pub fn format_value(v: f64) -> String {
-    if v.fract() == 0.0 && v.abs() < 1e15 {
-        format!("{}", v as i64)
-    } else {
-        let s = format!("{v:.6}");
-        s.trim_end_matches('0').trim_end_matches('.').to_owned()
+    /// The recommendations recomputed against other parameter values, such
+    /// as those read from the vehicle just before applying them.
+    pub fn recommendations_for(&self, param: impl Fn(&str) -> Option<f64>) -> Vec<ParamChange> {
+        recommend_params(&param, self.gyro_complete)
     }
 }
+
+pub use crate::params::format_value;
 
 // LOG_BITMASK bits (Copter 4.x).
 const BIT_ATTITUDE_FAST: u32 = 0;
@@ -202,7 +203,7 @@ pub fn assess(log: &Log) -> Report {
         .iter()
         .all(|id| not_failed(id));
 
-    let recommended_params = recommend_params(log, gyro_complete);
+    let recommended_params = recommend_params(&|n| log.param(n), gyro_complete);
     let flight_plan = flight_plan(&recommended_params, filter_ready, pid_ready);
 
     Report {
@@ -214,6 +215,7 @@ pub fn assess(log: &Log) -> Report {
         pid_ready,
         recommended_params,
         flight_plan,
+        gyro_complete,
     }
 }
 
@@ -625,18 +627,18 @@ fn check_excitation(ctx: &Ctx) -> Vec<Check> {
         .collect()
 }
 
-fn recommend_params(log: &Log, gyro_complete: bool) -> Vec<ParamChange> {
+fn recommend_params(param: &dyn Fn(&str) -> Option<f64>, gyro_complete: bool) -> Vec<ParamChange> {
     let mut out = Vec::new();
     let mut set = |name: &str, value: f64, reason: String| {
-        let current = log.param(name);
+        let current = param(name);
         if current != Some(value) {
             out.push(ParamChange { name: name.to_owned(), current, value, reason });
         }
     };
 
     // Raw IMU logging exists from 4.5 on; older firmware uses the batch sampler.
-    let raw_supported = log.param("INS_RAW_LOG_OPT").is_some();
-    let current_mask = log.param("LOG_BITMASK").map_or(0, |m| m as u32);
+    let raw_supported = param("INS_RAW_LOG_OPT").is_some();
+    let current_mask = param("LOG_BITMASK").map_or(0, |m| m as u32);
     let mut mask = REQUIRED_LOG_BITS.iter().fold(current_mask, |m, (bit, _)| m | (1 << bit));
     if !gyro_complete && !raw_supported {
         // The batch sampler must not run alongside IMU_RAW logging.
@@ -765,9 +767,20 @@ mod tests {
     }
 
     #[test]
-    fn formats_values() {
-        assert_eq!(format_value(180223.0), "180223");
-        assert_eq!(format_value(0.135), "0.135");
-        assert_eq!(format_value(-2.5), "-2.5");
+    fn recomputes_against_live_params() {
+        let r = assess(&Log::from_bytes(&sample_flight(Preset::DefaultLogging)));
+        let live = |n: &str| match n {
+            "LOG_BITMASK" => Some((DEFAULT_LOG_BITMASK | 1 | (1 << 12)) as f64),
+            "INS_RAW_LOG_OPT" => Some(9.0),
+            "INS_LOG_BAT_MASK" | "INS_LOG_BAT_OPT" => Some(0.0),
+            _ => None,
+        };
+        assert!(r.recommendations_for(live).is_empty());
+        // A vehicle whose LOG_BITMASK changed since the flight keeps its extra bits.
+        let live = |n: &str| if n == "LOG_BITMASK" { Some(1.0 + 4.0) } else { live(n) };
+        let changes = r.recommendations_for(live);
+        let mask = changes[0].value as u32;
+        assert_eq!(mask & 4, 4);
+        assert_eq!(mask & (1 << 12), 1 << 12);
     }
 }

@@ -2,6 +2,7 @@
 
 pub mod dataflash;
 pub mod log;
+pub mod params;
 pub mod readiness;
 pub mod stats;
 pub mod synth;

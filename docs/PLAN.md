@@ -6,8 +6,10 @@ test-flight DataFlash log and recommends **filter** and **PID** settings.
 ## Goals
 
 - Input: one or more `.bin` DataFlash logs from test flights.
-- Output: ranked findings with evidence plots + a `.param` diff loadable in
-  Mission Planner / QGroundControl / MAVProxy.
+- Output: ranked findings with evidence plots + parameter changes written
+  straight to the vehicle over MAVLink (backup, confirm, verify, reboot), with
+  a `.param` file export as the offline fallback.
+- Logs downloaded from the flight controller over MAVLink, or opened from disk.
 - Desktop first (Windows, macOS, Linux), fully offline.
 - Focus: gyro noise / filter tuning and rate-loop PID tuning. Other diagnostics
   (vibration, hover thrust, EKF, compass, power) only as gates or later additions.
@@ -104,13 +106,15 @@ System ID mode logs (`SID_*` params) when available.
 
 ## MVP roadmap
 
-1. Parser + log readiness check + next-flight `.param` / flight script.
+1. Parser + log readiness check + next-flight `.param` / flight script. ✅
+1b. MAVLink link: log download, parameter backup, direct parameter writes with
+    verification, reboot; simulated vehicle for tests. ✅
 2. Noise analyser (PSD, spectrogram, peak classification).
 3. Filter simulator + notch recommendations + noise-vs-lag view.
 4. Step-response analysis + PID diagnostics + `.param` export.
 5. System ID analysis + plant fit + predicted closed-loop response.
 6. Flight-to-flight comparison / history.
-7. Later: MAVLink log download & confirmed param upload, other diagnostics.
+7. Later: other diagnostics.
 
 ## Risks
 
