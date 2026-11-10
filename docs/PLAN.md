@@ -109,12 +109,40 @@ System ID mode logs (`SID_*` params) when available.
 1. Parser + log readiness check + next-flight `.param` / flight script. ✅
 1b. MAVLink link: log download, parameter backup, direct parameter writes with
     verification, reboot; simulated vehicle for tests. ✅
+1c. Incident diagnosis (`diagnose`): find losses of control and in-flight log
+    ends, build a timeline, rank causes with evidence (ESC telemetry dropout,
+    RPM collapse, ArduPilot thrust-loss messages, output saturation, rate
+    oscillation, battery sag, brownout, vibration, EKF) and list what was
+    ruled out; flight-wide warnings (ESC telemetry error rate, EKF
+    innovations). ✅ First validated on a real AutoTune crash: two motors'
+    ESCs dropped out 0.11 s before the flip.
 2. Noise analyser (PSD, spectrogram, peak classification).
 3. Filter simulator + notch recommendations + noise-vs-lag view.
 4. Step-response analysis + PID diagnostics + `.param` export.
 5. System ID analysis + plant fit + predicted closed-loop response.
 6. Flight-to-flight comparison / history.
-7. Later: other diagnostics.
+7. Later: other diagnostics. Incident diagnosis to grow with more causes
+   (GPS glitch, failsafes, mechanical failure signatures, AutoTune gain
+   sanity) as real logs show them.
+
+## Separate track: configuration guide
+
+A guided setup sequence in the spirit of ArduPilot Methodic Configurator, but
+more robust: done before tuning, as its own step in the app.
+
+- Ordered steps from first boot to ready-to-tune: frame and motor order/
+  direction, ESC protocol and bidirectional DShot, RC and modes, failsafes,
+  battery monitor, sensor calibration, logging for tuning, initial filter and
+  PID defaults scaled to prop size (as the Initial Tune Parameters
+  calculator does).
+- Every step reads the live vehicle, validates the result (not just writes
+  values) and explains why; uses the same backup / confirm / verify / reboot
+  path as parameter writes.
+- Checks that catch real problems: motor order and spin direction tests,
+  ESC telemetry health per motor, compass interference vs throttle,
+  vibration from a short hover, failsafe actions actually set.
+- Resumable, with a record of what was configured and when; diffs against the
+  previous state so changes are always visible and reversible.
 
 ## Risks
 

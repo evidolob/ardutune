@@ -3,6 +3,7 @@ mod vehicle;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use ardutune_core::diagnose::{diagnose, Confidence, Diagnosis, Finding};
 use ardutune_core::params::format_value;
 use ardutune_core::readiness::{Area, Status};
 use ardutune_core::synth::{sample_flight, Preset};
@@ -45,6 +46,13 @@ enum Cmd {
         apply: bool,
         #[command(flatten)]
         apply_opts: ApplyArgs,
+    },
+    /// Find losses of control or crashes in a log and explain their likely cause
+    Diagnose {
+        log: PathBuf,
+        /// Print the diagnosis as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// List serial ports and which look like flight controllers
     Ports,
@@ -144,6 +152,14 @@ fn main() -> Result<()> {
                 apply_recommendations(&cli.conn, &report, &(&apply_opts).into())?;
             }
         }
+        Cmd::Diagnose { log, json } => {
+            let d = diagnose(&open(&log)?);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&d)?);
+            } else {
+                print_diagnosis(&d);
+            }
+        }
         Cmd::Ports => vehicle::print_ports(),
         Cmd::Connect => {
             let mut link = vehicle::connect(&cli.conn)?;
@@ -236,6 +252,53 @@ fn info(log: &Log, fields: bool) {
             println!("{:<6} {:>9}  {}", t.name, t.len(), t.labels.join(", "));
         } else {
             println!("{:<6} {:>9}", t.name, t.len());
+        }
+    }
+}
+
+fn print_finding(prefix: &str, f: &Finding) {
+    let tag = match f.confidence {
+        Confidence::High => "HIGH",
+        Confidence::Medium => "MEDIUM",
+        Confidence::Low => "LOW",
+    };
+    println!("  {prefix}[{tag}] {}", f.title);
+    for e in &f.evidence {
+        println!("       - {e}");
+    }
+    if let Some(a) = &f.advice {
+        println!("       What to do: {a}");
+    }
+}
+
+fn print_diagnosis(d: &Diagnosis) {
+    println!("ArduTune incident diagnosis");
+    if d.incidents.is_empty() {
+        println!("\nNo loss of control or crash found in this log.");
+    }
+    for (n, inc) in d.incidents.iter().enumerate() {
+        println!("\nIncident {}: {}", n + 1, inc.summary);
+        println!("\n  Timeline");
+        for e in &inc.timeline {
+            println!("    {:>8.2} s  {}", e.time_s, e.text);
+        }
+        if !inc.findings.is_empty() {
+            println!("\n  Likely causes, most likely first");
+            for (i, f) in inc.findings.iter().enumerate() {
+                print_finding(&format!("{}. ", i + 1), f);
+            }
+        }
+        if !inc.ruled_out.is_empty() {
+            println!("\n  Ruled out");
+            for r in &inc.ruled_out {
+                println!("    - {r}");
+            }
+        }
+    }
+    if !d.warnings.is_empty() {
+        println!("\nOther problems in this flight");
+        for w in &d.warnings {
+            print_finding("", w);
         }
     }
 }

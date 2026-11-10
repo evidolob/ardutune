@@ -8,6 +8,8 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
 
 - Log parser and log readiness check (does this log have what filter and PID
   tuning need?).
+- Incident diagnosis: finds losses of control and crashes in a log, shows a
+  timeline, ranks likely causes with evidence and lists what was ruled out.
 - Vehicle connection over MAVLink (USB, UDP, TCP): download logs, back up
   parameters, and write recommended parameters directly, with verification.
 
@@ -16,8 +18,8 @@ The desktop UI (Tauri) comes later; for now there is a command-line tool.
 ## Layout
 
 - `crates/core`: analysis library: DataFlash parser (`dataflash`), log model
-  (`log`), readiness checks (`readiness`), parameter files (`params`),
-  synthetic logs (`synth`).
+  (`log`), readiness checks (`readiness`), incident diagnosis (`diagnose`),
+  parameter files (`params`), synthetic logs (`synth`).
 - `crates/link`: MAVLink link to the vehicle: parameters, reboot, log
   download (`Link`), USB port discovery (`ports`), simulated vehicle (`mock`).
 - `crates/cli`: `ardutune` command-line front end.
@@ -32,6 +34,7 @@ for a telemetry link or `--conn tcpout:127.0.0.1:5760` for SITL.
 ardutune ports                          # serial ports; flight controllers marked
 ardutune logs list                      # logs on the flight controller
 ardutune logs download --check          # download the latest log and check it
+ardutune diagnose flight.bin            # why did it crash / lose control?
 ardutune check flight.bin --apply       # write recommended params to the vehicle
 ardutune params -o backup.param         # save all parameters
 ardutune apply backup.param             # write a .param file (e.g. restore a backup)
