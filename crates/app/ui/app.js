@@ -310,10 +310,10 @@ function nav() {
   const item = ([id, label], disabled) =>
     `<button data-action="go" data-view="${id}" class="${state.view === id ? "active" : ""}" ${disabled ? "disabled" : ""}>${esc(label)}${badge(id)}</button>`;
   return `
-    <h3>Flight log</h3>
-    ${LOG_VIEWS.map((v) => item(v, !state.log)).join("")}
     <h3>Vehicle</h3>
-    ${VEHICLE_VIEWS.map((v) => item(v, false)).join("")}`;
+    ${VEHICLE_VIEWS.map((v) => item(v, false)).join("")}
+    <h3>Flight log</h3>
+    ${LOG_VIEWS.map((v) => item(v, !state.log)).join("")}`;
 }
 
 function badge(id) {
