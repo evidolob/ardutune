@@ -132,3 +132,37 @@ fn reports_missing_vehicle() {
     let r = Link::connect(&format!("udpout:127.0.0.1:{port}"), Duration::from_millis(500));
     assert!(matches!(r, Err(Error::NoVehicle)), "{:?}", r.err());
 }
+
+#[test]
+fn deletes_single_logs_by_file_and_erases_all() {
+    let logs: Vec<Vec<u8>> = (0..4).map(|i| bytes(1000 + 300 * i, i as u32)).collect();
+    let mut state = MockState::quad(logs.clone());
+    state.first_log_num = 12;
+    let mock = MockVehicle::start(state).unwrap();
+    let mut link = connect(&mock);
+
+    // Log 2 is file 00000013.BIN; its entry stays, empty, like ArduPilot's.
+    link.delete_log(2).unwrap();
+    assert_eq!(mock.state().deleted, [1].into());
+    let sizes: Vec<u32> = link.list_logs().unwrap().iter().map(|l| l.size).collect();
+    assert_eq!(sizes, vec![1000, 0, 1600, 1900]);
+    let entry = link.list_logs().unwrap()[2];
+    assert_eq!(link.download_log(&entry, &mut |_, _| {}).unwrap(), logs[2]);
+
+    // Deleting the oldest renumbers the rest from the next file.
+    link.delete_log(1).unwrap();
+    let listed = link.list_logs().unwrap();
+    assert_eq!(listed.iter().map(|l| (l.id, l.size)).collect::<Vec<_>>(), vec![(1, 1600), (2, 1900)]);
+    link.delete_log(2).unwrap();
+    assert_eq!(mock.state().deleted, [0, 1, 3].into());
+    assert!(matches!(link.delete_log(2), Err(Error::Command(_))));
+
+    mock.state().armed = true;
+    assert!(matches!(link.delete_log(1), Err(Error::Armed)));
+    assert!(matches!(link.erase_all_logs(), Err(Error::Armed)));
+    mock.state().armed = false;
+
+    link.erase_all_logs().unwrap();
+    assert!(link.list_logs().unwrap().is_empty());
+    assert!(mock.state().logs.is_empty());
+}

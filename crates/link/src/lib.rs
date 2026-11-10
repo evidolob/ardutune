@@ -1,4 +1,5 @@
-//! MAVLink link to an ArduPilot vehicle: parameters, reboot and log download.
+//! MAVLink link to an ArduPilot vehicle: parameters, reboot, log download and
+//! deletion.
 //!
 //! A background thread reads incoming messages into a channel so every
 //! request can wait with a timeout; another sends a GCS heartbeat once a
@@ -15,12 +16,13 @@ use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
     MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_LONG_DATA,
-    HEARTBEAT_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA, LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA,
+    FILE_TRANSFER_PROTOCOL_DATA, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA, LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA,
     PARAM_REQUEST_READ_DATA, PARAM_SET_DATA,
 };
 use mavlink::error::MessageReadError;
 use mavlink::{MavConnection, MavHeader};
 
+pub mod ftp;
 pub mod mock;
 pub mod ports;
 
@@ -48,6 +50,7 @@ pub enum Error {
     Rejected { name: String, wanted: f64, got: f32 },
     Command(String),
     Send(String),
+    Ftp(String),
 }
 
 impl fmt::Display for Error {
@@ -64,6 +67,7 @@ impl fmt::Display for Error {
             }
             Error::Command(e) => write!(f, "command failed: {e}"),
             Error::Send(e) => write!(f, "send failed: {e}"),
+            Error::Ftp(e) => write!(f, "file access on the vehicle failed: {e}"),
         }
     }
 }
@@ -173,6 +177,7 @@ pub struct Link {
     stop: Arc<AtomicBool>,
     sequence: Arc<AtomicU8>,
     vehicle: Vehicle,
+    ftp_seq: u16,
 }
 
 impl Drop for Link {
@@ -261,7 +266,7 @@ impl Link {
                         autopilot: hb.autopilot,
                         armed: hb.base_mode.contains(MavModeFlag::MAV_MODE_FLAG_SAFETY_ARMED),
                     };
-                    return Ok(Self { conn, rx, stop, sequence, vehicle });
+                    return Ok(Self { conn, rx, stop, sequence, vehicle, ftp_seq: 0 });
                 }
                 Ok(Ok(_)) => {}
                 Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
@@ -564,6 +569,146 @@ impl Link {
             target_component: self.vehicle.component_id,
         }))?;
         Ok(end)
+    }
+}
+
+/// Where ArduPilot keeps logs: on the SD card of ChibiOS boards, and in
+/// `logs` relative to the working directory in SITL.
+const LOG_DIRS: [&str; 2] = ["/APM/LOGS", "logs"];
+const ERASE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A log file on the vehicle: (number, name, size).
+type LogFile = (u32, String, u64);
+
+impl Link {
+    /// Erases every log on the flight controller and waits until the list is
+    /// empty. MAVLink's log protocol can only erase all logs.
+    pub fn erase_all_logs(&mut self) -> Result<()> {
+        if self.refresh_armed()? {
+            return Err(Error::Armed);
+        }
+        self.send(&MavMessage::LOG_ERASE(LOG_ERASE_DATA {
+            target_system: self.vehicle.system_id,
+            target_component: self.vehicle.component_id,
+        }))?;
+        // No reply comes: poll the list (it may not answer while erasing).
+        let deadline = Instant::now() + ERASE_TIMEOUT;
+        while Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(500));
+            match self.list_logs() {
+                Ok(logs) if logs.iter().all(|l| l.size == 0) => return Ok(()),
+                Ok(_) | Err(Error::Timeout(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Err(Error::Timeout("waiting for the logs to be erased".to_owned()))
+    }
+
+    /// Deletes one log's file over MAVLink FTP. The log list numbers logs from
+    /// the oldest file, so log `id` is file number oldest + id - 1; that is
+    /// only trusted when every listed log's size matches its file.
+    pub fn delete_log(&mut self, id: u16) -> Result<()> {
+        if self.refresh_armed()? {
+            return Err(Error::Armed);
+        }
+        let logs = self.list_logs()?;
+        if !logs.iter().any(|l| l.id == id && l.size > 0) {
+            return Err(Error::Command(format!("the vehicle has no log {id}")));
+        }
+        let (dir, files) = self.log_files()?;
+        let oldest = files.iter().map(|f| f.0).min().unwrap_or(0);
+        let file_for = |id: u16| files.iter().find(|f| f.0 == oldest + id as u32 - 1);
+        let consistent = logs.iter().filter(|l| l.size > 0).all(|l| file_for(l.id).is_some_and(|f| f.2 == l.size as u64));
+        if !consistent {
+            return Err(Error::Ftp(
+                "the log list doesn't match the files on the SD card, so nothing was deleted; \
+                 remove the file from the card directly or erase all logs"
+                    .to_owned(),
+            ));
+        }
+        let (_, name, _) = file_for(id).expect("checked above");
+        let path = format!("{dir}/{name}");
+        let reply = self.ftp(ftp::REMOVE_FILE, 0, path.as_bytes())?;
+        match reply.opcode {
+            ftp::ACK => Ok(()),
+            _ => Err(Error::Ftp(format!("could not delete {path} ({})", nak_reason(&reply)))),
+        }
+    }
+
+    /// The log directory and the log files in it.
+    fn log_files(&mut self) -> Result<(&'static str, Vec<LogFile>)> {
+        let mut last_err = None;
+        for dir in LOG_DIRS {
+            match self.list_dir(dir) {
+                Ok(entries) => {
+                    let files = entries
+                        .into_iter()
+                        .filter_map(|e| match e {
+                            ftp::Entry::File { name, size } => ftp::log_number(&name).map(|n| (n, name, size)),
+                            _ => None,
+                        })
+                        .collect();
+                    return Ok((dir, files));
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| Error::Ftp("no log directory".to_owned())))
+    }
+
+    fn list_dir(&mut self, path: &str) -> Result<Vec<ftp::Entry>> {
+        let mut entries = Vec::new();
+        loop {
+            let reply = self.ftp(ftp::LIST_DIRECTORY, entries.len() as u32, path.as_bytes())?;
+            if reply.opcode == ftp::NAK {
+                if reply.data.first() == Some(&ftp::ERR_EOF) {
+                    return Ok(entries);
+                }
+                return Err(Error::Ftp(format!("listing {path} ({})", nak_reason(&reply))));
+            }
+            let batch = ftp::parse_entries(&reply.data);
+            if batch.is_empty() {
+                return Ok(entries);
+            }
+            entries.extend(batch);
+        }
+    }
+
+    /// Sends an FTP request and waits for its reply, resending on silence.
+    fn ftp(&mut self, opcode: u8, offset: u32, data: &[u8]) -> Result<ftp::Packet> {
+        self.ftp_seq = self.ftp_seq.wrapping_add(1);
+        let req = ftp::Packet::new(self.ftp_seq, opcode, offset, data);
+        let expected = req.seq.wrapping_add(1);
+        for _ in 0..3 {
+            self.send(&MavMessage::FILE_TRANSFER_PROTOCOL(FILE_TRANSFER_PROTOCOL_DATA {
+                target_network: 0,
+                target_system: self.vehicle.system_id,
+                target_component: self.vehicle.component_id,
+                payload: req.encode(),
+            }))?;
+            let reply = self.wait_for(Duration::from_secs(1), |m| match m {
+                MavMessage::FILE_TRANSFER_PROTOCOL(f) => {
+                    let p = ftp::Packet::decode(&f.payload);
+                    (p.seq == expected && p.req_opcode == opcode).then_some(p)
+                }
+                _ => None,
+            })?;
+            if let Some(p) = reply {
+                return Ok(p);
+            }
+        }
+        Err(Error::Timeout("waiting for a file transfer reply (does this firmware support MAVLink FTP?)".to_owned()))
+    }
+}
+
+fn nak_reason(p: &ftp::Packet) -> String {
+    match p.data.first() {
+        Some(&ftp::ERR_FILE_NOT_FOUND) => "file not found".to_owned(),
+        Some(&ftp::ERR_EOF) => "end of file".to_owned(),
+        Some(2) => format!("system error {}", p.data.get(1).copied().unwrap_or(0)),
+        Some(9) => "file is protected".to_owned(),
+        Some(code) => format!("error {code}"),
+        None => "no reason given".to_owned(),
     }
 }
 

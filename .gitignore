@@ -5,3 +5,5 @@
 .DS_Store
 *.param
 /logs/
+/crates/app/gen/
+/crates/app/dev/fixtures/

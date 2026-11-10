@@ -214,6 +214,7 @@ pub fn sample_flight(preset: Preset) -> Vec<u8> {
     let esc = w.define("ESC", "QBffff", "TimeUS,Instance,RPM,Volt,Curr,Temp");
     let gyr = w.define("GYR", "QBIfff", "TimeUS,I,SampleUS,GyrX,GyrY,GyrZ");
     let dsf = w.define("DSF", "QIH", "TimeUS,Dp,Blk");
+    let rate = w.define("RATE", "Qffffffffffff", "TimeUS,RDes,R,ROut,PDes,P,POut,YDes,Y,YOut,ADes,A,AOut");
 
     w.write(msg, &[us(0.5), V::S("ArduCopter V4.6.2 (a1b2c3d4)")]);
     w.write(msg, &[us(0.5), V::S("Frame: QUAD/X")]);
@@ -253,18 +254,49 @@ pub fn sample_flight(preset: Preset) -> Vec<u8> {
         }
     }
 
-    // Rate-loop PIDs: loop rate with ATTITUDE_FAST, 10 Hz otherwise.
+    // Rate-loop PIDs: loop rate with ATTITUDE_FAST, 10 Hz otherwise. Each
+    // axis responds as a second-order system (natural frequency 6 Hz); pitch
+    // is the least damped, so its step response overshoots about 16%.
     let pid_hz = if ready { 400.0 } else { 10.0 };
+    let (wn, zeta) = (TAU * 6.0, [0.7, 0.5, 0.8]);
     let mut act = [0.0f64; 3];
+    let mut vel = [0.0f64; 3];
     for t in ticks(0.0, END_S, pid_hz) {
+        let mut tars = [0.0; 3];
         for (axis, &id) in pids.iter().enumerate() {
             let tar = if ready { snap_target(t, axis) } else { 0.0 };
-            // First-order response with a 40 ms time constant.
-            act[axis] += (tar - act[axis]) * (1.0 - (-1.0 / (pid_hz * 0.04)).exp());
+            tars[axis] = tar;
+            // Substeps keep the integration stable at the 10 Hz rate too.
+            for _ in 0..10 {
+                let dt = 0.1 / pid_hz;
+                vel[axis] += (wn * wn * (tar - act[axis]) - 2.0 * zeta[axis] * wn * vel[axis]) * dt;
+                act[axis] += vel[axis] * dt;
+            }
             let err = tar - act[axis];
             w.write(
                 id,
                 &[us(t), V::F(tar), V::F(act[axis]), V::F(err), V::F(0.002 * err), V::F(0.0), V::F(0.0), V::F(0.0), V::F(0.0), V::F(1.0), V::F(0.0), V::I(0)],
+            );
+        }
+        if ready {
+            let out = |a: usize| V::F(0.002 * (tars[a] - act[a]));
+            w.write(
+                rate,
+                &[
+                    us(t),
+                    V::F(tars[0]),
+                    V::F(act[0]),
+                    out(0),
+                    V::F(tars[1]),
+                    V::F(act[1]),
+                    out(1),
+                    V::F(tars[2]),
+                    V::F(act[2]),
+                    out(2),
+                    V::F(0.0),
+                    V::F(0.0),
+                    V::F(throttle_at(t)),
+                ],
             );
         }
     }

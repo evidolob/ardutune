@@ -1,0 +1,29 @@
+[package]
+name = "ardutune-app"
+description = "ArduTune desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ardutune-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ardutune-core.workspace = true
+ardutune-link.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+[features]
+# Serve the bundled `ui/` folder. Always on: the frontend has no dev server.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

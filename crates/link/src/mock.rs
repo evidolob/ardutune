@@ -1,5 +1,6 @@
 //! A simulated ArduPilot vehicle speaking just enough MAVLink for tests and
-//! demos: heartbeats, the parameter protocol, log listing/download and reboot.
+//! demos: heartbeats, the parameter protocol, log listing/download/erase,
+//! MAVLink FTP listing and deletion of log files, and reboot.
 //! It can drop messages to exercise retry paths.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,9 +13,11 @@ use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
     MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_ACK_DATA,
-    HEARTBEAT_DATA, LOG_DATA_DATA, LOG_ENTRY_DATA, PARAM_VALUE_DATA,
+    FILE_TRANSFER_PROTOCOL_DATA, HEARTBEAT_DATA, LOG_DATA_DATA, LOG_ENTRY_DATA, PARAM_VALUE_DATA,
 };
 use mavlink::{MavConnection, MavHeader};
+
+use crate::ftp::{self, Entry, Packet};
 
 const LOG_CHUNK: usize = 90;
 /// LOG_DATA messages sent per loop pass, so requests are still served while streaming.
@@ -27,7 +30,11 @@ pub struct MockState {
     /// Allowed range per parameter; writes are clamped like the firmware does.
     pub limits: BTreeMap<String, (f32, f32)>,
     pub armed: bool,
+    /// Log files, oldest first: `logs[i]` is file `first_log_num + i`.
     pub logs: Vec<Vec<u8>>,
+    pub first_log_num: u32,
+    /// Indices into `logs` whose files were deleted.
+    pub deleted: BTreeSet<usize>,
     /// Drop one LOG_DATA chunk in every `n`, the first time it is sent.
     pub drop_log_chunk_every: Option<usize>,
     /// Parameter indices left out of the first full list.
@@ -37,6 +44,35 @@ pub struct MockState {
 }
 
 impl MockState {
+    /// Indices of the oldest and newest log files still present. Like
+    /// ArduPilot, log ids count from the oldest file, so a deleted file in
+    /// between leaves an empty entry.
+    fn log_span(&self) -> Option<(usize, usize)> {
+        let present = |i: &usize| !self.deleted.contains(i);
+        let first = (0..self.logs.len()).find(present)?;
+        let last = (0..self.logs.len()).rev().find(present)?;
+        Some((first, last))
+    }
+
+    /// Index into `logs` of log `id`, if its file exists.
+    fn log_index(&self, id: u16) -> Option<usize> {
+        let (first, last) = self.log_span()?;
+        let i = (first + id as usize).checked_sub(1)?;
+        (id > 0 && i <= last && !self.deleted.contains(&i)).then_some(i)
+    }
+
+    fn log_dir(&self) -> Vec<Entry> {
+        let mut entries = vec![Entry::Dir(".".into()), Entry::Dir("..".into()), Entry::File { name: "LASTLOG.TXT".into(), size: 3 }];
+        entries.extend(
+            self.logs
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !self.deleted.contains(i))
+                .map(|(i, log)| Entry::File { name: format!("{:08}.BIN", self.first_log_num as usize + i), size: log.len() as u64 }),
+        );
+        entries
+    }
+
     /// A quad with Copter's default logging and a few hundred parameters.
     pub fn quad(logs: Vec<Vec<u8>>) -> Self {
         use MavParamType::*;
@@ -79,6 +115,8 @@ impl MockState {
             limits,
             armed: false,
             logs,
+            first_log_num: 1,
+            deleted: BTreeSet::new(),
             drop_log_chunk_every: None,
             drop_param_indices: BTreeSet::new(),
             reboots: 0,
@@ -133,6 +171,7 @@ impl MockVehicle {
 
 struct Stream {
     id: u16,
+    index: usize,
     ofs: usize,
     end: usize,
 }
@@ -166,7 +205,7 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
 
         if let Some(s) = &mut stream {
             let st = state.lock().unwrap();
-            let log = &st.logs[s.id as usize - 1];
+            let log = &st.logs[s.index];
             for _ in 0..CHUNKS_PER_PASS {
                 if s.ofs >= s.end {
                     stream = None;
@@ -244,18 +283,17 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
             param_value(st, index).into_iter().collect()
         }
         MavMessage::LOG_REQUEST_LIST(_) => {
-            let n = st.logs.len() as u16;
-            if n == 0 {
+            let Some((first, last)) = st.log_span() else {
                 return vec![MavMessage::LOG_ENTRY(LOG_ENTRY_DATA { time_utc: 0, size: 0, id: 0, num_logs: 0, last_log_num: 0 })];
-            }
-            st.logs
-                .iter()
-                .enumerate()
-                .map(|(i, log)| {
+            };
+            let n = (last - first + 1) as u16;
+            (first..=last)
+                .map(|i| {
+                    let size = if st.deleted.contains(&i) { 0 } else { st.logs[i].len() as u32 };
                     MavMessage::LOG_ENTRY(LOG_ENTRY_DATA {
                         time_utc: 1_762_000_000 + i as u32 * 3600,
-                        size: log.len() as u32,
-                        id: i as u16 + 1,
+                        size,
+                        id: (i - first) as u16 + 1,
                         num_logs: n,
                         last_log_num: n,
                     })
@@ -263,12 +301,28 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
                 .collect()
         }
         MavMessage::LOG_REQUEST_DATA(r) => {
-            if let Some(log) = st.logs.get((r.id as usize).wrapping_sub(1)) {
+            if let Some(index) = st.log_index(r.id) {
                 let ofs = r.ofs as usize;
-                let end = (ofs as u64 + r.count as u64).min(log.len() as u64) as usize;
-                *stream = Some(Stream { id: r.id, ofs, end });
+                let end = (ofs as u64 + r.count as u64).min(st.logs[index].len() as u64) as usize;
+                *stream = Some(Stream { id: r.id, index, ofs, end });
             }
             Vec::new()
+        }
+        MavMessage::LOG_ERASE(_) => {
+            *stream = None;
+            st.logs.clear();
+            st.deleted.clear();
+            Vec::new()
+        }
+        MavMessage::FILE_TRANSFER_PROTOCOL(f) => {
+            let req = Packet::decode(&f.payload);
+            let reply = handle_ftp(st, &req);
+            vec![MavMessage::FILE_TRANSFER_PROTOCOL(FILE_TRANSFER_PROTOCOL_DATA {
+                target_network: 0,
+                target_system: 255,
+                target_component: 190,
+                payload: reply.encode(),
+            })]
         }
         MavMessage::LOG_REQUEST_END(_) => {
             *stream = None;
@@ -285,5 +339,40 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
             vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result })]
         }
         _ => Vec::new(),
+    }
+}
+
+/// FTP over a single directory, `/APM/LOGS`, like a ChibiOS board's SD card.
+fn handle_ftp(st: &mut MockState, req: &Packet) -> Packet {
+    const DIR: &str = "/APM/LOGS";
+    let nak = |code: u8| Packet::reply(req, ftp::NAK, &[code]);
+    let path = String::from_utf8_lossy(&req.data).trim_end_matches('\0').to_owned();
+    match req.opcode {
+        ftp::LIST_DIRECTORY if path == DIR => {
+            let entries = st.log_dir();
+            let rest = entries.iter().skip(req.offset as usize);
+            if req.offset as usize >= entries.len() {
+                return nak(ftp::ERR_EOF);
+            }
+            Packet::reply(req, ftp::ACK, &ftp::encode_entries(rest))
+        }
+        ftp::LIST_DIRECTORY => nak(ftp::ERR_FILE_NOT_FOUND),
+        ftp::REMOVE_FILE => {
+            let index = path
+                .strip_prefix(DIR)
+                .and_then(|p| p.strip_prefix('/'))
+                .and_then(ftp::log_number)
+                .and_then(|n| n.checked_sub(st.first_log_num))
+                .map(|i| i as usize)
+                .filter(|i| *i < st.logs.len() && !st.deleted.contains(i));
+            match index {
+                Some(i) => {
+                    st.deleted.insert(i);
+                    Packet::reply(req, ftp::ACK, &[])
+                }
+                None => nak(ftp::ERR_FILE_NOT_FOUND),
+            }
+        }
+        _ => nak(ftp::ERR_FAIL),
     }
 }

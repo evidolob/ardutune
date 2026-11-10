@@ -1,4 +1,3 @@
-mod svg;
 mod vehicle;
 
 use std::path::{Path, PathBuf};
@@ -9,6 +8,7 @@ use ardutune_core::filters::{self, Change, Evaluation, FilterReport};
 use ardutune_core::noise::{self, NoiseReport, PeakClass, Source};
 use ardutune_core::params::format_value;
 use ardutune_core::pid::{self, PidReport};
+use ardutune_core::plot;
 use ardutune_core::readiness::{Area, Status};
 use ardutune_core::synth::{sample_flight, Preset};
 use ardutune_core::{assess, Log, Report};
@@ -237,7 +237,7 @@ fn main() -> Result<()> {
                 print_noise(&r);
             }
             if let Some(path) = svg {
-                std::fs::write(&path, svg::render(&r)).with_context(|| format!("writing {}", path.display()))?;
+                std::fs::write(&path, plot::render(&r)).with_context(|| format!("writing {}", path.display()))?;
                 eprintln!("Wrote plot to {}", path.display());
             }
         }
@@ -249,7 +249,7 @@ fn main() -> Result<()> {
                 print_filters(&r);
             }
             if let Some(path) = svg {
-                std::fs::write(&path, svg::render_filters(&r)).with_context(|| format!("writing {}", path.display()))?;
+                std::fs::write(&path, plot::render_filters(&r)).with_context(|| format!("writing {}", path.display()))?;
                 eprintln!("Wrote plot to {}", path.display());
             }
             if apply {
@@ -279,7 +279,7 @@ fn main() -> Result<()> {
                 print_pid(&r);
             }
             if let Some(path) = svg {
-                std::fs::write(&path, svg::render_pid(&r)).with_context(|| format!("writing {}", path.display()))?;
+                std::fs::write(&path, plot::render_pid(&r)).with_context(|| format!("writing {}", path.display()))?;
                 eprintln!("Wrote plot to {}", path.display());
             }
             if apply {

@@ -1,11 +1,11 @@
-//! SVG plot of a noise report: averaged spectrum before/after filtering and
-//! a spectrogram over the flight.
+//! SVG plots of the noise, filter and PID reports, shared by the CLI and the
+//! desktop app.
 
 use std::fmt::Write;
 
-use ardutune_core::filters::FilterReport;
-use ardutune_core::noise::{NoiseReport, PeakClass};
-use ardutune_core::pid::PidReport;
+use crate::filters::FilterReport;
+use crate::noise::{NoiseReport, PeakClass};
+use crate::pid::PidReport;
 
 const W: f64 = 960.0;
 const LEFT: f64 = 64.0;
@@ -213,10 +213,10 @@ fn spectrogram(s: &mut String, r: &NoiseReport, fmax: f64) {
     let x_of = |t: f64| LEFT + (t - t0) / span * plot_w;
     let y_of = |f: f64| GRAM_TOP + GRAM_H - f / fmax * GRAM_H;
     let all: Vec<f64> = g.power_db.iter().flatten().copied().collect();
-    let lo = ardutune_core::stats::percentile(&all, 5.0).unwrap_or(-60.0);
-    let hi = ardutune_core::stats::percentile(&all, 99.5).unwrap_or(0.0);
+    let lo = crate::stats::percentile(&all, 5.0).unwrap_or(-60.0);
+    let hi = crate::stats::percentile(&all, 99.5).unwrap_or(0.0);
     let df = g.freq_hz[1] - g.freq_hz[0];
-    let typical_dt = ardutune_core::stats::median(&g.time_s.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>()).unwrap_or(1.0);
+    let typical_dt = crate::stats::median(&g.time_s.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>()).unwrap_or(1.0);
 
     let _ = writeln!(
         s,
@@ -385,7 +385,7 @@ pub fn render_filters(r: &FilterReport) -> String {
         let _ = writeln!(s, r##"<circle cx="{:.1}" cy="{:.1}" r="2.5" fill="{GREY}"/>"##, tx(*l), ty(*n));
     }
     // Label offsets: current below-right, recommended above, quieter right.
-    let mut mark = |e: &ardutune_core::filters::Evaluation, colour: &str, label: &str, dx: f64, dy: f64| {
+    let mut mark = |e: &crate::filters::Evaluation, colour: &str, label: &str, dx: f64, dy: f64| {
         let (x, y) = (tx(e.lag_deg), ty(e.noise_rms));
         let _ = writeln!(
             s,
@@ -431,7 +431,7 @@ fn grid(
             r##"<line x1="{px:.1}" y1="{top}" x2="{px:.1}" y2="{:.1}" stroke="#e5e7eb"/><text x="{px:.1}" y="{:.1}" fill="#374151" text-anchor="middle">{}</text>"##,
             top + height,
             top + height + 16.0,
-            ardutune_core::params::format_value((x * 100.0).round() / 100.0)
+            crate::params::format_value((x * 100.0).round() / 100.0)
         );
         x += xs;
     }
@@ -445,7 +445,7 @@ fn grid(
             left + width,
             left - 6.0,
             py + 4.0,
-            ardutune_core::params::format_value((y * 100.0).round() / 100.0)
+            crate::params::format_value((y * 100.0).round() / 100.0)
         );
         y += ys;
     }
@@ -468,7 +468,7 @@ pub fn render_pid(r: &PidReport) -> String {
     const PH: f64 = 380.0;
     const HEIGHT: f64 = TOP + PH + 60.0;
     let plot_w = W - LEFT - RIGHT;
-    let tmax = ardutune_core::pid::RESPONSE_S * 1000.0;
+    let tmax = crate::pid::RESPONSE_S * 1000.0;
     let peak = r
         .axes
         .iter()

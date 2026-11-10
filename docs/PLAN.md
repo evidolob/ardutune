@@ -29,8 +29,9 @@ Gap: tools are fragmented and expert-level; they show plots, not a guided
 - **Core:** Rust — streaming DataFlash parser (FMT self-describing format,
   header `0xA3 0x95`, FMT id `0x80`), columnar storage, DSP (FFT/Welch, filters,
   deconvolution, model fitting).
-- **Shell/UI:** Tauri 2 + TypeScript (React or Svelte), WebGL/uPlot plotting with
-  decimation for multi-million-point series. Fully bundled, no network.
+- **Shell/UI:** Tauri 2. Frontend is plain HTML/CSS/JS with no build step (no
+  Node toolchain needed); plots are SVG rendered by the core crate. Fully
+  bundled, no network. Interactive plots (zoom, cursors) can come later.
 - **Research:** prototype algorithms in Python/Jupyter (`pymavlink`, numpy,
   scipy), then port to Rust and cross-check outputs.
 - Licensing note: ArduPilot and WebTools are GPLv3, pymavlink is LGPL — porting
@@ -145,6 +146,13 @@ System ID mode logs (`SID_*` params) when available.
    suggestions and SMAX safety net; unsaved AutoTune results parsed from
    messages; direct apply; SVG plot. Next: a clean AltHold stick-snap flight
    to validate suggestions on real data.
+UI. Desktop app (Tauri 2) over the steps above. ✅ Open a log or download one
+    from the vehicle; readiness, crash diagnosis, noise, filters and PIDs with
+    plots; vehicle connection with port discovery; every recommendation (and
+    any `.param` file) written through one review → backup → write and verify
+    → reboot flow, with changes re-planned against live values. Commands
+    tested end to end through Tauri's IPC against the simulated vehicle.
+    Next: installers, interactive plots, flight history (step 6).
 5. System ID analysis + plant fit + predicted closed-loop response.
 6. Flight-to-flight comparison / history.
 7. Later: other diagnostics. Incident diagnosis to grow with more causes

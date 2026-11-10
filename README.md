@@ -22,22 +22,43 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   slew limiter, I offset, saturation), cautious bounded gain suggestions, and
   gains from a finished AutoTune that weren't saved; optional SVG plot and
   direct apply.
-- Vehicle connection over MAVLink (USB, UDP, TCP): download logs, back up
-  parameters, and write recommended parameters directly, with verification.
+- Vehicle connection over MAVLink (USB, UDP, TCP): download and delete logs
+  (single logs over MAVLink FTP, or erase all), back up parameters, and write
+  recommended parameters directly, with verification.
 
-The desktop UI (Tauri) comes later; for now there is a command-line tool.
+- Desktop app (Tauri 2): open a log or download one from the vehicle, then
+  readiness, crash diagnosis, noise, filters and PIDs with plots; every
+  recommendation can be written to the vehicle after a review of the changes,
+  with an automatic backup, verification and an optional reboot. `.param`
+  files (such as backups) can be written back the same way.
+- Command-line tool with the same analyses and vehicle commands.
 
 ## Layout
 
 - `crates/core`: analysis library: DataFlash parser (`dataflash`), log model
   (`log`), readiness checks (`readiness`), incident diagnosis (`diagnose`),
   gyro noise analysis (`noise`), filter simulator (`filters`), PID analysis
-  (`pid`), parameter files (`params`), synthetic logs (`synth`).
+  (`pid`), SVG plots (`plot`), parameter files (`params`), synthetic logs
+  (`synth`).
 - `crates/link`: MAVLink link to the vehicle: parameters, reboot, log
-  download (`Link`), USB port discovery (`ports`), simulated vehicle (`mock`).
+  download and deletion (`Link`, `ftp`), USB port discovery (`ports`),
+  simulated vehicle (`mock`).
 - `crates/cli`: `ardutune` command-line front end.
+- `crates/app`: desktop app. Rust commands in `src/`, frontend in `ui/`
+  (plain HTML, CSS and JavaScript: no Node or build step).
 
-## Usage
+## Desktop app
+
+```bash
+cargo run --release -p ardutune-app
+```
+
+Downloaded logs go to `Documents/ArduTune/logs`, parameter backups to
+`Documents/ArduTune/backups`. Building an installer (`.app`/`.dmg`, `.msi`,
+`.deb`) needs the Tauri CLI: `cargo install tauri-cli`, then
+`cargo tauri build` in `crates/app`.
+
+## Command line
 
 The connection defaults to `auto` (the single USB flight controller plugged
 in). Override with `--conn` or `ARDUTUNE_CONN`, e.g. `--conn udpin:0.0.0.0:14550`
@@ -78,4 +99,14 @@ Run from source with `cargo run --release -- <command>`.
 
 ```bash
 cargo test
+```
+
+The app's IPC test drives every command through Tauri's mock runtime against
+the simulated vehicle. To preview the UI in a browser without building the
+app, export what the app shows for a log, then serve `crates/app` and open
+`dev/preview.html` (vehicle actions are simulated there):
+
+```bash
+ARDUTUNE_FIXTURE_LOG=$PWD/flight.bin cargo test --release -p ardutune-app -- --ignored export_fixtures
+python3 -m http.server -d crates/app 8765   # http://localhost:8765/dev/preview.html
 ```
