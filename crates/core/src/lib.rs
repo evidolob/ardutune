@@ -2,6 +2,7 @@
 
 pub mod dataflash;
 pub mod diagnose;
+pub mod filters;
 pub mod log;
 pub mod noise;
 pub mod params;

@@ -13,6 +13,8 @@ use crate::log::{in_any, Log};
 use crate::stats;
 
 const RAD_TO_DEG: f64 = 180.0 / PI;
+pub(crate) const NO_GYRO_DATA: &str =
+    "this log has no high-rate gyro data; run `ardutune check` for the logging parameters to set";
 const ISB_GYRO: f64 = 1.0;
 /// INS_LOG_BAT_OPT bits.
 const BAT_OPT_POST_ONLY_BIT: u32 = 1;
@@ -60,6 +62,8 @@ pub struct GyroBatch {
     pub instance: u32,
     pub post_filter: bool,
     pub rate_hz: f64,
+    /// Size of one stored step (deg/s) when samples are stored as integers.
+    pub quantum: Option<f64>,
     pub xyz: [Vec<f64>; 3],
 }
 
@@ -131,6 +135,7 @@ fn batch_sampler(log: &Log) -> Option<Vec<GyroBatch>> {
             instance: inst[i] as u32,
             post_filter,
             rate_hz: rate[i],
+            quantum: Some(scale),
             xyz: [axis(x), axis(y), axis(z)],
         });
     }
@@ -175,6 +180,7 @@ fn raw_gyro(log: &Log) -> Option<Vec<GyroBatch>> {
                     instance: k,
                     post_filter: pre_post && k >= imus,
                     rate_hz: rate,
+                    quantum: None,
                     xyz: [axis(gx), axis(gy), axis(gz)],
                 });
                 seg.clear();
@@ -193,7 +199,7 @@ pub struct Spectrum {
 }
 
 impl Spectrum {
-    fn df(&self) -> f64 {
+    pub(crate) fn df(&self) -> f64 {
         self.freq_hz.get(1).copied().unwrap_or(1.0)
     }
 
@@ -202,7 +208,7 @@ impl Spectrum {
         (0..self.freq_hz.len()).map(|k| db(self.psd.iter().map(|a| a[k]).sum())).collect()
     }
 
-    fn bin(&self, f: f64) -> usize {
+    pub(crate) fn bin(&self, f: f64) -> usize {
         ((f / self.df()).round() as usize).min(self.freq_hz.len() - 1)
     }
 
@@ -215,31 +221,31 @@ impl Spectrum {
     }
 }
 
-fn db(v: f64) -> f64 {
+pub(crate) fn db(v: f64) -> f64 {
     10.0 * v.max(1e-12).log10()
 }
 
-struct Fft {
-    n: usize,
-    rate: f64,
+pub(crate) struct Fft {
+    pub(crate) n: usize,
+    pub(crate) rate: f64,
     window: Vec<f64>,
     norm: f64,
     plan: std::sync::Arc<dyn rustfft::Fft<f64>>,
 }
 
 impl Fft {
-    fn new(n: usize, rate: f64) -> Self {
+    pub(crate) fn new(n: usize, rate: f64) -> Self {
         let window: Vec<f64> = (0..n).map(|i| 0.5 - 0.5 * (2.0 * PI * i as f64 / n as f64).cos()).collect();
         let norm = rate * window.iter().map(|w| w * w).sum::<f64>();
         Self { n, rate, window, norm, plan: FftPlanner::new().plan_fft_forward(n) }
     }
 
-    fn freqs(&self) -> Vec<f64> {
+    pub(crate) fn freqs(&self) -> Vec<f64> {
         (0..=self.n / 2).map(|k| k as f64 * self.rate / self.n as f64).collect()
     }
 
     /// One-sided PSD of the first `n` samples, mean removed, Hann window.
-    fn psd(&self, x: &[f64]) -> Vec<f64> {
+    pub(crate) fn psd(&self, x: &[f64]) -> Vec<f64> {
         let x = &x[..self.n];
         let mean = x.iter().sum::<f64>() / self.n as f64;
         let mut buf: Vec<Complex<f64>> =
@@ -259,7 +265,7 @@ impl Fft {
 }
 
 /// Analysis length: the largest power of two that fits every batch.
-fn fft_for(batches: &[&GyroBatch]) -> Option<Fft> {
+pub(crate) fn fft_for(batches: &[&GyroBatch]) -> Option<Fft> {
     let shortest = batches.iter().map(|b| b.xyz[0].len()).min()?;
     if shortest < MIN_FFT {
         return None;
@@ -269,7 +275,7 @@ fn fft_for(batches: &[&GyroBatch]) -> Option<Fft> {
     Some(Fft::new(n, rate))
 }
 
-fn welch(batches: &[&GyroBatch]) -> Option<Spectrum> {
+pub(crate) fn welch(batches: &[&GyroBatch]) -> Option<Spectrum> {
     let fft = fft_for(batches)?;
     let bins = fft.n / 2 + 1;
     let mut psd = [vec![0.0; bins], vec![0.0; bins], vec![0.0; bins]];
@@ -363,18 +369,18 @@ pub struct NoiseReport {
 }
 
 /// Times and values of a log field, for lookups by time.
-struct Series {
-    t: Vec<f64>,
-    v: Vec<f64>,
+pub(crate) struct Series {
+    pub(crate) t: Vec<f64>,
+    pub(crate) v: Vec<f64>,
 }
 
 impl Series {
-    fn get(log: &Log, table: &str, field: &str) -> Option<Self> {
+    pub(crate) fn get(log: &Log, table: &str, field: &str) -> Option<Self> {
         let tb = log.table(table)?;
         Some(Self { t: tb.time_s()?, v: tb.num(field)?.to_vec() })
     }
 
-    fn window(&self, from: f64, to: f64) -> &[f64] {
+    pub(crate) fn window(&self, from: f64, to: f64) -> &[f64] {
         let a = self.t.partition_point(|t| *t < from);
         let b = self.t.partition_point(|t| *t <= to);
         &self.v[a..b.max(a)]
@@ -382,10 +388,10 @@ impl Series {
 }
 
 /// Motor rotation frequencies (Hz) per motor, from ESC or RPM telemetry.
-struct MotorSpeed(Vec<(u32, Series)>);
+pub(crate) struct MotorSpeed(Vec<(u32, Series)>);
 
 impl MotorSpeed {
-    fn new(log: &Log) -> Self {
+    pub(crate) fn new(log: &Log) -> Self {
         let split = |table: &str, field: &str, key: &str| -> Option<Vec<(u32, Series)>> {
             let tb = log.table(table)?;
             let (t, v) = (tb.time_s()?, tb.num(field)?);
@@ -406,12 +412,12 @@ impl MotorSpeed {
         Self(motors.into_iter().filter(|(_, s)| s.v.iter().any(|v| *v > 0.0)).collect())
     }
 
-    fn known(&self) -> bool {
+    pub(crate) fn known(&self) -> bool {
         !self.0.is_empty()
     }
 
     /// Each motor's typical (median) frequency over the windows, by motor number.
-    fn per_motor(&self, windows: &[(f64, f64)]) -> Vec<(u32, f64)> {
+    pub(crate) fn per_motor(&self, windows: &[(f64, f64)]) -> Vec<(u32, f64)> {
         self.0
             .iter()
             .filter_map(|(m, s)| {
@@ -423,17 +429,24 @@ impl MotorSpeed {
     }
 
     /// Mean over all motors.
-    fn hz(&self, from: f64, to: f64) -> Option<f64> {
+    pub(crate) fn hz(&self, from: f64, to: f64) -> Option<f64> {
         stats::mean(&self.per_motor(&[(from, to)]).iter().map(|(_, f)| *f).collect::<Vec<_>>())
     }
 }
 
-pub fn analyse(log: &Log) -> Result<NoiseReport, String> {
-    let (source, batches) = gyro_batches(log).ok_or(
-        "this log has no high-rate gyro data; run `ardutune check` for the logging parameters to set".to_owned(),
-    )?;
+/// Gyro batches chosen for analysis: steady flight when there is enough.
+pub(crate) struct Selection<'a> {
+    pub(crate) pre: Vec<&'a GyroBatch>,
+    pub(crate) post: Vec<&'a GyroBatch>,
+    /// All in-flight batches, for the spectrogram.
+    pub(crate) pre_all: Vec<&'a GyroBatch>,
+    pub(crate) post_all: Vec<&'a GyroBatch>,
+    pub(crate) label: String,
+    pub(crate) notes: Vec<String>,
+}
+
+pub(crate) fn select<'a>(log: &Log, batches: &'a [GyroBatch], motors: &MotorSpeed) -> Result<Selection<'a>, String> {
     let (flight, _) = log.flight();
-    let motors = MotorSpeed::new(log);
     let rates: Vec<Series> = ["RDes", "PDes"].iter().filter_map(|f| Series::get(log, "RATE", f)).collect();
     let calm = |b: &GyroBatch| {
         rates.iter().all(|s| {
@@ -452,16 +465,28 @@ pub fn analyse(log: &Log) -> Result<NoiseReport, String> {
     let post_all: Vec<&GyroBatch> = in_flight.iter().copied().filter(|b| b.post_filter).collect();
     let mut notes = Vec::new();
 
-    let mut pre_sel: Vec<&GyroBatch> = pre_all.iter().copied().filter(|b| calm(b)).collect();
-    let mut post_sel: Vec<&GyroBatch> = post_all.iter().copied().filter(|b| calm(b)).collect();
-    let selection = if pre_sel.len() >= MIN_HOVER_BATCHES || (pre_all.is_empty() && post_sel.len() >= MIN_HOVER_BATCHES) {
-        format!("steady flight ({} of {} batches)", pre_sel.len().max(post_sel.len()), pre_all.len().max(post_all.len()))
+    let mut pre: Vec<&GyroBatch> = pre_all.iter().copied().filter(|b| calm(b)).collect();
+    let mut post: Vec<&GyroBatch> = post_all.iter().copied().filter(|b| calm(b)).collect();
+    let label = if pre.len() >= MIN_HOVER_BATCHES || (pre_all.is_empty() && post.len() >= MIN_HOVER_BATCHES) {
+        format!("steady flight ({} of {} batches)", pre.len().max(post.len()), pre_all.len().max(post_all.len()))
     } else {
         notes.push("Too little steady flight; spectra include manoeuvres.".to_owned());
-        pre_sel = pre_all.clone();
-        post_sel = post_all.clone();
-        format!("whole flight ({} batches)", pre_sel.len().max(post_sel.len()))
+        pre = pre_all.clone();
+        post = post_all.clone();
+        format!("whole flight ({} batches)", pre.len().max(post.len()))
     };
+    if !motors.known() {
+        notes.push("No motor RPM data, so peaks can't be matched to motor speed.".to_owned());
+    }
+    Ok(Selection { pre, post, pre_all, post_all, label, notes })
+}
+
+pub fn analyse(log: &Log) -> Result<NoiseReport, String> {
+    let (source, batches) = gyro_batches(log).ok_or(NO_GYRO_DATA.to_owned())?;
+    let motors = MotorSpeed::new(log);
+    let sel = select(log, &batches, &motors)?;
+    let Selection { pre_all, post_all, label: selection, mut notes, .. } = sel;
+    let (mut pre_sel, post_sel) = (sel.pre, sel.post);
     if pre_sel.is_empty() {
         notes.push("Only post-filter data was logged; peaks are found in filtered noise.".to_owned());
         pre_sel = post_sel.clone();
@@ -474,9 +499,6 @@ pub fn analyse(log: &Log) -> Result<NoiseReport, String> {
     let speeds: Vec<f64> = per_motor.iter().map(|(_, f)| *f).collect();
     let hover_motor_hz = stats::mean(&speeds);
     let motor_range = speeds.iter().copied().reduce(f64::min).zip(speeds.iter().copied().reduce(f64::max));
-    if !motors.known() {
-        notes.push("No motor RPM data, so peaks can't be matched to motor speed.".to_owned());
-    }
 
     let spectro_batches: Vec<&GyroBatch> = if pre_all.is_empty() { post_all.clone() } else { pre_all.clone() };
     let rows = batch_spectra(&spectro_batches, &motors);
@@ -792,7 +814,7 @@ mod tests {
         // 5 deg/s amplitude sine at 120 Hz: power 12.5 (deg/s)².
         let rate = 1000.0;
         let x: Vec<f64> = (0..1024).map(|i| 5.0 * (2.0 * PI * 120.0 * i as f64 / rate).sin()).collect();
-        let b = GyroBatch { start_s: 0.0, instance: 0, post_filter: false, rate_hz: rate, xyz: [x.clone(), x.clone(), x] };
+        let b = GyroBatch { start_s: 0.0, instance: 0, post_filter: false, rate_hz: rate, quantum: None, xyz: [x.clone(), x.clone(), x] };
         let s = welch(&[&b]).unwrap();
         let k = (0..s.freq_hz.len()).max_by(|a, b| s.psd[0][*a].total_cmp(&s.psd[0][*b])).unwrap();
         assert!((s.freq_hz[k] - 120.0).abs() < 1.0, "{}", s.freq_hz[k]);

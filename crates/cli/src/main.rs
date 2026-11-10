@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ardutune_core::diagnose::{diagnose, Confidence, Diagnosis, Finding};
+use ardutune_core::filters::{self, Change, Evaluation, FilterReport};
 use ardutune_core::noise::{self, NoiseReport, PeakClass, Source};
 use ardutune_core::params::format_value;
 use ardutune_core::readiness::{Area, Status};
@@ -65,6 +66,27 @@ enum Cmd {
         /// Write a plot of the spectrum and spectrogram to this SVG file
         #[arg(long, value_name = "FILE")]
         svg: Option<PathBuf>,
+    },
+    /// Simulate gyro filter settings on a log's noise and recommend better ones
+    Filters {
+        log: PathBuf,
+        /// Report filter delay at this frequency (Hz)
+        #[arg(long, default_value_t = filters::DEFAULT_LAG_REF_HZ)]
+        lag_at: f64,
+        /// Print the result as JSON
+        #[arg(long)]
+        json: bool,
+        /// Write a plot of the spectra and the noise/delay trade-off to this SVG file
+        #[arg(long, value_name = "FILE")]
+        svg: Option<PathBuf>,
+        /// Write the chosen settings to the connected vehicle
+        #[arg(long)]
+        apply: bool,
+        /// Which settings to apply
+        #[arg(long, value_enum, default_value_t = FilterPick::Recommended)]
+        pick: FilterPick,
+        #[command(flatten)]
+        apply_opts: ApplyArgs,
     },
     /// List serial ports and which look like flight controllers
     Ports,
@@ -134,6 +156,14 @@ impl From<&ApplyArgs> for ApplyOptions {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum FilterPick {
+    /// Same noise, less delay
+    Recommended,
+    /// Less noise, same delay
+    Quieter,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum SamplePreset {
     /// Logging set up for tuning, with hover and stick snaps
     Ready,
@@ -182,6 +212,36 @@ fn main() -> Result<()> {
             if let Some(path) = svg {
                 std::fs::write(&path, svg::render(&r)).with_context(|| format!("writing {}", path.display()))?;
                 eprintln!("Wrote plot to {}", path.display());
+            }
+        }
+        Cmd::Filters { log, lag_at, json, svg, apply, pick, apply_opts } => {
+            let r = filters::simulate(&open(&log)?, lag_at).map_err(anyhow::Error::msg)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                print_filters(&r);
+            }
+            if let Some(path) = svg {
+                std::fs::write(&path, svg::render_filters(&r)).with_context(|| format!("writing {}", path.display()))?;
+                eprintln!("Wrote plot to {}", path.display());
+            }
+            if apply {
+                let (changes, what) = match pick {
+                    FilterPick::Recommended => (&r.changes, "recommended"),
+                    FilterPick::Quieter => (&r.quieter_changes, "quieter"),
+                };
+                if changes.is_empty() {
+                    println!("\nNo {what} settings to apply.");
+                } else {
+                    println!("\nApplying the {what} filter settings.");
+                    let mut link = vehicle::connect(&cli.conn)?;
+                    let params = vehicle::fetch_params(&mut link)?;
+                    let wanted: Vec<Wanted> = changes
+                        .iter()
+                        .map(|c| Wanted { name: c.name.clone(), value: c.value, reason: None })
+                        .collect();
+                    vehicle::apply(&mut link, &params, &wanted, &(&apply_opts).into())?;
+                }
             }
         }
         Cmd::Ports => vehicle::print_ports(),
@@ -278,6 +338,74 @@ fn info(log: &Log, fields: bool) {
             println!("{:<6} {:>9}", t.name, t.len());
         }
     }
+}
+
+fn print_filters(r: &FilterReport) {
+    println!("ArduTune gyro filter simulator");
+    println!("Recorded noise: {:.0} Hz gyro data; delay measured at {:.0} Hz.", r.sample_rate_hz, r.lag_ref_hz);
+    match &r.validation {
+        Some(v) => println!(
+            "Check: simulating your current filters reproduces the logged filtered gyro within {:.1} dB ({:.0}-{:.0} Hz).",
+            v.rms_error_db, v.band_hz.0, v.band_hz.1
+        ),
+        None => println!("Check: no logged post-filter data to compare the simulation against."),
+    }
+
+    println!("\n  {:<13} {:>12}  {:>16}  Settings", "", "Noise >45 Hz", "Delay");
+    let row = |label: &str, e: &Evaluation| {
+        println!(
+            "  {label:<13} {:>8.2} °/s  {:>5.0}° {:>5.1} ms  {}",
+            e.noise_rms,
+            e.lag_deg,
+            e.delay_ms,
+            e.settings.describe()
+        )
+    };
+    row("Current", &r.current);
+    if let Some(e) = &r.recommended {
+        row("Recommended", e);
+    }
+    if let Some(e) = &r.quieter {
+        row("Quieter", e);
+    }
+
+    let print_changes = |title: &str, changes: &[Change]| {
+        if changes.is_empty() {
+            return;
+        }
+        println!("\n{title}");
+        for c in changes {
+            let now = c.current.map_or("unset".to_owned(), format_value);
+            println!("  {:<17} {now} -> {}", c.name, format_value(c.value));
+        }
+    };
+    match &r.recommended {
+        Some(_) => print_changes("Recommended changes (same noise, less delay; apply with --apply):", &r.changes),
+        None => println!("\nYour current filters are already a good balance: nothing gives the same noise with clearly less delay."),
+    }
+    print_changes("Quieter option (less noise, same delay; apply with --apply --pick quieter):", &r.quieter_changes);
+
+    if r.frontier.len() > 2 {
+        println!("\nOther trade-offs, from least delay to least noise:");
+        let n = r.frontier.len();
+        let picks: Vec<usize> = (0..6).map(|i| i * (n - 1) / 5).collect::<Vec<_>>();
+        let mut last = usize::MAX;
+        for i in picks {
+            if i == last {
+                continue;
+            }
+            last = i;
+            let e = &r.frontier[i];
+            println!("  {:>6.2} °/s  {:>5.0}° {:>5.1} ms  {}", e.noise_rms, e.lag_deg, e.delay_ms, e.settings.describe());
+        }
+    }
+    for n in &r.notes {
+        println!("\nNote: {n}");
+    }
+    println!(
+        "\nFilters change how the attitude loop responds. After changing them, hover carefully first, watch for \
+         oscillation (lower the rate D or P if it appears) and check motor temperatures after a short flight."
+    );
 }
 
 fn print_noise(r: &NoiseReport) {

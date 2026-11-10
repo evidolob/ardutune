@@ -3,6 +3,7 @@
 
 use std::fmt::Write;
 
+use ardutune_core::filters::FilterReport;
 use ardutune_core::noise::{NoiseReport, PeakClass};
 
 const W: f64 = 960.0;
@@ -283,5 +284,177 @@ fn spectrogram(s: &mut String, r: &NoiseReport, fmax: f64) {
         GRAM_TOP + GRAM_H + 34.0,
         GRAM_TOP + GRAM_H / 2.0,
         GRAM_TOP + GRAM_H / 2.0
+    );
+}
+
+const SIM: &str = "#15803d";
+const QUIET: &str = "#7c3aed";
+const GREY: &str = "#9ca3af";
+
+/// Spectra (recorded, logged after filters, simulated) and the noise/delay
+/// trade-off of the settings tried.
+pub fn render_filters(r: &FilterReport) -> String {
+    const TOP: f64 = 48.0;
+    const PH: f64 = 320.0;
+    const TRADE_TOP: f64 = TOP + PH + 80.0;
+    const TH: f64 = 260.0;
+    const HEIGHT: f64 = TRADE_TOP + TH + 56.0;
+    let plot_w = W - LEFT - RIGHT;
+    let fmax = r.freq_hz.last().copied().unwrap_or(500.0).min(500.0);
+    let x_of = |f: f64| LEFT + f / fmax * plot_w;
+    let mut lines: Vec<(&[f64], &str, &str, bool)> = vec![(&r.pre_db, GREY, "Recorded noise (before filters)", false)];
+    if let Some(p) = &r.logged_post_db {
+        lines.push((p, POST, "Logged after filters", false));
+    }
+    lines.push((&r.current.spectrum_db, POST, "Simulated: current settings", true));
+    if let Some(e) = &r.recommended {
+        lines.push((&e.spectrum_db, SIM, "Simulated: recommended", false));
+    }
+    if let Some(e) = &r.quieter {
+        lines.push((&e.spectrum_db, QUIET, "Simulated: quieter", false));
+    }
+    let visible: Vec<f64> = lines
+        .iter()
+        .flat_map(|(v, ..)| r.freq_hz.iter().zip(v.iter()).filter(|(f, _)| **f >= 5.0 && **f <= fmax).map(|(_, d)| *d))
+        .collect();
+    let top = visible.iter().copied().fold(f64::NEG_INFINITY, f64::max) + 5.0;
+    let bottom = visible.iter().copied().fold(f64::INFINITY, f64::min).max(top - 90.0) - 2.0;
+    let y_of = |d: f64| TOP + (top - d.clamp(bottom, top)) / (top - bottom) * PH;
+
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {HEIGHT}" width="{W}" height="{HEIGHT}" font-family="system-ui, sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="{LEFT}" y="24" font-size="16" font-weight="600" fill="#111827">Gyro noise through the filters (all axes)</text>"##
+    );
+    grid(&mut s, LEFT, TOP, plot_w, PH, 0.0, fmax, bottom, top, &x_of, &y_of, "Frequency (Hz)", "dB re (°/s)²/Hz");
+    for (vals, colour, _, dashed) in &lines {
+        let pts: Vec<String> = r
+            .freq_hz
+            .iter()
+            .zip(vals.iter())
+            .filter(|(f, _)| **f <= fmax)
+            .map(|(f, d)| format!("{:.1},{:.1}", x_of(*f), y_of(*d)))
+            .collect();
+        let dash = if *dashed { r##" stroke-dasharray="5 3""## } else { "" };
+        let _ = writeln!(s, r##"<polyline fill="none" stroke="{colour}" stroke-width="1.5"{dash} points="{}"/>"##, pts.join(" "));
+    }
+    let lx = W - RIGHT - 250.0;
+    let _ = writeln!(
+        s,
+        r##"<rect x="{lx}" y="{}" width="246" height="{}" fill="#ffffff" stroke="#e5e7eb"/>"##,
+        TOP + 8.0,
+        12.0 + 18.0 * lines.len() as f64
+    );
+    for (i, (_, colour, label, dashed)) in lines.iter().enumerate() {
+        let y = TOP + 24.0 + 18.0 * i as f64;
+        let dash = if *dashed { r##" stroke-dasharray="5 3""## } else { "" };
+        let _ = writeln!(
+            s,
+            r##"<line x1="{}" y1="{y}" x2="{}" y2="{y}" stroke="{colour}" stroke-width="2"{dash}/><text x="{}" y="{}" fill="#111827">{label}</text>"##,
+            lx + 8.0,
+            lx + 32.0,
+            lx + 38.0,
+            y + 4.0
+        );
+    }
+
+    // Trade-off: delay vs noise for every setting on the frontier.
+    // Beyond twice today's delay the options are only of academic interest.
+    let lag_cap = 2.0 * r.current.lag_deg.max(10.0);
+    let pts: Vec<(f64, f64)> =
+        r.frontier.iter().filter(|e| e.lag_deg <= lag_cap).map(|e| (e.lag_deg, e.noise_rms)).collect();
+    let mut all = pts.clone();
+    all.push((r.current.lag_deg, r.current.noise_rms));
+    let lag_max = all.iter().map(|p| p.0).fold(0.0, f64::max) * 1.05;
+    let noise_max = all.iter().map(|p| p.1).fold(0.0, f64::max) * 1.1;
+    let tx = |lag: f64| LEFT + lag / lag_max * plot_w;
+    let ty = |n: f64| TRADE_TOP + TH - n / noise_max * TH;
+    let _ = writeln!(
+        s,
+        r##"<text x="{LEFT}" y="{:.1}" font-size="16" font-weight="600" fill="#111827">Trade-off: delay at {:.0} Hz vs noise left above 45 Hz</text>"##,
+        TRADE_TOP - 16.0,
+        r.lag_ref_hz
+    );
+    grid(&mut s, LEFT, TRADE_TOP, plot_w, TH, 0.0, lag_max, 0.0, noise_max, &tx, &ty, "Delay (degrees of phase)", "Noise (°/s RMS)");
+    let curve: Vec<String> = pts.iter().map(|(l, n)| format!("{:.1},{:.1}", tx(*l), ty(*n))).collect();
+    let _ = writeln!(s, r##"<polyline fill="none" stroke="{GREY}" stroke-width="1.2" points="{}"/>"##, curve.join(" "));
+    for (l, n) in &pts {
+        let _ = writeln!(s, r##"<circle cx="{:.1}" cy="{:.1}" r="2.5" fill="{GREY}"/>"##, tx(*l), ty(*n));
+    }
+    // Label offsets: current below-right, recommended above, quieter right.
+    let mut mark = |e: &ardutune_core::filters::Evaluation, colour: &str, label: &str, dx: f64, dy: f64| {
+        let (x, y) = (tx(e.lag_deg), ty(e.noise_rms));
+        let _ = writeln!(
+            s,
+            r##"<circle cx="{x:.1}" cy="{y:.1}" r="6" fill="{colour}"/><text x="{:.1}" y="{:.1}" fill="{colour}" font-weight="600">{label}</text>"##,
+            x + dx,
+            y + dy
+        );
+    };
+    mark(&r.current, POST, "Current", 10.0, 20.0);
+    if let Some(e) = &r.recommended {
+        mark(e, SIM, "Recommended", -40.0, -12.0);
+    }
+    if let Some(e) = &r.quieter {
+        mark(e, QUIET, "Quieter", 10.0, 4.0);
+    }
+    s += "</svg>\n";
+    s
+}
+
+/// Axes with gridlines and tick labels for a plot area.
+#[allow(clippy::too_many_arguments)]
+fn grid(
+    s: &mut String,
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    x0: f64,
+    x1: f64,
+    y0: f64,
+    y1: f64,
+    x_of: &dyn Fn(f64) -> f64,
+    y_of: &dyn Fn(f64) -> f64,
+    x_label: &str,
+    y_label: &str,
+) {
+    let xs = nice_step(x1 - x0, 10.0);
+    let mut x = (x0 / xs).ceil() * xs;
+    while x <= x1 + 1e-9 {
+        let px = x_of(x);
+        let _ = writeln!(
+            s,
+            r##"<line x1="{px:.1}" y1="{top}" x2="{px:.1}" y2="{:.1}" stroke="#e5e7eb"/><text x="{px:.1}" y="{:.1}" fill="#374151" text-anchor="middle">{}</text>"##,
+            top + height,
+            top + height + 16.0,
+            ardutune_core::params::format_value((x * 100.0).round() / 100.0)
+        );
+        x += xs;
+    }
+    let ys = nice_step(y1 - y0, 6.0);
+    let mut y = (y0 / ys).ceil() * ys;
+    while y <= y1 + 1e-9 {
+        let py = y_of(y);
+        let _ = writeln!(
+            s,
+            r##"<line x1="{left}" y1="{py:.1}" x2="{:.1}" y2="{py:.1}" stroke="#e5e7eb"/><text x="{:.1}" y="{:.1}" fill="#374151" text-anchor="end">{}</text>"##,
+            left + width,
+            left - 6.0,
+            py + 4.0,
+            ardutune_core::params::format_value((y * 100.0).round() / 100.0)
+        );
+        y += ys;
+    }
+    let _ = writeln!(
+        s,
+        r##"<text x="{:.1}" y="{:.1}" fill="#374151" text-anchor="middle">{x_label}</text>
+<text x="16" y="{:.1}" fill="#374151" text-anchor="middle" transform="rotate(-90 16 {:.1})">{y_label}</text>"##,
+        left + width / 2.0,
+        top + height + 34.0,
+        top + height / 2.0,
+        top + height / 2.0
     );
 }

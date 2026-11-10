@@ -13,6 +13,10 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
 - Gyro noise analysis: spectrum before and after the filters, spectrogram,
   noise peaks classified against motor speed, harmonic notch coverage, and
   plain-language findings; optional SVG plot.
+- Gyro filter simulator: replays the recorded noise through ArduPilot's notch
+  and low-pass filters, checks itself against the logged filtered data, and
+  recommends settings with the same noise and less delay (or less noise for
+  the same delay), which can be written straight to the vehicle.
 - Vehicle connection over MAVLink (USB, UDP, TCP): download logs, back up
   parameters, and write recommended parameters directly, with verification.
 
@@ -22,8 +26,8 @@ The desktop UI (Tauri) comes later; for now there is a command-line tool.
 
 - `crates/core`: analysis library: DataFlash parser (`dataflash`), log model
   (`log`), readiness checks (`readiness`), incident diagnosis (`diagnose`),
-  gyro noise analysis (`noise`), parameter files (`params`), synthetic logs
-  (`synth`).
+  gyro noise analysis (`noise`), filter simulator (`filters`), parameter
+  files (`params`), synthetic logs (`synth`).
 - `crates/link`: MAVLink link to the vehicle: parameters, reboot, log
   download (`Link`), USB port discovery (`ports`), simulated vehicle (`mock`).
 - `crates/cli`: `ardutune` command-line front end.
@@ -40,6 +44,8 @@ ardutune logs list                      # logs on the flight controller
 ardutune logs download --check          # download the latest log and check it
 ardutune diagnose flight.bin            # why did it crash / lose control?
 ardutune noise flight.bin --svg n.svg   # gyro noise, peaks, notch coverage, plot
+ardutune filters flight.bin --svg f.svg # simulate filter settings, recommend better ones
+ardutune filters flight.bin --apply     # write the recommended filters to the vehicle
 ardutune check flight.bin --apply       # write recommended params to the vehicle
 ardutune params -o backup.param         # save all parameters
 ardutune apply backup.param             # write a .param file (e.g. restore a backup)

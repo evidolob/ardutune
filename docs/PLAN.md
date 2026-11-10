@@ -123,7 +123,17 @@ System ID mode logs (`SID_*` params) when available.
    notch coverage and filter attenuation per peak; per-motor hover speed
    spread; SVG plot. Next: confirm the raw-IMU post-filter instance numbering
    on a real log.
-3. Filter simulator + notch recommendations + noise-vs-lag view.
+3. Filter simulator + notch recommendations + noise-vs-lag view. ✅ Bit-exact
+   ArduPilot notch (A/Q from FREQ/BW/ATT, Q shared across harmonics) and
+   LowPassFilter2p biquads; notch centres per mode (fixed, throttle, RPM
+   sensor, ESC average or per motor, FM_RAT floor); applied per batch to the
+   recorded pre-filter spectrum; validated against logged post-filter data
+   (rounding floor of the batch sampler accounted for: 2.3 dB RMS on the real
+   log); search over low-pass cutoff, notch harmonics, bandwidth (≥ FREQ/2)
+   and per-motor mode; Pareto frontier of noise vs phase lag; "same noise,
+   less delay" and "less noise, same delay" picks; direct apply; SVG plot.
+   Not yet: double/triple notch geometry, D-term filters, time-varying
+   notch during manoeuvres.
 4. Step-response analysis + PID diagnostics + `.param` export.
 5. System ID analysis + plant fit + predicted closed-loop response.
 6. Flight-to-flight comparison / history.
