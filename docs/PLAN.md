@@ -134,7 +134,17 @@ System ID mode logs (`SID_*` params) when available.
    less delay" and "less noise, same delay" picks; direct apply; SVG plot.
    Not yet: double/triple notch geometry, D-term filters, time-varying
    notch during manoeuvres.
-4. Step-response analysis + PID diagnostics + `.param` export.
+4. Step-response analysis + PID diagnostics + `.param` export. ✅ RATE target
+   vs actual resampled to a uniform grid (impossible values dropped);
+   2 s windows, Tukey taper, Wiener deconvolution with roll-off above 30 Hz,
+   averaged step response with outlier rejection (recovers 26.1% overshoot
+   on a known 25.4% system); rise/delay/overshoot/settling/steady state;
+   rate-error oscillation confirmed in the measured rate; D-term noise share,
+   slew-limiter activity, I offset, output saturation; AutoTune periods
+   excluded or flagged (no gain suggestions from them); bounded ±15% gain
+   suggestions and SMAX safety net; unsaved AutoTune results parsed from
+   messages; direct apply; SVG plot. Next: a clean AltHold stick-snap flight
+   to validate suggestions on real data.
 5. System ID analysis + plant fit + predicted closed-loop response.
 6. Flight-to-flight comparison / history.
 7. Later: other diagnostics. Incident diagnosis to grow with more causes

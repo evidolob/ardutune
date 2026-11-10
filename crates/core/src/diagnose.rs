@@ -353,7 +353,8 @@ fn peak_rate(log: &Log, from: f64, to: f64) -> Option<(f64, f64)> {
     for f in ["R", "P", "Y"] {
         let s = Series::get(log, "RATE", f)?;
         for (t, v) in s.t.iter().zip(&s.v) {
-            if *t >= from && *t <= to && best.is_none_or(|b| v.abs() > b.1) {
+            // Beyond any gyro's range: a corrupt message.
+            if *t >= from && *t <= to && v.abs() < 5000.0 && best.is_none_or(|b| v.abs() > b.1) {
                 best = Some((*t, v.abs()));
             }
         }

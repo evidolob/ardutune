@@ -8,6 +8,7 @@ use ardutune_core::diagnose::{diagnose, Confidence, Diagnosis, Finding};
 use ardutune_core::filters::{self, Change, Evaluation, FilterReport};
 use ardutune_core::noise::{self, NoiseReport, PeakClass, Source};
 use ardutune_core::params::format_value;
+use ardutune_core::pid::{self, PidReport};
 use ardutune_core::readiness::{Area, Status};
 use ardutune_core::synth::{sample_flight, Preset};
 use ardutune_core::{assess, Log, Report};
@@ -88,6 +89,24 @@ enum Cmd {
         #[command(flatten)]
         apply_opts: ApplyArgs,
     },
+    /// Analyse rate-loop PIDs: step response, oscillation, PID terms, AutoTune results
+    Pid {
+        log: PathBuf,
+        /// Print the analysis as JSON
+        #[arg(long)]
+        json: bool,
+        /// Write a plot of the step responses to this SVG file
+        #[arg(long, value_name = "FILE")]
+        svg: Option<PathBuf>,
+        /// Write the chosen gains to the connected vehicle
+        #[arg(long)]
+        apply: bool,
+        /// Which gains to apply
+        #[arg(long, value_enum, default_value_t = PidPick::Suggestions)]
+        pick: PidPick,
+        #[command(flatten)]
+        apply_opts: ApplyArgs,
+    },
     /// List serial ports and which look like flight controllers
     Ports,
     /// Connect to the vehicle and show what it is
@@ -161,6 +180,14 @@ enum FilterPick {
     Recommended,
     /// Less noise, same delay
     Quieter,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PidPick {
+    /// The cautious changes from this analysis
+    Suggestions,
+    /// Gains a finished AutoTune found but didn't save
+    Autotune,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -239,6 +266,36 @@ fn main() -> Result<()> {
                     let wanted: Vec<Wanted> = changes
                         .iter()
                         .map(|c| Wanted { name: c.name.clone(), value: c.value, reason: None })
+                        .collect();
+                    vehicle::apply(&mut link, &params, &wanted, &(&apply_opts).into())?;
+                }
+            }
+        }
+        Cmd::Pid { log, json, svg, apply, pick, apply_opts } => {
+            let r = pid::analyse(&open(&log)?).map_err(anyhow::Error::msg)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                print_pid(&r);
+            }
+            if let Some(path) = svg {
+                std::fs::write(&path, svg::render_pid(&r)).with_context(|| format!("writing {}", path.display()))?;
+                eprintln!("Wrote plot to {}", path.display());
+            }
+            if apply {
+                let (chosen, what) = match pick {
+                    PidPick::Suggestions => (&r.suggestions, "suggested"),
+                    PidPick::Autotune => (&r.autotune, "AutoTune"),
+                };
+                if chosen.is_empty() {
+                    println!("\nNo {what} gains to apply.");
+                } else {
+                    println!("\nApplying the {what} gains.");
+                    let mut link = vehicle::connect(&cli.conn)?;
+                    let params = vehicle::fetch_params(&mut link)?;
+                    let wanted: Vec<Wanted> = chosen
+                        .iter()
+                        .map(|s| Wanted { name: s.name.clone(), value: s.value, reason: Some(s.reason.clone()) })
                         .collect();
                     vehicle::apply(&mut link, &params, &wanted, &(&apply_opts).into())?;
                 }
@@ -338,6 +395,62 @@ fn info(log: &Log, fields: bool) {
             println!("{:<6} {:>9}", t.name, t.len());
         }
     }
+}
+
+fn print_pid(r: &PidReport) {
+    println!("ArduTune rate-loop PID analysis");
+    println!("Rate data at {:.0} Hz.", r.sample_rate_hz);
+    let opt = |v: Option<f64>| v.map_or("-".to_owned(), format_value);
+    for a in &r.axes {
+        let g = &a.gains;
+        println!(
+            "\n{} — P {} I {} D {} FF {}, D filter {}, angle P {}",
+            a.axis.to_uppercase(),
+            opt(g.p),
+            opt(g.i),
+            opt(g.d),
+            opt(g.ff),
+            g.fltd.map_or("-".to_owned(), |f| if f == 0.0 { "off".to_owned() } else { format!("{} Hz", format_value(f)) }),
+            opt(g.angle_p)
+        );
+        match &a.step {
+            Some(s) => {
+                let ms = |v: Option<f64>| v.map_or("-".to_owned(), |v| format!("{v:.0} ms"));
+                let caveat = if a.includes_autotune { ", includes AutoTune periods" } else { "" };
+                println!(
+                    "  Step response ({} windows{caveat}): overshoot {:.0}%, rise {}, delay {}, settles in {}, reaches {:.0}% of target",
+                    s.windows,
+                    s.overshoot_pct,
+                    ms(s.rise_ms),
+                    ms(s.delay_ms),
+                    ms(s.settling_ms),
+                    s.steady_state * 100.0
+                );
+            }
+            None => println!("  Step response: not enough inputs on this axis."),
+        }
+        for f in &a.findings {
+            println!("  - {f}");
+        }
+    }
+    if !r.suggestions.is_empty() {
+        println!("\nSuggested changes (apply with --apply):");
+        for s in &r.suggestions {
+            println!("  {:<38} {}", s.describe(), s.reason);
+        }
+    }
+    if !r.autotune.is_empty() {
+        println!("\nAutoTune finished these but they weren't saved (apply with --apply --pick autotune):");
+        for s in &r.autotune {
+            println!("  {}", s.describe());
+        }
+    }
+    for n in &r.notes {
+        println!("\nNote: {n}");
+    }
+    println!(
+        "\nChange gains in small steps and test-hover after each change. Fix the filters (ardutune filters) before tuning PIDs."
+    );
 }
 
 fn print_filters(r: &FilterReport) {

@@ -5,6 +5,7 @@ use std::fmt::Write;
 
 use ardutune_core::filters::FilterReport;
 use ardutune_core::noise::{NoiseReport, PeakClass};
+use ardutune_core::pid::PidReport;
 
 const W: f64 = 960.0;
 const LEFT: f64 = 64.0;
@@ -457,4 +458,63 @@ fn grid(
         top + height / 2.0,
         top + height / 2.0
     );
+}
+
+const AXIS_COLOURS: [&str; 3] = ["#c2410c", "#1d4ed8", "#15803d"];
+
+/// Step responses of the three axes against the ideal unit step.
+pub fn render_pid(r: &PidReport) -> String {
+    const TOP: f64 = 48.0;
+    const PH: f64 = 380.0;
+    const HEIGHT: f64 = TOP + PH + 60.0;
+    let plot_w = W - LEFT - RIGHT;
+    let tmax = ardutune_core::pid::RESPONSE_S * 1000.0;
+    let peak = r
+        .axes
+        .iter()
+        .filter_map(|a| a.step.as_ref())
+        .flat_map(|s| s.response.iter().copied())
+        .fold(1.2, f64::max)
+        .min(2.5);
+    let (y0, y1) = (0.0, (peak * 10.0).ceil() / 10.0 + 0.1);
+    let x_of = |ms: f64| LEFT + ms / tmax * plot_w;
+    let y_of = |v: f64| TOP + (y1 - v.clamp(y0, y1)) / (y1 - y0) * PH;
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {HEIGHT}" width="{W}" height="{HEIGHT}" font-family="system-ui, sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="{LEFT}" y="24" font-size="16" font-weight="600" fill="#111827">Rate-loop step response (response to a unit step in target rate)</text>"##
+    );
+    grid(&mut s, LEFT, TOP, plot_w, PH, 0.0, tmax, y0, y1, &x_of, &y_of, "Time (ms)", "Rate / target");
+    let _ = writeln!(
+        s,
+        r##"<line x1="{LEFT}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="#111827" stroke-dasharray="4 3"/>"##,
+        y_of(1.0),
+        W - RIGHT,
+        y_of(1.0)
+    );
+    let mut legend = 0;
+    for (a, colour) in r.axes.iter().zip(AXIS_COLOURS) {
+        let Some(step) = &a.step else { continue };
+        let pts: Vec<String> =
+            step.time_s.iter().zip(&step.response).map(|(t, v)| format!("{:.1},{:.1}", x_of(t * 1000.0), y_of(*v))).collect();
+        let dash = if a.includes_autotune { r##" stroke-dasharray="6 2""## } else { "" };
+        let _ = writeln!(s, r##"<polyline fill="none" stroke="{colour}" stroke-width="2"{dash} points="{}"/>"##, pts.join(" "));
+        let ly = TOP + 24.0 + 18.0 * legend as f64;
+        let note = if a.includes_autotune { " (incl. AutoTune)" } else { "" };
+        let _ = writeln!(
+            s,
+            r##"<line x1="{:.1}" y1="{ly}" x2="{:.1}" y2="{ly}" stroke="{colour}" stroke-width="2"{dash}/><text x="{:.1}" y="{:.1}" fill="#111827">{}: overshoot {:.0}%{note}</text>"##,
+            W - RIGHT - 300.0,
+            W - RIGHT - 276.0,
+            W - RIGHT - 270.0,
+            ly + 4.0,
+            a.axis,
+            step.overshoot_pct
+        );
+        legend += 1;
+    }
+    s += "</svg>\n";
+    s
 }

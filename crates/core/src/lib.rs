@@ -6,6 +6,7 @@ pub mod filters;
 pub mod log;
 pub mod noise;
 pub mod params;
+pub mod pid;
 pub mod readiness;
 pub mod stats;
 pub mod synth;

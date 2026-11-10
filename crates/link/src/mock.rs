@@ -41,7 +41,7 @@ impl MockState {
     pub fn quad(logs: Vec<Vec<u8>>) -> Self {
         use MavParamType::*;
         let mut params = BTreeMap::new();
-        let base: [(&str, f32, MavParamType); 17] = [
+        let base: [(&str, f32, MavParamType); 23] = [
             ("LOG_BITMASK", 176_126.0, MAV_PARAM_TYPE_INT32),
             ("INS_RAW_LOG_OPT", 0.0, MAV_PARAM_TYPE_INT8),
             ("INS_LOG_BAT_MASK", 0.0, MAV_PARAM_TYPE_INT8),
@@ -57,6 +57,12 @@ impl MockState {
             ("INS_HNTCH_FM_RAT", 1.0, MAV_PARAM_TYPE_REAL32),
             ("INS_HNTCH_REF", 0.0, MAV_PARAM_TYPE_REAL32),
             ("ATC_RAT_RLL_P", 0.135, MAV_PARAM_TYPE_REAL32),
+            ("ATC_RAT_RLL_I", 0.135, MAV_PARAM_TYPE_REAL32),
+            ("ATC_RAT_RLL_D", 0.0036, MAV_PARAM_TYPE_REAL32),
+            ("ATC_RAT_RLL_SMAX", 0.0, MAV_PARAM_TYPE_REAL32),
+            ("ATC_RAT_PIT_SMAX", 0.0, MAV_PARAM_TYPE_REAL32),
+            ("ATC_ANG_RLL_P", 4.5, MAV_PARAM_TYPE_REAL32),
+            ("ATC_ACCEL_R_MAX", 110_000.0, MAV_PARAM_TYPE_REAL32),
             ("MOT_THST_HOVER", 0.35, MAV_PARAM_TYPE_REAL32),
             ("SCHED_LOOP_RATE", 400.0, MAV_PARAM_TYPE_INT16),
         ];

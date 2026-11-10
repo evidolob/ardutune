@@ -17,6 +17,11 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   and low-pass filters, checks itself against the logged filtered data, and
   recommends settings with the same noise and less delay (or less noise for
   the same delay), which can be written straight to the vehicle.
+- Rate-loop PID analysis: step response per axis from flight data (Wiener
+  deconvolution), rate-loop oscillations, PID term health (D-term noise,
+  slew limiter, I offset, saturation), cautious bounded gain suggestions, and
+  gains from a finished AutoTune that weren't saved; optional SVG plot and
+  direct apply.
 - Vehicle connection over MAVLink (USB, UDP, TCP): download logs, back up
   parameters, and write recommended parameters directly, with verification.
 
@@ -26,8 +31,8 @@ The desktop UI (Tauri) comes later; for now there is a command-line tool.
 
 - `crates/core`: analysis library: DataFlash parser (`dataflash`), log model
   (`log`), readiness checks (`readiness`), incident diagnosis (`diagnose`),
-  gyro noise analysis (`noise`), filter simulator (`filters`), parameter
-  files (`params`), synthetic logs (`synth`).
+  gyro noise analysis (`noise`), filter simulator (`filters`), PID analysis
+  (`pid`), parameter files (`params`), synthetic logs (`synth`).
 - `crates/link`: MAVLink link to the vehicle: parameters, reboot, log
   download (`Link`), USB port discovery (`ports`), simulated vehicle (`mock`).
 - `crates/cli`: `ardutune` command-line front end.
@@ -46,6 +51,8 @@ ardutune diagnose flight.bin            # why did it crash / lose control?
 ardutune noise flight.bin --svg n.svg   # gyro noise, peaks, notch coverage, plot
 ardutune filters flight.bin --svg f.svg # simulate filter settings, recommend better ones
 ardutune filters flight.bin --apply     # write the recommended filters to the vehicle
+ardutune pid flight.bin --svg p.svg     # step response, oscillation, PID health, AutoTune results
+ardutune pid flight.bin --apply --pick autotune   # write unsaved AutoTune gains
 ardutune check flight.bin --apply       # write recommended params to the vehicle
 ardutune params -o backup.param         # save all parameters
 ardutune apply backup.param             # write a .param file (e.g. restore a backup)
