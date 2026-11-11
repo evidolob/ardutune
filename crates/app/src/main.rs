@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod analysis;
+mod backups;
 #[cfg(test)]
 mod ipc_tests;
 mod vehicle;
@@ -113,6 +114,9 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         vehicle::prepare_changes,
         vehicle::apply_changes,
         vehicle::reboot,
+        backups::backup_params,
+        backups::list_backups,
+        backups::delete_backup,
     ])
 }
 

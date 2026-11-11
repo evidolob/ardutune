@@ -13,6 +13,11 @@
   };
   const vehicle = { address: "serial:/dev/cu.usbmodem14301:115200", kind: "quadrotor", ardupilot: true, system_id: 1, armed: false, params: 1233 };
   let connected = false;
+  let backups = [
+    { path: "/b/2.param", file_name: "backup-sys1-20261110-153000.param", saved: "2026-11-10 15:30:00", system_id: 1, reason: "Before writing recommended filter settings", params: 1233 },
+    { path: "/b/1.param", file_name: "backup-sys1-20261109-090000.param", saved: "2026-11-09 09:00:00", system_id: 1, reason: "Before maiden flight", params: 1231 },
+    { path: "/b/mp.param", file_name: "matekh7a3_params.param", saved: null, system_id: null, reason: null, params: 1233 },
+  ];
   let logs = [
     { id: 1, size_mb: 12.4, date: null },
     { id: 2, size_mb: 89.6, date: "2026-05-17 14:02:11" },
@@ -61,6 +66,18 @@
       return `/Users/pilot/Documents/ArduTune/logs/log_${id}.bin`;
     },
     prepare_changes: async ({ source }) => {
+      if (source === "file")
+        return {
+          rows: [
+            { name: "ATC_RAT_PIT_D", current: 0.0058, value: 0.0045, reason: null },
+            { name: "INS_GYRO_FILTER", current: 60, value: 30, reason: null },
+            { name: "INS_HNTCH_BW", current: 52, value: 25, reason: null },
+          ],
+          unchanged: Array(1220).fill("X"),
+          unknown: [],
+          skipped: ["STAT_BOOTCNT", "STAT_RUNTIME", "STAT_FLTTIME", "INS_GYR_ID"],
+          armed: false,
+        };
       const kind = source.startsWith("filters") ? "filters" : source.startsWith("pid") ? "pid" : null;
       const r = kind ? (await fixture(kind)).report : null;
       const list =
@@ -69,6 +86,7 @@
         rows: list.map((c) => ({ name: c.name, current: c.current ?? 0, value: c.value, reason: c.reason ?? null })),
         unchanged: [],
         unknown: [],
+        skipped: [],
         armed: false,
       };
     },
@@ -77,6 +95,15 @@
       return { backup: "/Users/pilot/Documents/ArduTune/backups/backup-sys1-20261110-153000.param", results: [{ name: "INS_GYRO_FILTER", value: 60, error: null }] };
     },
     reboot: async () => (connected = false),
+    list_backups: async () => backups,
+    backup_params: async ({ note }) => {
+      await progress("Reading parameters", 1233);
+      backups.unshift({ path: `/b/${Date.now()}.param`, file_name: "backup.param", saved: "2026-11-11 12:00:00", system_id: 1, reason: note || "Manual backup", params: 1233 });
+      return vehicle;
+    },
+    delete_backup: async ({ path }) => {
+      backups = backups.filter((b) => b.path !== path);
+    },
   };
 
   window.__TAURI__ = {

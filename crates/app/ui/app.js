@@ -14,7 +14,7 @@ const LOG_VIEWS = [
 const VEHICLE_VIEWS = [
   ["connection", "Connection"],
   ["vlogs", "Logs on vehicle"],
-  ["restore", "Write a .param file"],
+  ["params", "Parameters"],
 ];
 
 const state = {
@@ -27,6 +27,7 @@ const state = {
   address: "auto",
   connecting: false,
   vehicleLogs: null,
+  backups: null, // parameter backups on this computer
   vehicleBusy: null, // text while a vehicle task runs
   modal: null,
   toast: null,
@@ -88,6 +89,7 @@ function go(view) {
   if (["diagnose", "noise", "filters", "pid"].includes(view)) analyse(view);
   if (view === "connection" && !state.ports) refreshPorts();
   if (view === "vlogs" && state.vehicle && !state.vehicleLogs) refreshVehicleLogs();
+  if (view === "params") refreshBackups();
 }
 
 async function refreshPorts() {
@@ -186,13 +188,14 @@ async function reboot() {
 /** Shows what writing a set of recommendations would change, then writes on confirmation. */
 async function writeChanges(source, title, path = null) {
   if (!state.vehicle) {
-    set({ modal: { stage: "connect", title } });
+    set({ modal: { stage: "connect", title: `Write ${title}` } });
     return;
   }
-  set({ modal: { stage: "planning", title } });
+  set({ modal: { stage: "planning", title, source } });
   try {
-    const plan = await invoke("prepare_changes", { source, path });
-    set({ modal: { stage: "confirm", title, plan } });
+    const verb = source === "file" ? "restoring" : "writing";
+    const plan = await invoke("prepare_changes", { source, path, label: `${verb} ${title}` });
+    set({ modal: { stage: "confirm", title, source, plan, selected: new Set(plan.rows.map((r) => r.name)) } });
   } catch (e) {
     set({ modal: null });
     toast(e);
@@ -203,8 +206,9 @@ async function confirmWrite() {
   const m = state.modal;
   set({ modal: { ...m, stage: "writing" } });
   try {
-    const result = await invoke("apply_changes");
-    set({ modal: { ...m, stage: "done", result } });
+    const result = await invoke("apply_changes", { names: [...m.selected] });
+    set({ modal: { ...m, stage: "done", result }, backups: null });
+    if (state.view === "params") refreshBackups();
   } catch (e) {
     set({ modal: { ...m, stage: "confirm" } });
     toast(e);
@@ -220,7 +224,50 @@ async function pickLog() {
 
 async function pickParamFile() {
   const path = await invoke("pick_file", { kind: "param" });
-  if (path) writeChanges("file", `Write ${path.split(/[\\/]/).pop()}`, path);
+  if (path) writeChanges("file", path.split(/[\\/]/).pop(), path);
+}
+
+async function refreshBackups() {
+  try {
+    set({ backups: await invoke("list_backups") });
+  } catch (e) {
+    toast(e);
+  }
+}
+
+async function backupNow() {
+  const note = document.getElementById("note")?.value ?? "";
+  const vehicle = await vehicleTask("Reading parameters for the backup…", () => invoke("backup_params", { note }));
+  if (vehicle) {
+    set({ vehicle });
+    toast(`Backed up ${vehicle.params} parameters.`, "info");
+    refreshBackups();
+  }
+}
+
+function backupLabel(b) {
+  return b.saved ? `the backup from ${b.saved} UTC` : b.file_name;
+}
+
+function restoreBackup(path) {
+  const b = state.backups?.find((x) => x.path === path);
+  writeChanges("file", b ? backupLabel(b) : path, path);
+}
+
+function askDeleteBackup(path) {
+  const b = state.backups?.find((x) => x.path === path);
+  set({ modal: { stage: "deleteBackup", title: `Delete ${b ? backupLabel(b) : "this backup"}?`, path } });
+}
+
+async function confirmDeleteBackup() {
+  const { path } = state.modal;
+  set({ modal: null });
+  try {
+    await invoke("delete_backup", { path });
+    refreshBackups();
+  } catch (e) {
+    toast(e);
+  }
 }
 
 async function openSample() {
@@ -238,6 +285,10 @@ const actions = {
   pickLog,
   openSample,
   pickParamFile,
+  backupNow,
+  restoreBackup: (d) => restoreBackup(d.path),
+  askDeleteBackup: (d) => askDeleteBackup(d.path),
+  confirmDeleteBackup,
   refreshPorts,
   connect,
   disconnect,
@@ -264,7 +315,17 @@ document.addEventListener("click", (e) => {
 });
 
 document.addEventListener("change", (e) => {
-  if (e.target.name === "port") set({ address: e.target.value });
+  const t = e.target;
+  if (t.name === "port") set({ address: t.value });
+  const m = state.modal;
+  if (m?.selected && t.dataset.name) {
+    t.checked ? m.selected.add(t.dataset.name) : m.selected.delete(t.dataset.name);
+    render();
+  }
+  if (m?.selected && t.id === "selectAll") {
+    m.selected = new Set(t.checked ? m.plan.rows.map((r) => r.name) : []);
+    render();
+  }
 });
 
 document.addEventListener("input", (e) => {
@@ -384,7 +445,7 @@ function recommendations(r) {
     ${r.recommended_params
       .map((p) => `<tr><td class="mono">${esc(p.name)}</td><td class="num">${p.current === null ? "–" : fmt(p.current)}</td><td class="num new">${fmt(p.value)}</td><td>${esc(p.reason)}</td></tr>`)
       .join("")}</table>
-    <div class="actions"><button class="btn primary" data-action="write" data-source="readiness" data-title="Logging for tuning">Write to vehicle…</button>
+    <div class="actions"><button class="btn primary" data-action="write" data-source="readiness" data-title="logging for tuning">Write to vehicle…</button>
     <span class="hint">Checked again against the vehicle's current values first.</span></div>
   </div>`;
 }
@@ -515,13 +576,13 @@ function filtersView(r, svg) {
     ${
       r.recommended
         ? `<div class="card"><h2>Recommended changes</h2>${changesTable(r.changes)}
-        <div class="actions"><button class="btn primary" data-action="write" data-source="filters" data-title="Recommended filter settings">Write to vehicle…</button></div></div>`
+        <div class="actions"><button class="btn primary" data-action="write" data-source="filters" data-title="recommended filter settings">Write to vehicle…</button></div></div>`
         : `<div class="banner pass">Your current filters are already a good balance: nothing gives the same noise with clearly less delay.</div>`
     }
     ${
       r.quieter_changes.length
         ? `<div class="card"><h2>Quieter option</h2>${changesTable(r.quieter_changes)}
-        <div class="actions"><button class="btn" data-action="write" data-source="filters_quieter" data-title="Quieter filter settings">Write to vehicle…</button></div></div>`
+        <div class="actions"><button class="btn" data-action="write" data-source="filters_quieter" data-title="quieter filter settings">Write to vehicle…</button></div></div>`
         : ""
     }
     ${svg ? `<div class="plot">${svg}</div>` : ""}
@@ -570,7 +631,7 @@ function pidView(r, svg) {
     ${
       r.suggestions.length
         ? `<div class="card"><h2>Suggested changes</h2>${changesTable(r.suggestions, true)}
-        <div class="actions"><button class="btn primary" data-action="write" data-source="pid" data-title="Suggested PID changes">Write to vehicle…</button>
+        <div class="actions"><button class="btn primary" data-action="write" data-source="pid" data-title="suggested PID changes">Write to vehicle…</button>
         <span class="hint">Small steps: test-hover after each change.</span></div></div>`
         : ""
     }
@@ -663,10 +724,44 @@ function vehicleLogsView() {
     </div>`;
 }
 
-function restoreView() {
-  const head = `<h1>Write a .param file</h1><p class="lead">Restore a backup or load a parameter file from another tool. You'll see every change before anything is written, and the current parameters are backed up first (Documents/ArduTune/backups).</p>`;
-  if (!state.vehicle) return head + notConnected("write parameters");
-  return `${head}<button class="btn primary" data-action="pickParamFile">Choose a .param file…</button>`;
+function paramsView() {
+  const v = state.vehicle;
+  const busyNow = !!state.vehicleBusy;
+  const backups = state.backups;
+  const rows = backups?.length
+    ? `<table><tr><th>Saved (UTC)</th><th>Note</th><th class="num">Values</th><th></th></tr>
+      ${backups
+        .map(
+          (b) => `<tr>
+            <td style="white-space:nowrap">${b.saved ? esc(b.saved) : `<code>${esc(b.file_name)}</code>`}${b.system_id !== null && b.system_id !== undefined ? `<div class="muted">system ${b.system_id}</div>` : ""}</td>
+            <td>${esc(b.reason ?? "")}</td>
+            <td class="num">${b.params}</td>
+            <td class="num" style="white-space:nowrap"><button class="btn" data-action="restoreBackup" data-path="${esc(b.path)}" ${!v || busyNow ? "disabled" : ""}>Restore…</button>
+              <button class="btn danger" data-action="askDeleteBackup" data-path="${esc(b.path)}">Delete</button></td></tr>`,
+        )
+        .join("")}</table>`
+    : backups
+      ? `<div class="muted">No backups yet.</div>`
+      : busy("Reading backups…");
+  return `
+    <h1>Parameters</h1>
+    <p class="lead">Back up all of the vehicle's parameters before you experiment, and put any of them back later. ArduTune also backs up automatically before every write. Backups are kept in Documents/ArduTune/backups.</p>
+    ${
+      v
+        ? `<div class="card"><h2>Back up now</h2>
+          <div class="actions" style="margin-top:0">
+            <input type="text" id="note" spellcheck="false" placeholder="Note (optional), e.g. before changing filters">
+            <button class="btn primary" data-action="backupNow" ${busyNow ? "disabled" : ""}>Back up</button>
+          </div>
+          <div class="actions"><span class="hint">Reads every parameter from the vehicle again, so the backup matches it exactly.</span></div>
+        </div>`
+        : `<div class="banner info">Connect to the vehicle to back up or restore parameters. <button class="link" data-action="go" data-view="connection">Connect…</button></div>`
+    }
+    ${state.vehicleBusy ? busy(state.vehicleBusy) : ""}
+    <div class="card"><h2>Backups</h2>${rows}
+      <div class="actions"><button class="btn" data-action="pickParamFile" ${!v || busyNow ? "disabled" : ""}>Restore from another file…</button>
+      <span class="hint">Restoring shows every difference first, and you choose which values to write.</span></div>
+    </div>`;
 }
 
 function modal() {
@@ -685,24 +780,37 @@ function modal() {
         <div class="actions"><button class="btn destroy" data-action="confirmDelete" ${state.vehicle?.armed ? "disabled" : ""}>${m.id === null ? "Erase all" : "Delete"}</button>
         <button class="btn" data-action="closeModal">Cancel</button></div>`;
       break;
+    case "deleteBackup":
+      body = `<p>The backup file is deleted from this computer. This can't be undone.</p>
+        <div class="actions"><button class="btn destroy" data-action="confirmDeleteBackup">Delete</button>
+        <button class="btn" data-action="closeModal">Cancel</button></div>`;
+      break;
     case "planning":
       body = busy("Comparing with the vehicle's parameters…");
       break;
     case "confirm": {
       const p = m.plan;
       const why = p.rows.some((r) => r.reason);
+      const n = m.selected.size;
+      const all = n === p.rows.length;
       body = `
         ${p.armed ? `<div class="banner fail">The vehicle is armed. Disarm it to write parameters.</div>` : ""}
         ${
           p.rows.length
-            ? `<table><tr><th>Parameter</th><th class="num">On vehicle</th><th></th><th class="num">Proposed</th>${why ? "<th>Why</th>" : ""}</tr>
-            ${p.rows.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td class="num">${fmt(r.current)}</td><td class="arrow">→</td><td class="num new">${fmt(r.value)}</td>${why ? `<td>${esc(r.reason ?? "")}</td>` : ""}</tr>`).join("")}</table>`
+            ? `<div class="scroll"><table><tr><th><input type="checkbox" id="selectAll" ${all ? "checked" : ""} title="Select all"></th><th>Parameter</th><th class="num">On vehicle</th><th></th><th class="num">Proposed</th>${why ? "<th>Why</th>" : ""}</tr>
+            ${p.rows
+              .map(
+                (r) =>
+                  `<tr><td><input type="checkbox" data-name="${esc(r.name)}" ${m.selected.has(r.name) ? "checked" : ""}></td><td class="mono">${esc(r.name)}</td><td class="num">${fmt(r.current)}</td><td class="arrow">→</td><td class="num new">${fmt(r.value)}</td>${why ? `<td>${esc(r.reason ?? "")}</td>` : ""}</tr>`,
+              )
+              .join("")}</table></div>`
             : `<div class="banner pass">Nothing to change: the vehicle already has these values.</div>`
         }
-        ${p.unchanged.length ? `<p class="muted">Already set: ${p.unchanged.map(esc).join(", ")}</p>` : ""}
+        ${p.unchanged.length ? `<p class="muted">${p.unchanged.length > 12 ? `${p.unchanged.length} values already match.` : `Already set: ${p.unchanged.map(esc).join(", ")}`}</p>` : ""}
+        ${p.skipped?.length ? `<p class="muted">Left out ${p.skipped.length} value${p.skipped.length > 1 ? "s" : ""} the firmware manages itself (statistics, versions, sensor IDs).</p>` : ""}
         ${p.unknown.length ? `<div class="banner warn">The vehicle has no parameter ${p.unknown.map(esc).join(", ")}; skipped.</div>` : ""}
         <div class="actions">
-          ${p.rows.length ? `<button class="btn primary" data-action="confirmWrite" ${p.armed ? "disabled" : ""}>Back up and write ${p.rows.length} parameter${p.rows.length > 1 ? "s" : ""}</button>` : ""}
+          ${p.rows.length ? `<button class="btn primary" data-action="confirmWrite" ${p.armed || !n ? "disabled" : ""}>Back up and write ${n} parameter${n === 1 ? "" : "s"}</button>` : ""}
           <button class="btn" data-action="closeModal">${p.rows.length ? "Cancel" : "Close"}</button>
         </div>`;
       break;
@@ -726,7 +834,9 @@ function modal() {
       break;
     }
   }
-  return `<div class="modal-back"><div class="modal"><h2>${esc(m.title)}</h2>${body}</div></div>`;
+  const writing = ["planning", "confirm", "writing", "done"].includes(m.stage);
+  const title = writing ? `${m.source === "file" ? "Restore" : "Write"} ${m.title}` : m.title;
+  return `<div class="modal-back"><div class="modal"><h2>${esc(title)}</h2>${body}</div></div>`;
 }
 
 function content() {
@@ -746,8 +856,8 @@ function content() {
       return connectionView();
     case "vlogs":
       return vehicleLogsView();
-    case "restore":
-      return restoreView();
+    case "params":
+      return paramsView();
     default:
       return welcome();
   }

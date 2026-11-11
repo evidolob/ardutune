@@ -56,6 +56,7 @@ fn analyse_connect_download_write_and_reboot() {
 
     assert_eq!(call("prepare_changes", json!({ "source": "pid" })).unwrap_err(), "Not connected to a vehicle.");
 
+    mock.state().params.insert("STAT_BOOTCNT".into(), (12.0, ardutune_link::ParamType::MAV_PARAM_TYPE_INT16));
     let info = call("connect", json!({ "address": mock.client_address() })).unwrap();
     assert_eq!(info["params"].as_u64().unwrap() as usize, mock.state().params.len());
     assert_eq!(info["armed"], json!(false));
@@ -95,6 +96,33 @@ fn analyse_connect_download_write_and_reboot() {
     let left = call("delete_vehicle_log", json!({ "id": id })).unwrap();
     assert_eq!(left.as_array().unwrap().len(), mock_logs - 1);
     assert_eq!(call("erase_vehicle_logs", json!({})).unwrap(), json!([]));
+
+    // Back up, change two values elsewhere, then restore just one of them.
+    call("backup_params", json!({ "note": "Before maiden flight" })).unwrap();
+    let backups = call("list_backups", json!({})).unwrap();
+    let manual = backups.as_array().unwrap().iter().find(|b| b["reason"] == "Before maiden flight").unwrap().clone();
+    assert!(backups.as_array().unwrap().iter().any(|b| b["reason"].as_str().unwrap().starts_with("Before writing")));
+    {
+        let mut st = mock.state();
+        st.params.get_mut("ATC_RAT_RLL_SMAX").unwrap().0 = 30.0;
+        st.params.get_mut("ATC_RAT_PIT_SMAX").unwrap().0 = 30.0;
+        st.params.get_mut("STAT_BOOTCNT").unwrap().0 = 13.0;
+    }
+    call("backup_params", json!({})).unwrap(); // re-reads the vehicle
+    let plan = call("prepare_changes", json!({ "source": "file", "path": manual["path"], "label": "restoring a backup" })).unwrap();
+    let names: Vec<&str> = plan["rows"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["ATC_RAT_PIT_SMAX", "ATC_RAT_RLL_SMAX"], "{plan}");
+    assert_eq!(plan["skipped"], json!(["STAT_BOOTCNT"]));
+    let result = call("apply_changes", json!({ "names": ["ATC_RAT_RLL_SMAX"] })).unwrap();
+    assert_eq!(result["results"].as_array().unwrap().len(), 1);
+    assert_eq!(mock.state().params["ATC_RAT_RLL_SMAX"].0, 0.0);
+    assert_eq!(mock.state().params["ATC_RAT_PIT_SMAX"].0, 30.0);
+    let newest = &call("list_backups", json!({})).unwrap()[0];
+    assert_eq!(newest["reason"], "Before restoring a backup");
+
+    call("delete_backup", json!({ "path": manual["path"] })).unwrap();
+    assert!(!Path::new(manual["path"].as_str().unwrap()).exists());
+    assert!(call("delete_backup", json!({ "path": path })).is_err(), "only backups can be deleted");
 
     call("reboot", json!({})).unwrap();
     assert_eq!(mock.state().reboots, 1);

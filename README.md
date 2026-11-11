@@ -28,9 +28,11 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
 
 - Desktop app (Tauri 2): open a log or download one from the vehicle, then
   readiness, crash diagnosis, noise, filters and PIDs with plots; every
-  recommendation can be written to the vehicle after a review of the changes,
-  with an automatic backup, verification and an optional reboot. `.param`
-  files (such as backups) can be written back the same way.
+  recommendation can be written to the vehicle after a review of the changes
+  (pick which ones), with an automatic backup, verification and an optional
+  reboot. Parameters screen: back up on demand with a note, list backups and
+  restore any of them (or another `.param` file) value by value; values the
+  firmware owns (statistics, sensor IDs) are left out of restores.
 - Command-line tool with the same analyses and vehicle commands.
 
 ## Layout

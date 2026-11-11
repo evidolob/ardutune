@@ -649,3 +649,12 @@ button.btn.destroy {
   color: #ffffff;
   font-weight: 600;
 }
+
+.modal .scroll {
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}

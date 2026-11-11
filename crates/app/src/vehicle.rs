@@ -1,7 +1,6 @@
 //! Vehicle commands: connect, read parameters, download logs and write
 //! parameter changes (backup, write, verify, reboot).
 
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ardutune_core::params;
@@ -10,7 +9,7 @@ use ardutune_link::{plan, ports, Link, Params};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::{blocking, data_dir, lock, AppState, CmdResult, Reporter};
+use crate::{backups, blocking, data_dir, lock, AppState, CmdResult, Reporter};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -24,6 +23,9 @@ pub struct Connected {
 /// again against the vehicle's parameters when written.
 pub struct Pending {
     wanted: Vec<(String, f64)>,
+    /// What is being done ("writing recommended filter settings"), for the
+    /// backup's reason line.
+    label: String,
 }
 
 #[derive(Serialize)]
@@ -37,6 +39,14 @@ pub struct VehicleInfo {
 }
 
 impl Connected {
+    pub fn params(&self) -> &Params {
+        &self.params
+    }
+
+    pub fn system_id(&self) -> u8 {
+        self.link.vehicle().system_id
+    }
+
     fn info(&self) -> VehicleInfo {
         let v = self.link.vehicle();
         VehicleInfo {
@@ -62,6 +72,27 @@ fn check<T>(slot: &mut Option<Connected>, r: ardutune_link::Result<T>) -> CmdRes
 
 fn connected(slot: &mut Option<Connected>) -> CmdResult<&mut Connected> {
     slot.as_mut().ok_or_else(|| "Not connected to a vehicle.".to_owned())
+}
+
+/// Reads all parameters again, e.g. before a backup, in case another ground
+/// station changed them.
+pub fn refresh_params(slot: &mut Option<Connected>, progress: &mut dyn FnMut(usize, usize)) -> CmdResult<VehicleInfo> {
+    let r = connected(slot)?.link.fetch_params(progress);
+    let params = check(slot, r)?;
+    let c = connected(slot)?;
+    c.params = params;
+    Ok(c.info())
+}
+
+/// Parameters the firmware owns: counters, versions and detected sensor IDs.
+/// Writing old values back from a backup would be wrong or ignored.
+fn vehicle_owned(name: &str) -> bool {
+    name.starts_with("STAT_")
+        || name.starts_with("SYSID_SW_")
+        || name == "FORMAT_VERSION"
+        || name.contains("DEV_ID")
+        || name.contains("DEVID")
+        || ((name.starts_with("INS_ACC") || name.starts_with("INS_GYR")) && name.ends_with("_ID"))
 }
 
 #[derive(Serialize)]
@@ -219,6 +250,8 @@ pub struct PlanView {
     rows: Vec<Row>,
     unchanged: Vec<String>,
     unknown: Vec<String>,
+    /// Left out of a file restore because the firmware owns them.
+    skipped: Vec<String>,
     armed: bool,
 }
 
@@ -227,12 +260,27 @@ pub struct PlanView {
 /// recommendations: `readiness`, `filters`, `filters_quieter`, `pid`,
 /// `pid_autotune`, or `file` (a .param file at `path`).
 #[tauri::command]
-pub async fn prepare_changes<R: Runtime>(app: AppHandle<R>, source: String, path: Option<String>) -> CmdResult<PlanView> {
+pub async fn prepare_changes<R: Runtime>(
+    app: AppHandle<R>,
+    source: String,
+    path: Option<String>,
+    label: Option<String>,
+) -> CmdResult<PlanView> {
     blocking(app, move |app| {
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
         let c = connected(&mut slot)?;
-        let wanted = wanted(app, &c.params, &source, path)?;
+        let mut wanted = wanted(app, &c.params, &source, path)?;
+        let mut skipped = Vec::new();
+        if source == "file" {
+            wanted.retain(|(n, ..)| {
+                let owned = vehicle_owned(n);
+                if owned && c.params.contains_key(n) {
+                    skipped.push(n.clone());
+                }
+                !owned
+            });
+        }
         let pairs: Vec<(String, f64)> = wanted.iter().map(|(n, v, _)| (n.clone(), *v)).collect();
         let p = plan(&c.params, &pairs);
         let rows = p
@@ -245,8 +293,9 @@ pub async fn prepare_changes<R: Runtime>(app: AppHandle<R>, source: String, path
                 reason: wanted.iter().find(|(n, ..)| *n == ch.name).and_then(|(.., r)| r.clone()),
             })
             .collect();
-        *lock(&state.pending) = Some(Pending { wanted: pairs });
-        Ok(PlanView { rows, unchanged: p.unchanged, unknown: p.unknown, armed: c.link.vehicle().armed })
+        let label = label.unwrap_or_else(|| format!("writing {source}"));
+        *lock(&state.pending) = Some(Pending { wanted: pairs, label });
+        Ok(PlanView { rows, unchanged: p.unchanged, unknown: p.unknown, skipped, armed: c.link.vehicle().armed })
     })
     .await
 }
@@ -298,19 +347,23 @@ pub struct ApplyView {
     results: Vec<WriteResult>,
 }
 
-/// Backs up all parameters, then writes and verifies the prepared changes.
+/// Backs up all parameters, then writes and verifies the prepared changes,
+/// or only those named in `names` (the ones the user kept ticked).
 #[tauri::command]
-pub async fn apply_changes<R: Runtime>(app: AppHandle<R>) -> CmdResult<ApplyView> {
-    blocking(app, |app| {
+pub async fn apply_changes<R: Runtime>(app: AppHandle<R>, names: Option<Vec<String>>) -> CmdResult<ApplyView> {
+    blocking(app, move |app| {
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
         let pending = lock(&state.pending).take().ok_or("Nothing to write.")?;
         let c = connected(&mut slot)?;
-        let changes = plan(&c.params, &pending.wanted).changes;
+        let mut changes = plan(&c.params, &pending.wanted).changes;
+        if let Some(names) = &names {
+            changes.retain(|ch| names.contains(&ch.name));
+        }
         if changes.is_empty() {
             return Ok(ApplyView { backup: None, results: vec![] });
         }
-        let backup = save_backup(app, c)?;
+        let backup = backups::save(app, c.system_id(), &c.params, &format!("Before {}", pending.label))?;
 
         let mut progress = Reporter::new(app, "Writing parameters");
         let mut written = 0;
@@ -335,20 +388,6 @@ pub async fn apply_changes<R: Runtime>(app: AppHandle<R>) -> CmdResult<ApplyView
         Ok(ApplyView { backup: Some(backup.display().to_string()), results })
     })
     .await
-}
-
-/// Saves every parameter so a change can be undone by writing the file back.
-fn save_backup<R: Runtime>(app: &AppHandle<R>, c: &Connected) -> CmdResult<PathBuf> {
-    let now = now();
-    let sys = c.link.vehicle().system_id;
-    let path = data_dir(app, "backups")?.join(format!("backup-sys{sys}-{}.param", file_stamp(now)));
-    let header = format!(
-        "ArduTune parameter backup, {} UTC, system {sys}.\nRestore by writing this file to the vehicle.",
-        date_time(now)
-    );
-    let text = params::write(&header, c.params.iter().map(|(n, p)| (n.as_str(), p.value)));
-    std::fs::write(&path, text).map_err(|e| format!("writing {}: {e}", path.display()))?;
-    Ok(path)
 }
 
 /// Reboots the flight controller; the connection is closed.
