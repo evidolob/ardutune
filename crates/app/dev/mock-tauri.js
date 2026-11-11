@@ -30,6 +30,12 @@
     }
   };
 
+  const tuneChanges = [
+    { name: "INS_GYRO_FILTER", current: 20, value: 75, reason: 'Gyro low-pass for 5" props: larger props are slower and noisier at lower frequencies' },
+    { name: "ATC_RAT_RLL_FLTD", current: 20, value: 37.5, reason: "D-term filter at half the gyro filter" },
+    { name: "ATC_ACC_R_MAX", current: 1100, value: 1686, reason: 'Acceleration limit for 5" props (1686 deg/s²); AutoTune refines it' },
+    { name: "ACRO_Y_RATE", current: 202.5, value: 157.5, reason: "Acro yaw rate to match the yaw acceleration limit" },
+  ];
   const commands = {
     pick_file: async () => "/Users/pilot/logs/flight.bin",
     open_log: () => fixture("overview"),
@@ -71,6 +77,7 @@
         const step = (await fixture("setup")).steps.find((x) => x.id === source.slice(6));
         return { rows: step.changes.map((c) => ({ ...c, current: c.current ?? 0 })), unchanged: [], unknown: [], skipped: [], armed: false };
       }
+      if (source === "initial_tune") return { rows: tuneChanges, unchanged: [], unknown: [], skipped: [], armed: false };
       if (source === "file")
         return {
           rows: [
@@ -143,6 +150,23 @@
     param_table: async () => {
       await sleep(400);
       return fixture("params");
+    },
+    vehicle_pack: async () => ({ cells: 8, chemistry: "li_ion", from_vehicle: true }),
+    initial_tune: async ({ tune }) => {
+      await sleep(200);
+      return {
+        prop_in: tune.prop_in,
+        cells: tune.cells,
+        chemistry: tune.chemistry,
+        pack_from_vehicle: true,
+        looks_tuned: true,
+        changes: tuneChanges,
+        after: [
+          "Make a first short hover in AltHold and check the vibration and noise with ArduTune's analysis before going further.",
+          "Once MOT_THST_HOVER has learned the hover throttle, set PSC_ACCZ_P to MOT_THST_HOVER and PSC_ACCZ_I to 2 × MOT_THST_HOVER.",
+          "Set ATC_THR_MIX_MAN to 0.5, then tune the filters from a hover log and run AutoTune.",
+        ],
+      };
     },
     setup_guide: async () => {
       await sleep(800);

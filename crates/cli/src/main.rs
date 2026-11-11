@@ -124,6 +124,24 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Starting values for a new build from its prop size and battery, as
+    /// ArduPilot's initial tune parameters calculator gives them
+    Tune {
+        /// Prop diameter in inches
+        #[arg(long, value_name = "INCHES")]
+        prop: f64,
+        /// Battery cell count (default: from MOT_BAT_VOLT_MAX)
+        #[arg(long)]
+        cells: Option<u32>,
+        /// Battery type (default: from MOT_BAT_VOLT_MAX/MIN)
+        #[arg(long, value_enum)]
+        battery: Option<Battery>,
+        /// Write the values to the vehicle
+        #[arg(long)]
+        apply: bool,
+        #[command(flatten)]
+        apply_opts: ApplyArgs,
+    },
     /// Show the vehicle's firmware, check for newer releases, or flash firmware
     Firmware {
         /// Check firmware.ardupilot.org for newer releases for this board (needs internet)
@@ -215,6 +233,23 @@ struct ApplyArgs {
 impl From<&ApplyArgs> for ApplyOptions {
     fn from(a: &ApplyArgs) -> Self {
         Self { yes: a.yes, reboot: a.reboot }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Battery {
+    Lipo,
+    LipoHv,
+    Liion,
+}
+
+impl From<Battery> for ardutune_core::setup::Chemistry {
+    fn from(b: Battery) -> Self {
+        match b {
+            Battery::Lipo => Self::LiPo,
+            Battery::LipoHv => Self::LiPoHv,
+            Battery::Liion => Self::LiIon,
+        }
     }
 }
 
@@ -366,6 +401,32 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&guide)?);
             } else {
                 print_setup(&guide);
+            }
+        }
+        Cmd::Tune { prop, cells, battery, apply, apply_opts } => {
+            let mut link = vehicle::connect(&cli.conn)?;
+            let params = vehicle::fetch_params(&mut link)?;
+            let t = ardutune_core::tune::initial_tune(|n| params.get(n).map(|p| p.value as f64), prop, cells, battery.map(Into::into))
+                .map_err(anyhow::Error::msg)?;
+            println!("Starting values for {}\" props, {}S {}:", format_value(t.prop_in), t.cells, t.chemistry.name());
+            if t.looks_tuned {
+                println!("Note: the roll or pitch rate gains differ from the defaults, so this vehicle looks tuned; these values would replace settings a tune may have chosen.");
+            }
+            let wanted: Vec<vehicle::Wanted> =
+                t.changes.iter().map(|c| vehicle::Wanted { name: c.name.clone(), value: c.value, reason: Some(c.reason.clone()) }).collect();
+            if apply {
+                vehicle::apply(&mut link, &params, &wanted, &(&apply_opts).into())?;
+            } else if wanted.is_empty() {
+                println!("  The vehicle already has these values.");
+            } else {
+                for c in &t.changes {
+                    println!("  {:<18} {} -> {}  {}", c.name, c.current.map(format_value).unwrap_or_default(), format_value(c.value), c.reason);
+                }
+                println!("Write them with --apply.");
+            }
+            println!("After the first hover:");
+            for a in &t.after {
+                println!("  - {a}");
             }
         }
         Cmd::Firmware { check, flash, install } => firmware(&cli.conn, check, flash.as_deref(), install.as_deref())?,

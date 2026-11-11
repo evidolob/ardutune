@@ -119,6 +119,8 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         vehicle::reboot,
         vehicle::arming_check,
         vehicle::setup_guide,
+        vehicle::vehicle_pack,
+        vehicle::initial_tune,
         vehicle::param_table,
         firmware::firmware_info,
         firmware::firmware_releases,

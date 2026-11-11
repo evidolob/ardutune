@@ -14,6 +14,7 @@ pub mod readiness;
 pub mod setup;
 pub mod stats;
 pub mod synth;
+pub mod tune;
 pub mod utc;
 
 pub use log::{FlightSource, Firmware, Interval, Log, Table, Vehicle};

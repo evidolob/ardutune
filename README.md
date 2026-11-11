@@ -42,6 +42,10 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   battery monitor, sensors and calibration, logging for tuning), each with
   plain findings and safe fixes written through the review/backup/verify
   flow. `ardutune setup` on the command line.
+- Initial tune: starting filter, acceleration-limit, thrust-curve and battery
+  values for a new build from its prop size and pack (the formulas of
+  ArduPilot's initial tune parameters calculator, with ArduCopter 4.7 names),
+  plus what to set after the first hover. `ardutune tune --prop 5 [--apply]`.
 - Pre-arm check: asks the vehicle to run its pre-arm checks, collects what it
   says (also while you try to arm), and explains each problem in fix order
   with advice: compass, attitude, radio, logging, GPS (live fix, satellites,

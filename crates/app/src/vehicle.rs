@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, paramdoc, params, setup};
+use ardutune_core::{arming, paramdoc, params, setup, tune};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, Link, Params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{backups, blocking, data_dir, lock, AppState, CmdResult, Reporter};
@@ -280,6 +280,7 @@ pub async fn prepare_changes<R: Runtime>(
     path: Option<String>,
     label: Option<String>,
     values: Option<Vec<(String, f64)>>,
+    tune: Option<TuneInput>,
 ) -> CmdResult<PlanView> {
     blocking(app, move |app| {
         let state = app.state::<AppState>();
@@ -294,6 +295,10 @@ pub async fn prepare_changes<R: Runtime>(
                     (n, v, (!warnings.is_empty()).then(|| warnings.join("; ")))
                 })
                 .collect(),
+            _ if source == "initial_tune" => {
+                let t = tune.ok_or("No prop size given.")?;
+                initial(&c.params, &t)?.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect()
+            }
             _ => wanted(app, &c.params, &source, path)?,
         };
         let mut skipped = Vec::new();
@@ -367,6 +372,50 @@ fn setup_changes(live: &Params, step: &str) -> CmdResult<Vec<Wanted>> {
     let guide = setup::assess(|n| live.get(n).map(|p| p.value as f64), &setup::Live::default());
     let step = guide.steps.into_iter().find(|s| s.id == step).ok_or(format!("unknown setup step {step}"))?;
     Ok(step.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect())
+}
+
+/// Prop size and battery for the initial tune; cells and chemistry default
+/// to the vehicle's MOT_BAT_VOLT_MAX/MIN.
+#[derive(Deserialize)]
+pub struct TuneInput {
+    prop_in: f64,
+    cells: Option<u32>,
+    chemistry: Option<setup::Chemistry>,
+}
+
+fn initial(live: &Params, t: &TuneInput) -> CmdResult<tune::InitialTune> {
+    tune::initial_tune(|n| live.get(n).map(|p| p.value as f64), t.prop_in, t.cells, t.chemistry)
+}
+
+#[derive(Serialize)]
+pub struct PackView {
+    cells: u32,
+    chemistry: setup::Chemistry,
+    from_vehicle: bool,
+}
+
+/// The battery the initial tune starts from, read from the vehicle.
+#[tauri::command]
+pub async fn vehicle_pack<R: Runtime>(app: AppHandle<R>) -> CmdResult<PackView> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let c = connected(&mut slot)?;
+        let (cells, chemistry, from_vehicle) = tune::vehicle_pack(|n| c.params.get(n).map(|p| p.value as f64));
+        Ok(PackView { cells, chemistry, from_vehicle })
+    })
+    .await
+}
+
+/// Starting filter, acceleration and thrust values for a new build.
+#[tauri::command]
+pub async fn initial_tune<R: Runtime>(app: AppHandle<R>, tune: TuneInput) -> CmdResult<tune::InitialTune> {
+    blocking(app, move |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        initial(&connected(&mut slot)?.params, &tune)
+    })
+    .await
 }
 
 #[derive(Serialize)]

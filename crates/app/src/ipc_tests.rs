@@ -80,6 +80,17 @@ fn analyse_connect_download_write_and_reboot() {
     let plan = call("prepare_changes", json!({ "source": "setup:logging", "label": "writing logging for tuning" })).unwrap();
     assert!(!plan["rows"].as_array().unwrap().is_empty());
 
+    // Initial tune from prop size: calculated, then planned like any write.
+    let pack = call("vehicle_pack", json!({})).unwrap();
+    assert!(pack["cells"].as_u64().unwrap() >= 1, "{pack}");
+    let tune = json!({ "prop_in": 9.0, "cells": 4, "chemistry": "li_po" });
+    let result = call("initial_tune", json!({ "tune": tune })).unwrap();
+    let gyro = result["changes"].as_array().unwrap().iter().find(|c| c["name"] == "INS_GYRO_FILTER").map(|c| c["value"].clone());
+    assert!(gyro.is_none() || gyro == Some(json!(46.0)), "{result}");
+    let plan = call("prepare_changes", json!({ "source": "initial_tune", "label": "writing initial tune", "tune": tune })).unwrap();
+    assert_eq!(plan["rows"].as_array().unwrap().len(), result["changes"].as_array().unwrap().len());
+    assert!(call("initial_tune", json!({ "tune": { "prop_in": 0.0 } })).unwrap_err().contains("Prop size"));
+
     // The full parameter list: values, defaults, docs; edits are planned
     // with warnings for suspicious values, then written like anything else.
     let table = call("param_table", json!({})).unwrap();

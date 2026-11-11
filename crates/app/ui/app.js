@@ -14,6 +14,7 @@ const LOG_VIEWS = [
 const VEHICLE_VIEWS = [
   ["connection", "Connection"],
   ["setup", "Setup guide"],
+  ["tune", "Initial tune"],
   ["prearm", "Pre-arm check"],
   ["allparams", "Parameters"],
   ["params", "Backups"],
@@ -36,6 +37,7 @@ const state = {
   backups: null, // parameter backups on this computer
   arming: null, // latest pre-arm check report
   setup: null, // latest setup guide
+  tune: { prop: "", cells: null, chemistry: null, pack: null, result: null }, // initial tune inputs and result
   ptable: null, // full parameter list from the vehicle
   pfilter: { text: "", changed: false, standard: false, group: "" },
   popen: null, // parameter whose editor is open
@@ -106,6 +108,7 @@ function go(view) {
   if (view === "params") refreshBackups();
   if (view === "prearm" && state.vehicle && !state.arming && !state.vehicleBusy) armingCheck();
   if (view === "setup" && state.vehicle && !state.setup && !state.vehicleBusy) setupGuide();
+  if (view === "tune" && state.vehicle && !state.tune.pack && !state.vehicleBusy) loadPack();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
   if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
 }
@@ -122,7 +125,7 @@ async function connect() {
   set({ connecting: true });
   try {
     const vehicle = await invoke("connect", { address: state.address });
-    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, ptable: null, staged: {}, popen: null, fw: null, releases: null });
+    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, tune: { ...state.tune, pack: null, result: null, cells: null, chemistry: null }, ptable: null, staged: {}, popen: null, fw: null, releases: null });
     toast(`Connected: ${vehicle.kind}, ${vehicle.params} parameters read.`, "info");
   } catch (e) {
     set({ connecting: false });
@@ -208,6 +211,26 @@ async function armingCheck() {
 async function setupGuide() {
   const guide = await vehicleTask("Checking the setup…", () => invoke("setup_guide"));
   if (guide) set({ setup: guide });
+}
+
+async function loadPack() {
+  try {
+    const pack = await invoke("vehicle_pack");
+    set({ tune: { ...state.tune, pack, cells: state.tune.cells ?? pack.cells, chemistry: state.tune.chemistry ?? pack.chemistry } });
+  } catch (e) {
+    toast(e);
+  }
+}
+
+function tuneInput() {
+  const t = state.tune;
+  return { prop_in: Number(t.prop.replace(",", ".")), cells: t.cells, chemistry: t.chemistry };
+}
+
+async function calculateTune() {
+  if (!state.tune.prop.trim()) return toast("Enter the prop size in inches.");
+  const result = await vehicleTask("Calculating…", () => invoke("initial_tune", { tune: tuneInput() }));
+  if (result) set({ tune: { ...state.tune, result } });
 }
 
 async function loadParams() {
@@ -305,7 +328,7 @@ async function writeEdits() {
 }
 
 /** Shows what writing a set of recommendations would change, then writes on confirmation. */
-async function writeChanges(source, title, path = null) {
+async function writeChanges(source, title, path = null, extra = {}) {
   if (!state.vehicle) {
     set({ modal: { stage: "connect", title: `Write ${title}` } });
     return;
@@ -313,7 +336,7 @@ async function writeChanges(source, title, path = null) {
   set({ modal: { stage: "planning", title, source } });
   try {
     const verb = source === "file" ? "restoring" : "writing";
-    const plan = await invoke("prepare_changes", { source, path, label: `${verb} ${title}` });
+    const plan = await invoke("prepare_changes", { source, path, label: `${verb} ${title}`, ...extra });
     set({ modal: { stage: "confirm", title, source, plan, selected: new Set(plan.rows.map((r) => r.name)) } });
   } catch (e) {
     set({ modal: null });
@@ -331,6 +354,7 @@ async function confirmWrite(backup) {
     set({ modal: { ...m, stage: "done", result }, backups: null, setup: state.view === "setup" ? state.setup : null, staged });
     if (state.view === "allparams") loadParams();
     if (state.view === "setup") setupGuide();
+    if (state.view === "tune") set({ tune: { ...state.tune, result: null } });
     if (state.view === "params") refreshBackups();
   } catch (e) {
     set({ modal: { ...m, stage: "confirm" } });
@@ -414,6 +438,8 @@ const actions = {
   confirmDeleteBackup,
   armingCheck,
   setupGuide,
+  calculateTune,
+  writeTune: () => writeChanges("initial_tune", `initial tune for ${state.tune.result.prop_in}" props`, null, { tune: tuneInput() }),
   loadParams,
   loadFirmware,
   checkReleases,
@@ -460,6 +486,8 @@ document.addEventListener("change", (e) => {
   const t = e.target;
   if (t.id === "fwbackup" && state.modal) state.modal.backup = t.checked;
   if (t.name === "port") set({ address: t.value });
+  if (t.id === "tcells") set({ tune: { ...state.tune, cells: Number(t.value), result: null } });
+  if (t.id === "tchem") set({ tune: { ...state.tune, chemistry: t.value, result: null } });
   const m = state.modal;
   if (m?.selected && t.dataset.name) {
     t.checked ? m.selected.add(t.dataset.name) : m.selected.delete(t.dataset.name);
@@ -473,6 +501,7 @@ document.addEventListener("change", (e) => {
 
 document.addEventListener("input", (e) => {
   if (e.target.id === "address") state.address = e.target.value;
+  if (e.target.id === "tprop") set({ tune: { ...state.tune, prop: e.target.value, result: null } });
   if (e.target.id === "psearch") set({ pfilter: { ...state.pfilter, text: e.target.value }, popen: null });
 });
 
@@ -483,6 +512,7 @@ document.addEventListener("change", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id === "tprop") calculateTune();
   if (e.key === "Enter" && e.target.id === "pval" && state.popen) stageParam(state.popen, editorValue());
 });
 
@@ -1067,6 +1097,50 @@ function setupView() {
     ${again}`;
 }
 
+const CHEMISTRIES = [
+  ["li_po", "LiPo (4.2 V full)"],
+  ["li_po_hv", "LiPo HV (4.35 V full)"],
+  ["li_ion", "Li-ion (4.1 V full)"],
+];
+const CHEM_NAMES = { li_po: "LiPo", li_po_hv: "LiPo HV", li_ion: "Li-ion" };
+
+function tuneView() {
+  const head = `<h1>Initial tune</h1><p class="lead">Starting values for a new build from its prop size and battery: gyro and rate filters, acceleration limits, thrust curve and battery range. They are the values ArduPilot's initial tune parameters calculator gives, so the first hover and AutoTune start from somewhere sensible.</p>`;
+  if (!state.vehicle) return head + notConnected("calculate its starting values");
+  const t = state.tune;
+  if (!t.pack) return head + busy("Reading the battery settings…");
+  const r = t.result;
+  const cellOptions = Array.from({ length: 14 }, (_, i) => i + 1)
+    .map((n) => `<option value="${n}" ${n === t.cells ? "selected" : ""}>${n}S</option>`)
+    .join("");
+  const chemOptions = CHEMISTRIES.map(([v, label]) => `<option value="${v}" ${v === t.chemistry ? "selected" : ""}>${label}</option>`).join("");
+  const form = `<div class="card">
+    <h2>Your build</h2>
+    <div class="form">
+      <label>Prop size <span><input type="text" id="tprop" value="${esc(t.prop)}" placeholder="5" inputmode="decimal" spellcheck="false" style="width:6em"> inches</span></label>
+      <label>Battery <span><select id="tcells">${cellOptions}</select> <select id="tchem">${chemOptions}</select></span></label>
+    </div>
+    <p class="muted">${t.pack.from_vehicle ? `The battery is read from MOT_BAT_VOLT_MAX/MIN (${t.pack.cells}S ${esc(CHEM_NAMES[t.pack.chemistry])}). Change it if that's not the pack you fly.` : "MOT_BAT_VOLT_MAX/MIN aren't set for a pack yet: choose the cell count and type of the battery you fly."}</p>
+    <div class="actions"><button class="btn primary" data-action="calculateTune" ${state.vehicleBusy ? "disabled" : ""}>Calculate</button></div>
+  </div>`;
+  if (!r) return head + form + (state.vehicleBusy ? busy(state.vehicleBusy) : "");
+  const tuned = r.looks_tuned
+    ? `<div class="banner warn"><b>This vehicle looks tuned:</b> its roll or pitch rate gains differ from the defaults. These are starting values for a new build; writing them replaces filter and acceleration settings a tune may have chosen. Untick anything you want to keep.</div>`
+    : "";
+  return `${head}${form}
+    <div class="card">
+      <h2>Starting values for ${esc(fmt(r.prop_in))}" props, ${r.cells}S ${esc(CHEM_NAMES[r.chemistry])}</h2>
+      ${tuned}
+      ${
+        r.changes.length
+          ? `${changesTable(r.changes, true)}
+            <div class="actions"><button class="btn primary" data-action="writeTune" ${state.vehicleBusy ? "disabled" : ""}>Write to vehicle…</button></div>`
+          : `<div class="banner pass">The vehicle already has these values.</div>`
+      }
+    </div>
+    <div class="card"><h2>After the first hover</h2>${list(r.after)}</div>`;
+}
+
 function prearmView() {
   const head = `<h1>Pre-arm check</h1><p class="lead">Why won't it arm? ArduTune asks the flight controller to run its pre-arm checks, listens to what it says and explains each problem. Start a check and try to arm while it listens to catch the reason it refuses.</p>`;
   if (!state.vehicle) return head + notConnected("check why it won't arm");
@@ -1310,6 +1384,8 @@ function content() {
       return prearmView();
     case "setup":
       return setupView();
+    case "tune":
+      return tuneView();
     case "firmware":
       return firmwareView();
     case "allparams":

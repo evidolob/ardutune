@@ -47,7 +47,7 @@ pub struct Item {
     pub detail: String,
 }
 
-type Param<'a> = &'a dyn Fn(&str) -> Option<f64>;
+pub(crate) type Param<'a> = &'a dyn Fn(&str) -> Option<f64>;
 
 const SENSOR_RC: u32 = 1 << 16;
 const SENSOR_LOGGING: u32 = 1 << 24;
@@ -104,7 +104,7 @@ fn rank(s: Status) -> u8 {
     }
 }
 
-fn change(p: Param, name: &str, value: f64, reason: impl Into<String>) -> Option<ParamChange> {
+pub(crate) fn change(p: Param, name: &str, value: f64, reason: impl Into<String>) -> Option<ParamChange> {
     let current = p(name)?;
     (current != value).then(|| ParamChange { name: name.to_owned(), current: Some(current), value, reason: reason.into() })
 }
@@ -448,16 +448,19 @@ fn failsafes(p: Param) -> Step {
 
 /// Battery chemistry, from the per-cell voltages in MOT_BAT_VOLT_MAX/MIN
 /// (as ArduPilot's initial tune setup sets them).
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Chemistry {
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Chemistry {
     LiPo,
+    LiPoHv,
     LiIon,
 }
 
 impl Chemistry {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Chemistry::LiPo => "LiPo",
+            Chemistry::LiPoHv => "LiPo HV",
             Chemistry::LiIon => "Li-ion",
         }
     }
@@ -465,19 +468,36 @@ impl Chemistry {
     /// Low and critical failsafe voltages per cell, under load.
     fn thresholds(self) -> (f64, f64) {
         match self {
-            Chemistry::LiPo => (3.5, 3.3),
+            Chemistry::LiPo | Chemistry::LiPoHv => (3.5, 3.3),
             Chemistry::LiIon => (3.1, 2.8),
+        }
+    }
+
+    /// Full and empty voltage per cell, as ArduPilot's initial tune
+    /// calculator uses them for MOT_BAT_VOLT_MAX/MIN.
+    pub fn cell_range(self) -> (f64, f64) {
+        match self {
+            Chemistry::LiPo => (4.2, 3.3),
+            Chemistry::LiPoHv => (4.35, 3.3),
+            Chemistry::LiIon => (4.1, 2.8),
         }
     }
 }
 
 /// Cell count and chemistry from MOT_BAT_VOLT_MAX (4.05-4.45 V per full
-/// cell) and MOT_BAT_VOLT_MIN (below 3.0 V per cell means Li-ion).
-fn pack(p: Param) -> Option<(u32, Chemistry)> {
+/// cell; 4.3 V or more is high-voltage LiPo) and MOT_BAT_VOLT_MIN (below
+/// 3.0 V per cell means Li-ion).
+pub(crate) fn pack(p: Param) -> Option<(u32, Chemistry)> {
     let max = p("MOT_BAT_VOLT_MAX").filter(|v| *v > 0.0)?;
     let cells = (1..=14).find(|n| (4.05..=4.45).contains(&(max / f64::from(*n))))?;
     let min_cell = p("MOT_BAT_VOLT_MIN").filter(|v| *v > 0.0).map(|v| v / f64::from(cells));
-    let chem = if min_cell.is_some_and(|v| v < 3.0) { Chemistry::LiIon } else { Chemistry::LiPo };
+    let chem = if min_cell.is_some_and(|v| v < 3.0) {
+        Chemistry::LiIon
+    } else if max / f64::from(cells) >= 4.3 {
+        Chemistry::LiPoHv
+    } else {
+        Chemistry::LiPo
+    };
     Some((cells, chem))
 }
 
