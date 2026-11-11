@@ -10,6 +10,7 @@ pub mod params;
 pub mod pid;
 pub mod plot;
 pub mod readiness;
+pub mod setup;
 pub mod stats;
 pub mod synth;
 pub mod utc;

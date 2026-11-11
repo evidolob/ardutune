@@ -92,14 +92,14 @@ impl Report {
 pub use crate::params::format_value;
 
 // LOG_BITMASK bits (Copter 4.x).
-const BIT_ATTITUDE_FAST: u32 = 0;
+pub(crate) const BIT_ATTITUDE_FAST: u32 = 0;
 const BIT_ATTITUDE_MED: u32 = 1;
 const BIT_CTUN: u32 = 4;
 const BIT_IMU: u32 = 7;
 const BIT_RCOUT: u32 = 10;
-const BIT_PID: u32 = 12;
-const BIT_IMU_RAW: u32 = 19;
-const REQUIRED_LOG_BITS: [(u32, &str); 6] = [
+pub(crate) const BIT_PID: u32 = 12;
+pub(crate) const BIT_IMU_RAW: u32 = 19;
+pub(crate) const REQUIRED_LOG_BITS: [(u32, &str); 6] = [
     (BIT_ATTITUDE_FAST, "ATTITUDE_FAST"),
     (BIT_ATTITUDE_MED, "ATTITUDE_MED"),
     (BIT_CTUN, "CTUN"),
@@ -110,11 +110,11 @@ const REQUIRED_LOG_BITS: [(u32, &str); 6] = [
 
 /// INS_RAW_LOG_OPT: primary gyro only (bit 0) + pre and post filter (bit 3).
 const RAW_LOG_OPT_RECOMMENDED: f64 = 9.0;
-const RAW_LOG_OPT_PRE_POST_BIT: u32 = 3;
+pub(crate) const RAW_LOG_OPT_PRE_POST_BIT: u32 = 3;
 /// INS_LOG_BAT_OPT value for pre- and post-filter batch sampling.
 /// INS_LOG_BAT_OPT bits: sensor-rate sampling, post-filter only, pre and post filter.
-const BAT_OPT_POST_ONLY_BIT: u32 = 1;
-const BAT_OPT_PRE_POST_BIT: u32 = 2;
+pub(crate) const BAT_OPT_POST_ONLY_BIT: u32 = 1;
+pub(crate) const BAT_OPT_PRE_POST_BIT: u32 = 2;
 
 const MIN_ARMED_S: f64 = 30.0;
 const VIBE_OK: f64 = 30.0;
@@ -228,7 +228,7 @@ pub fn assess(log: &Log) -> Report {
     }
 }
 
-fn check(id: &'static str, area: Area, status: Status, title: impl Into<String>, detail: impl Into<String>) -> Check {
+pub(crate) fn check(id: &'static str, area: Area, status: Status, title: impl Into<String>, detail: impl Into<String>) -> Check {
     Check { id, area, status, title: title.into(), detail: detail.into() }
 }
 
@@ -601,8 +601,12 @@ fn check_rpm_source(ctx: &Ctx) -> Check {
 }
 
 fn check_notch_config(log: &Log) -> Check {
+    notch_config(&|n| log.param(n))
+}
+
+/// The harmonic notch and gyro low-pass settings, described.
+pub(crate) fn notch_config(p: &dyn Fn(&str) -> Option<f64>) -> Check {
     let id = "filters.notch_config";
-    let p = |n: &str| log.param(n);
     let describe = |prefix: &str| -> Option<String> {
         if p(&format!("{prefix}_ENABLE"))? == 0.0 {
             return None;
@@ -695,7 +699,7 @@ fn check_excitation(ctx: &Ctx) -> Vec<Check> {
         .collect()
 }
 
-fn recommend_params(param: &dyn Fn(&str) -> Option<f64>, gyro_complete: bool) -> Vec<ParamChange> {
+pub(crate) fn recommend_params(param: &dyn Fn(&str) -> Option<f64>, gyro_complete: bool) -> Vec<ParamChange> {
     let mut out = Vec::new();
     let mut set = |name: &str, value: f64, reason: String| {
         let current = param(name);

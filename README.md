@@ -22,6 +22,11 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   slew limiter, I offset, saturation), cautious bounded gain suggestions, and
   gains from a finished AutoTune that weren't saved; optional SVG plot and
   direct apply.
+- Setup guide (start of the configuration guide): the live vehicle checked
+  step by step (frame and motors, ESC telemetry and RPM, radio, failsafes,
+  battery monitor, sensors and calibration, logging for tuning), each with
+  plain findings and safe fixes written through the review/backup/verify
+  flow. `ardutune setup` on the command line.
 - Pre-arm check: asks the vehicle to run its pre-arm checks, collects what it
   says (also while you try to arm), and explains each problem in fix order
   with advice: compass, attitude, radio, logging, GPS (live fix, satellites,

@@ -215,19 +215,23 @@ struct Context {
 }
 
 /// Notch centre frequencies (before harmonics) for the conditions in `ctx`,
-/// following how ArduPilot feeds each mode.
+/// following how ArduPilot feeds each mode (AP_Vehicle::update_dynamic_notch):
+/// REF = 0 turns tracking off, RPM and ESC frequencies are scaled by REF,
+/// per-motor (multi-source) notches are not.
 fn base_centers(n: &NotchSettings, ctx: &Context) -> Vec<f64> {
+    if n.mode == MODE_FIXED || n.reference <= 0.0 {
+        return vec![n.freq_hz];
+    }
     let floor = n.freq_hz * n.min_ratio.max(0.0);
     let average = stats::mean(&ctx.motors_hz);
     let centers = match n.mode {
-        MODE_FIXED => return vec![n.freq_hz],
         MODE_THROTTLE => vec![match ctx.throttle {
-            Some(t) if n.reference > 0.0 => n.freq_hz * (t.max(0.0) / n.reference).sqrt(),
-            _ => n.freq_hz,
+            Some(t) => n.freq_hz * (t.max(0.0) / n.reference).sqrt(),
+            None => n.freq_hz,
         }],
-        MODE_RPM | MODE_RPM2 => vec![ctx.rpm_sensor_hz.or(average).unwrap_or(n.freq_hz)],
+        MODE_RPM | MODE_RPM2 => vec![ctx.rpm_sensor_hz.or(average).map_or(n.freq_hz, |f| f * n.reference)],
         MODE_ESC if n.options & OPT_PER_MOTOR != 0 && !ctx.motors_hz.is_empty() => ctx.motors_hz.clone(),
-        _ => vec![average.unwrap_or(n.freq_hz)],
+        _ => vec![average.map_or(n.freq_hz, |f| f * n.reference)],
     };
     centers.into_iter().map(|c| c.max(floor)).collect()
 }
@@ -494,7 +498,7 @@ fn search(prep: &Prepared, current: &FilterSettings, motors_known: bool, lag_ref
                 harmonics: 0b11,
                 options: OPT_PER_MOTOR | OPT_LOOP_RATE,
                 min_ratio: 1.0,
-                reference: 0.0,
+                reference: 1.0,
             })
         }
         None => {
@@ -506,6 +510,16 @@ fn search(prep: &Prepared, current: &FilterSettings, motors_known: bool, lag_ref
             None
         }
     };
+    for n in &current.notches {
+        if n.mode != MODE_FIXED && n.reference <= 0.0 {
+            notes.push(format!(
+                "{}_REF is 0, so the notch doesn't track: it stays at {} Hz. Tracking modes need REF = 1 (RPM, ESC \
+                 telemetry) or the hover throttle (throttle mode); the suggested settings include it.",
+                n.prefix,
+                format_value(n.freq_hz)
+            ));
+        }
+    }
     let rest: Vec<NotchSettings> = current.notches.iter().skip(1).cloned().collect();
     let mut notch_sets: Vec<Vec<NotchSettings>> = vec![current.notches.clone()];
     if let Some(base) = base {
@@ -521,7 +535,8 @@ fn search(prep: &Prepared, current: &FilterSettings, motors_known: bool, lag_ref
         for (mode, options) in modes {
             for harmonics in (1u32..16).filter(|h| h & 1 == 1) {
                 for &bw in &bandwidths {
-                    let mut set = vec![NotchSettings { mode, options, harmonics, bandwidth_hz: bw, ..base.clone() }];
+                    let reference = tracking_reference(mode, base.reference);
+                    let mut set = vec![NotchSettings { mode, options, harmonics, bandwidth_hz: bw, reference, ..base.clone() }];
                     set.extend(rest.iter().cloned());
                     notch_sets.push(set);
                 }
@@ -542,6 +557,15 @@ fn search(prep: &Prepared, current: &FilterSettings, motors_known: bool, lag_ref
         }
     }
     out
+}
+
+/// REF for a candidate notch: RPM and ESC modes only track with a positive
+/// REF, and 1 uses the measured frequency as it is. Other modes keep theirs.
+fn tracking_reference(mode: u32, current: f64) -> f64 {
+    match mode {
+        MODE_RPM | MODE_RPM2 | MODE_ESC if current <= 0.0 => 1.0,
+        _ => current,
+    }
 }
 
 /// Settings no other beats on both noise and delay, by increasing delay.
@@ -606,14 +630,17 @@ mod tests {
             harmonics: 0b11,
             options: OPT_PER_MOTOR,
             min_ratio: 1.0,
-            reference: 0.0,
+            reference: 1.0,
         };
         let ctx = Context { motors_hz: vec![50.0, 60.0, 35.0], ..Default::default() };
         // 35 Hz is floored at FREQ × FM_RAT = 40.
         assert_eq!(base_centers(&n, &ctx), vec![50.0, 60.0, 40.0]);
         assert_eq!(notch_filters(&n, &ctx, FS).len(), 6);
-        let avg = NotchSettings { options: 0, ..n };
+        let avg = NotchSettings { options: 0, ..n.clone() };
         assert_eq!(base_centers(&avg, &ctx), vec![48.333333333333336]);
+        // REF scales the average; REF = 0 turns tracking off altogether.
+        assert_eq!(base_centers(&NotchSettings { reference: 2.0, ..avg.clone() }, &ctx), vec![96.66666666666667]);
+        assert_eq!(base_centers(&NotchSettings { reference: 0.0, ..n }, &ctx), vec![40.0]);
     }
 
     #[test]

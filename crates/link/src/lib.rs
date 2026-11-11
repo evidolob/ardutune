@@ -611,6 +611,8 @@ pub struct ArmingStatus {
     pub armed: bool,
     /// Latest RC input in µs, channels 1-8 (0 when not received).
     pub rc: Option<[u16; 8]>,
+    /// Battery voltage from SYS_STATUS.
+    pub battery_v: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -642,6 +644,11 @@ impl ArmingStatus {
             armed: self.armed,
             rc: self.rc,
         }
+    }
+
+    /// The live state the setup guide uses.
+    pub fn setup_live(&self) -> ardutune_core::setup::Live {
+        ardutune_core::setup::Live { sensors: self.sensors, battery_v: self.battery_v, messages: self.messages.clone() }
     }
 }
 
@@ -689,6 +696,7 @@ impl Link {
                         s.onboard_control_sensors_enabled.bits(),
                         s.onboard_control_sensors_health.bits(),
                     ));
+                    status.battery_v = (s.voltage_battery != u16::MAX).then_some(s.voltage_battery as f32 / 1000.0);
                 }
                 MavMessage::HEARTBEAT(hb) if hb.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID => {
                     status.custom_mode = Some(hb.custom_mode);

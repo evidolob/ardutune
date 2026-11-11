@@ -178,6 +178,13 @@ more robust: done before tuning, as its own step in the app.
 - Resumable, with a record of what was configured and when; diffs against the
   previous state so changes are always visible and reversible.
 
+Started: Setup guide screen and `ardutune setup` check frame and motors, ESC
+telemetry/RPM, radio (incl. CRSF RSSI), failsafes, battery monitor, sensor
+calibration and logging for tuning from live parameters and status, with
+safe fixes. Pre-arm check explains why a vehicle won't arm. Next: motor
+order/direction test, compass calibration, prop-size defaults, a record of
+what was configured.
+
 ## Risks
 
 - Bad advice from poor logs → readiness check + confidence on every finding.

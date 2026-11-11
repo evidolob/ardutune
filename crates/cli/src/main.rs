@@ -117,6 +117,13 @@ enum Cmd {
         #[arg(long)]
         raw: bool,
     },
+    /// Check the vehicle's setup step by step: frame, ESC telemetry, radio,
+    /// failsafes, battery, sensors, logging for tuning
+    Setup {
+        /// Print the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Reboot the flight controller (only while disarmed)
     Reboot,
     /// List serial ports and which look like flight controllers
@@ -334,6 +341,17 @@ fn main() -> Result<()> {
             }
             let report = arming::assess(&status.snapshot(), |n| params.get(n).map(|p| p.value as f64));
             print_arming(&report);
+        }
+        Cmd::Setup { json } => {
+            let mut link = vehicle::connect(&cli.conn)?;
+            let params = vehicle::fetch_params(&mut link)?;
+            let status = link.arming_status(std::time::Duration::from_secs(3))?;
+            let guide = ardutune_core::setup::assess(|n| params.get(n).map(|p| p.value as f64), &status.setup_live());
+            if json {
+                println!("{}", serde_json::to_string_pretty(&guide)?);
+            } else {
+                print_setup(&guide);
+            }
         }
         Cmd::Reboot => {
             vehicle::connect(&cli.conn)?.reboot()?;
@@ -652,6 +670,32 @@ fn print_noise(r: &NoiseReport) {
     }
     for n in &r.notes {
         println!("\nNote: {n}");
+    }
+}
+
+fn print_setup(g: &ardutune_core::setup::Guide) {
+    println!("ArduTune setup guide");
+    let tag = |s: Status| match s {
+        Status::Fail => "FAIL",
+        Status::Warn => "WARN",
+        Status::Info => "INFO",
+        Status::Pass => "PASS",
+    };
+    for (i, step) in g.steps.iter().enumerate() {
+        println!("\n{}. {} [{}]", i + 1, step.title, tag(step.status));
+        for it in &step.items {
+            println!("  [{}] {}", tag(it.status), it.title);
+            if !it.detail.is_empty() {
+                println!("         {}", it.detail);
+            }
+        }
+        if !step.changes.is_empty() {
+            println!("  Suggested changes:");
+            for c in &step.changes {
+                let now = c.current.map_or("unset".to_owned(), format_value);
+                println!("    {:<18} {now} -> {}   {}", c.name, format_value(c.value), c.reason);
+            }
+        }
     }
 }
 

@@ -66,6 +66,10 @@
       return `/Users/pilot/Documents/ArduTune/logs/log_${id}.bin`;
     },
     prepare_changes: async ({ source }) => {
+      if (source.startsWith("setup:")) {
+        const step = (await fixture("setup")).steps.find((x) => x.id === source.slice(6));
+        return { rows: step.changes.map((c) => ({ ...c, current: c.current ?? 0 })), unchanged: [], unknown: [], skipped: [], armed: false };
+      }
       if (source === "file")
         return {
           rows: [
@@ -110,6 +114,10 @@
         how_to_arm: ["Arm switch on channel 5: flip it from low to high. It is off now.", "Sticks: throttle down and yaw right for 2 s to arm, yaw left to disarm."],
         messages: ["PreArm: Check mag field (xy diff:117>100)", "PreArm: Logging failed"],
       };
+    },
+    setup_guide: async () => {
+      await sleep(800);
+      return fixture("setup");
     },
     list_backups: async () => backups,
     backup_params: async ({ note }) => {

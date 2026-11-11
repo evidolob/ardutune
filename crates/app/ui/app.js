@@ -13,6 +13,7 @@ const LOG_VIEWS = [
 ];
 const VEHICLE_VIEWS = [
   ["connection", "Connection"],
+  ["setup", "Setup guide"],
   ["prearm", "Pre-arm check"],
   ["vlogs", "Logs on vehicle"],
   ["params", "Parameters"],
@@ -30,6 +31,7 @@ const state = {
   vehicleLogs: null,
   backups: null, // parameter backups on this computer
   arming: null, // latest pre-arm check report
+  setup: null, // latest setup guide
   vehicleBusy: null, // text while a vehicle task runs
   modal: null,
   toast: null,
@@ -93,6 +95,7 @@ function go(view) {
   if (view === "vlogs" && state.vehicle && !state.vehicleLogs) refreshVehicleLogs();
   if (view === "params") refreshBackups();
   if (view === "prearm" && state.vehicle && !state.arming && !state.vehicleBusy) armingCheck();
+  if (view === "setup" && state.vehicle && !state.setup && !state.vehicleBusy) setupGuide();
 }
 
 async function refreshPorts() {
@@ -107,7 +110,7 @@ async function connect() {
   set({ connecting: true });
   try {
     const vehicle = await invoke("connect", { address: state.address });
-    set({ vehicle, connecting: false, vehicleLogs: null, arming: null });
+    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null });
     toast(`Connected: ${vehicle.kind}, ${vehicle.params} parameters read.`, "info");
   } catch (e) {
     set({ connecting: false });
@@ -190,6 +193,11 @@ async function armingCheck() {
   if (report) set({ arming: report });
 }
 
+async function setupGuide() {
+  const guide = await vehicleTask("Checking the setup…", () => invoke("setup_guide"));
+  if (guide) set({ setup: guide });
+}
+
 async function reboot() {
   const ok = await vehicleTask("Rebooting…", () => invoke("reboot").then(() => true));
   if (ok) {
@@ -220,7 +228,8 @@ async function confirmWrite() {
   set({ modal: { ...m, stage: "writing" } });
   try {
     const result = await invoke("apply_changes", { names: [...m.selected] });
-    set({ modal: { ...m, stage: "done", result }, backups: null });
+    set({ modal: { ...m, stage: "done", result }, backups: null, setup: state.view === "setup" ? state.setup : null });
+    if (state.view === "setup") setupGuide();
     if (state.view === "params") refreshBackups();
   } catch (e) {
     set({ modal: { ...m, stage: "confirm" } });
@@ -303,6 +312,7 @@ const actions = {
   askDeleteBackup: (d) => askDeleteBackup(d.path),
   confirmDeleteBackup,
   armingCheck,
+  setupGuide,
   refreshPorts,
   connect,
   disconnect,
@@ -738,6 +748,37 @@ function vehicleLogsView() {
     </div>`;
 }
 
+function setupView() {
+  const head = `<h1>Setup guide</h1><p class="lead">Your vehicle's setup checked step by step, from frame to logging, against its live parameters and status. Fix the steps in order; changes are reviewed, backed up and verified before they are written.</p>`;
+  if (!state.vehicle) return head + notConnected("check its setup");
+  const g = state.setup;
+  const again = `<div class="actions"><button class="btn" data-action="setupGuide" ${state.vehicleBusy ? "disabled" : ""}>${g ? "Check again" : "Check the setup"}</button></div>`;
+  if (!g) return head + (state.vehicleBusy ? busy(state.vehicleBusy) : again);
+  const label = { pass: "OK", warn: "check", fail: "fix", info: "not checked" };
+  const counts = ["fail", "warn", "pass"].map((st) => [st, g.steps.filter((x) => x.status === st).length]);
+  return `${head}
+    <div class="stats">${counts.map(([st, n]) => stat(st === "fail" ? "To fix" : st === "warn" ? "To check" : "OK", n)).join("")}</div>
+    ${state.vehicleBusy ? busy(state.vehicleBusy) : ""}
+    ${g.steps
+      .map(
+        (st, i) => `<div class="card">
+        <h2>${i + 1}. ${esc(st.title)} ${chip(st.status, label[st.status])}</h2>
+        <p class="muted" style="margin-top:-4px">${esc(st.why)}</p>
+        <ul class="checks">${st.items
+          .map((it) => `<li><div>${chip(it.status)}</div><div><div class="title">${esc(it.title)}</div>${it.detail ? `<div class="detail">${esc(it.detail)}</div>` : ""}</div></li>`)
+          .join("")}</ul>
+        ${
+          st.changes.length
+            ? `<h2 style="margin-top:14px">Suggested changes</h2>${changesTable(st.changes, true)}
+              <div class="actions"><button class="btn primary" data-action="write" data-source="setup:${esc(st.id)}" data-title="${esc(st.title.toLowerCase())} settings" ${state.vehicleBusy ? "disabled" : ""}>Write to vehicle…</button></div>`
+            : ""
+        }
+      </div>`,
+      )
+      .join("")}
+    ${again}`;
+}
+
 function prearmView() {
   const head = `<h1>Pre-arm check</h1><p class="lead">Why won't it arm? ArduTune asks the flight controller to run its pre-arm checks, listens to what it says and explains each problem. Start a check and try to arm while it listens to catch the reason it refuses.</p>`;
   if (!state.vehicle) return head + notConnected("check why it won't arm");
@@ -913,6 +954,8 @@ function content() {
       return paramsView();
     case "prearm":
       return prearmView();
+    case "setup":
+      return setupView();
     default:
       return welcome();
   }

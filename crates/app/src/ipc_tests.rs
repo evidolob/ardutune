@@ -70,6 +70,16 @@ fn analyse_connect_download_write_and_reboot() {
     assert_eq!(report["problems"][0]["area"], "Compass");
     mock.state().prearm_failures.clear();
 
+    // The setup guide covers every step and proposes logging changes for the
+    // simulated quad's default logging; they can be written like any other.
+    let guide = call("setup_guide", json!({})).unwrap();
+    let steps = guide["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 7);
+    let logging = steps.iter().find(|s| s["id"] == "logging").unwrap();
+    assert!(!logging["changes"].as_array().unwrap().is_empty(), "{logging}");
+    let plan = call("prepare_changes", json!({ "source": "setup:logging", "label": "writing logging for tuning" })).unwrap();
+    assert!(!plan["rows"].as_array().unwrap().is_empty());
+
     // Download the vehicle's log (default logging: not enough for tuning) and open it.
     let logs = call("list_vehicle_logs", json!({})).unwrap();
     let id = logs[0]["id"].clone();

@@ -3,7 +3,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, params};
+use ardutune_core::{arming, params, setup};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, Link, Params};
 use serde::Serialize;
@@ -13,6 +13,7 @@ use crate::{backups, blocking, data_dir, lock, AppState, CmdResult, Reporter};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REBOOT_TIMEOUT: Duration = Duration::from_secs(40);
+const SETUP_LISTEN: Duration = Duration::from_secs(3);
 
 pub struct Connected {
     link: Link,
@@ -312,6 +313,9 @@ pub async fn prepare_changes<R: Runtime>(
 type Wanted = (String, f64, Option<String>);
 
 fn wanted<R: Runtime>(app: &AppHandle<R>, live: &Params, source: &str, path: Option<String>) -> CmdResult<Vec<Wanted>> {
+    if let Some(step) = source.strip_prefix("setup:") {
+        return setup_changes(live, step);
+    }
     if source == "file" {
         let path = path.ok_or("No parameter file given.")?;
         let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {path}: {e}"))?;
@@ -341,6 +345,13 @@ fn wanted<R: Runtime>(app: &AppHandle<R>, live: &Params, source: &str, path: Opt
         }
         other => return Err(format!("unknown change source {other}")),
     })
+}
+
+/// Changes a setup guide step proposes, worked out from the live values.
+fn setup_changes(live: &Params, step: &str) -> CmdResult<Vec<Wanted>> {
+    let guide = setup::assess(|n| live.get(n).map(|p| p.value as f64), &setup::Live::default());
+    let step = guide.steps.into_iter().find(|s| s.id == step).ok_or(format!("unknown setup step {step}"))?;
+    Ok(step.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect())
 }
 
 #[derive(Serialize)]
@@ -411,6 +422,21 @@ pub async fn arming_check<R: Runtime>(app: AppHandle<R>, listen_s: Option<f64>) 
         let status = check(&mut slot, r)?;
         let c = connected(&mut slot)?;
         Ok(arming::assess(&status.snapshot(), |n| c.params.get(n).map(|p| p.value as f64)))
+    })
+    .await
+}
+
+/// Checks the vehicle's setup step by step: its parameters plus a few
+/// seconds of live status (receiver, sensors, logging, battery).
+#[tauri::command]
+pub async fn setup_guide<R: Runtime>(app: AppHandle<R>) -> CmdResult<setup::Guide> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let r = connected(&mut slot)?.link.arming_status(SETUP_LISTEN);
+        let status = check(&mut slot, r)?;
+        let c = connected(&mut slot)?;
+        Ok(setup::assess(|n| c.params.get(n).map(|p| p.value as f64), &status.setup_live()))
     })
     .await
 }

@@ -774,14 +774,17 @@ fn notch_config(log: &Log, hover_motor_hz: Option<f64>) -> Vec<Notch> {
         }
         let mode = p("MODE").unwrap_or(0.0) as u32;
         let freq = p("FREQ");
+        // REF = 0 turns tracking off in every mode (AP_Vehicle::update_dynamic_notch).
+        let reference = p("REF").unwrap_or(0.0);
         let hover_center_hz = match mode {
+            _ if reference <= 0.0 => freq,
             0 => freq,
             1 => match (freq, p("REF"), log.param("MOT_THST_HOVER")) {
                 (Some(f), Some(r), Some(h)) if r > 0.0 => Some(f * (h / r).sqrt()),
                 (f, _, _) => f,
             },
-            // RPM-based modes follow motor speed, floored at INS_HNTCH_FREQ.
-            _ => hover_motor_hz.map(|m| freq.map_or(m, |f| m.max(f))).or(freq),
+            // RPM-based modes follow motor speed × REF, floored at INS_HNTCH_FREQ.
+            _ => hover_motor_hz.map(|m| m * reference).map(|m| freq.map_or(m, |f| m.max(f))).or(freq),
         };
         let mode_name = match mode {
             0 => "fixed frequency",
