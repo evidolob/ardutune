@@ -3,7 +3,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::params;
+use ardutune_core::{arming, params};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, Link, Params};
 use serde::Serialize;
@@ -386,6 +386,22 @@ pub async fn apply_changes<R: Runtime>(app: AppHandle<R>, names: Option<Vec<Stri
             }
         }
         Ok(ApplyView { backup: Some(backup.display().to_string()), results })
+    })
+    .await
+}
+
+/// Runs the vehicle's pre-arm checks, listens for `listen_s` seconds (long
+/// enough to try arming meanwhile) and explains what blocks arming.
+#[tauri::command]
+pub async fn arming_check<R: Runtime>(app: AppHandle<R>, listen_s: Option<f64>) -> CmdResult<arming::Report> {
+    blocking(app, move |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let listen = Duration::from_secs_f64(listen_s.unwrap_or(6.0).clamp(1.0, 120.0));
+        let r = connected(&mut slot)?.link.arming_status(listen);
+        let status = check(&mut slot, r)?;
+        let c = connected(&mut slot)?;
+        Ok(arming::assess(&status.snapshot(), |n| c.params.get(n).map(|p| p.value as f64)))
     })
     .await
 }

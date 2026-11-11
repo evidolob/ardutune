@@ -3,6 +3,7 @@ mod vehicle;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use ardutune_core::arming;
 use ardutune_core::diagnose::{diagnose, Confidence, Diagnosis, Finding};
 use ardutune_core::filters::{self, Change, Evaluation, FilterReport};
 use ardutune_core::noise::{self, NoiseReport, PeakClass, Source};
@@ -107,6 +108,17 @@ enum Cmd {
         #[command(flatten)]
         apply_opts: ApplyArgs,
     },
+    /// Explain why the vehicle won't arm: pre-arm failures, GPS state and setup
+    Prearm {
+        /// Seconds to listen for status messages
+        #[arg(long, default_value_t = 5.0)]
+        listen: f64,
+        /// Also print what the vehicle sent, unprocessed
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Reboot the flight controller (only while disarmed)
+    Reboot,
     /// List serial ports and which look like flight controllers
     Ports,
     /// Connect to the vehicle and show what it is
@@ -300,6 +312,22 @@ fn main() -> Result<()> {
                     vehicle::apply(&mut link, &params, &wanted, &(&apply_opts).into())?;
                 }
             }
+        }
+        Cmd::Prearm { listen, raw } => {
+            let mut link = vehicle::connect(&cli.conn)?;
+            let params = vehicle::fetch_params(&mut link)?;
+            eprintln!("Running pre-arm checks and listening for {listen:.0} s: try arming now to see why it refuses.");
+            eprintln!("Remove the propellers first if you are indoors or on the bench: if it arms, the motors spin.");
+            let status = link.arming_status(std::time::Duration::from_secs_f64(listen))?;
+            if raw {
+                println!("{status:#?}");
+            }
+            let report = arming::assess(&status.snapshot(), |n| params.get(n).map(|p| p.value as f64));
+            print_arming(&report);
+        }
+        Cmd::Reboot => {
+            vehicle::connect(&cli.conn)?.reboot()?;
+            println!("Rebooting. Reconnect in a few seconds.");
         }
         Cmd::Ports => vehicle::print_ports(),
         Cmd::Connect => {
@@ -592,6 +620,53 @@ fn print_noise(r: &NoiseReport) {
     }
     for n in &r.notes {
         println!("\nNote: {n}");
+    }
+}
+
+fn print_arming(r: &arming::Report) {
+    println!("ArduTune pre-arm check");
+    let gps: Vec<String> = r
+        .gps
+        .iter()
+        .map(|g| {
+            let mut t = g.fix.to_owned();
+            if let Some(n) = g.satellites {
+                t += &format!(", {n} satellites");
+            }
+            if let (Some(h), true) = (g.hdop, g.fix != "no GPS") {
+                t += &format!(", HDOP {h:.2}");
+            }
+            t
+        })
+        .collect();
+    println!("Mode: {}", r.mode.as_deref().unwrap_or("unknown"));
+    println!("GPS:  {}", if gps.is_empty() { "no data".to_owned() } else { gps.join("; ") });
+    if r.armed {
+        println!("\nThe vehicle is armed.");
+    } else {
+        println!("\nReady to arm: {}", if r.ready { "yes" } else { "no" });
+    }
+    if !r.problems.is_empty() {
+        println!("\nProblems, in the order to fix them");
+    }
+    for p in &r.problems {
+        let tag = match p.status {
+            Status::Fail => "FAIL",
+            Status::Warn => "WARN",
+            Status::Info => "INFO",
+            Status::Pass => "PASS",
+        };
+        println!("  [{tag}] {}: {}", p.area, p.title);
+        for m in &p.messages {
+            println!("         Vehicle says: {m}");
+        }
+        if !p.advice.is_empty() {
+            println!("         What to do: {}", p.advice);
+        }
+    }
+    println!("\nHow to arm this vehicle");
+    for h in &r.how_to_arm {
+        println!("  - {h}");
     }
 }
 

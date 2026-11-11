@@ -61,6 +61,15 @@ fn analyse_connect_download_write_and_reboot() {
     assert_eq!(info["params"].as_u64().unwrap() as usize, mock.state().params.len());
     assert_eq!(info["armed"], json!(false));
 
+    // Nothing blocks arming on the simulated quad, then a compass problem.
+    let report = call("arming_check", json!({ "listen_s": 1.0 })).unwrap();
+    assert_eq!(report["ready"], json!(true), "{report}");
+    mock.state().prearm_failures = vec!["Check mag field (xy diff:262>100)".into()];
+    let report = call("arming_check", json!({ "listen_s": 1.0 })).unwrap();
+    assert_eq!(report["ready"], json!(false));
+    assert_eq!(report["problems"][0]["area"], "Compass");
+    mock.state().prearm_failures.clear();
+
     // Download the vehicle's log (default logging: not enough for tuning) and open it.
     let logs = call("list_vehicle_logs", json!({})).unwrap();
     let id = logs[0]["id"].clone();

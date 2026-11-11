@@ -114,6 +114,7 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         vehicle::prepare_changes,
         vehicle::apply_changes,
         vehicle::reboot,
+        vehicle::arming_check,
         backups::backup_params,
         backups::list_backups,
         backups::delete_backup,

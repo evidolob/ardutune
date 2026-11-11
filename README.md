@@ -22,6 +22,11 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   slew limiter, I offset, saturation), cautious bounded gain suggestions, and
   gains from a finished AutoTune that weren't saved; optional SVG plot and
   direct apply.
+- Pre-arm check: asks the vehicle to run its pre-arm checks, collects what it
+  says (also while you try to arm), and explains each problem in fix order
+  with advice: compass, attitude, radio, logging, GPS (live fix, satellites,
+  HDOP, serial setup), battery, safety switch; plus how this vehicle arms
+  (switch or sticks) and the current stick and switch positions.
 - Vehicle connection over MAVLink (USB, UDP, TCP): download and delete logs
   (single logs over MAVLink FTP, or erase all), back up parameters, and write
   recommended parameters directly, with verification.

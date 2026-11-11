@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
     MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_LONG_DATA,
-    FILE_TRANSFER_PROTOCOL_DATA, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA, LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA,
+    FILE_TRANSFER_PROTOCOL_DATA, GpsFixType, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA, LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA,
     PARAM_REQUEST_READ_DATA, PARAM_SET_DATA,
 };
 use mavlink::error::MessageReadError;
@@ -569,6 +569,160 @@ impl Link {
             target_component: self.vehicle.component_id,
         }))?;
         Ok(end)
+    }
+}
+
+/// What a vehicle reports about its readiness to arm, gathered by
+/// [`Link::arming_status`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ArmingStatus {
+    /// Status texts received while listening, in order, without repeats.
+    pub messages: Vec<String>,
+    /// GPS_RAW_INT (instance 0) and GPS2_RAW (instance 1), when received.
+    pub gps: Vec<GpsStatus>,
+    /// SYS_STATUS sensor bits: (present, enabled, healthy).
+    pub sensors: Option<(u32, u32, u32)>,
+    /// Flight mode number from the heartbeat.
+    pub custom_mode: Option<u32>,
+    pub armed: bool,
+    /// Latest RC input in µs, channels 1-8 (0 when not received).
+    pub rc: Option<[u16; 8]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpsStatus {
+    pub instance: u8,
+    /// MAVLink GPS_FIX_TYPE: 0 no GPS, 1 no fix, 2 2D, 3 3D, 4+ better.
+    pub fix_type: u8,
+    pub satellites: Option<u8>,
+    pub hdop: Option<f32>,
+}
+
+const GPS_RAW_INT_ID: f32 = 24.0;
+const GPS2_RAW_ID: f32 = 124.0;
+const SYS_STATUS_ID: f32 = 1.0;
+const RC_CHANNELS_ID: f32 = 65.0;
+
+impl ArmingStatus {
+    /// The input ArduTune's arming explanation works from.
+    pub fn snapshot(&self) -> ardutune_core::arming::Snapshot {
+        ardutune_core::arming::Snapshot {
+            messages: self.messages.clone(),
+            gps: self
+                .gps
+                .iter()
+                .map(|g| ardutune_core::arming::Gps { instance: g.instance, fix_type: g.fix_type, satellites: g.satellites, hdop: g.hdop })
+                .collect(),
+            sensors: self.sensors,
+            mode: self.custom_mode,
+            armed: self.armed,
+            rc: self.rc,
+        }
+    }
+}
+
+fn gps_status(instance: u8, fix: GpsFixType, satellites: u8, eph: u16) -> GpsStatus {
+    GpsStatus {
+        instance,
+        fix_type: fix as u8,
+        satellites: (satellites != u8::MAX).then_some(satellites),
+        hdop: (eph != u16::MAX).then_some(eph as f32 / 100.0),
+    }
+}
+
+impl Link {
+    /// Asks the vehicle to run its pre-arm checks and listens for `listen`
+    /// to the reasons it gives, the GPS state and sensor health.
+    pub fn arming_status(&mut self, listen: Duration) -> Result<ArmingStatus> {
+        for id in [GPS_RAW_INT_ID, GPS2_RAW_ID, SYS_STATUS_ID, RC_CHANNELS_ID] {
+            self.command(MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL, [id, 500_000.0, 0.0, 0.0, 0.0, 0.0, 0.0])?;
+        }
+        self.command(MavCmd::MAV_CMD_RUN_PREARM_CHECKS, [0.0; 7])?;
+
+        let mut status = ArmingStatus::default();
+        let mut pending: Option<String> = None;
+        let deadline = Instant::now() + listen;
+        while let Some(msg) = self.next(deadline)? {
+            match msg {
+                MavMessage::STATUSTEXT(t) => {
+                    let raw = t.text.to_str().unwrap_or_default().to_owned();
+                    // Longer texts arrive in full 50-character pieces.
+                    let text = match pending.take() {
+                        Some(head) => head + &raw,
+                        None => raw.clone(),
+                    };
+                    if raw.len() >= STATUSTEXT_LEN {
+                        pending = Some(text);
+                    } else {
+                        push_text(&mut status.messages, text);
+                    }
+                }
+                MavMessage::GPS_RAW_INT(g) => upsert(&mut status.gps, gps_status(0, g.fix_type, g.satellites_visible, g.eph)),
+                MavMessage::GPS2_RAW(g) => upsert(&mut status.gps, gps_status(1, g.fix_type, g.satellites_visible, g.eph)),
+                MavMessage::SYS_STATUS(s) => {
+                    status.sensors = Some((
+                        s.onboard_control_sensors_present.bits(),
+                        s.onboard_control_sensors_enabled.bits(),
+                        s.onboard_control_sensors_health.bits(),
+                    ));
+                }
+                MavMessage::HEARTBEAT(hb) if hb.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID => {
+                    status.custom_mode = Some(hb.custom_mode);
+                }
+                MavMessage::RC_CHANNELS(rc) => {
+                    status.rc = Some([
+                        rc.chan1_raw,
+                        rc.chan2_raw,
+                        rc.chan3_raw,
+                        rc.chan4_raw,
+                        rc.chan5_raw,
+                        rc.chan6_raw,
+                        rc.chan7_raw,
+                        rc.chan8_raw,
+                    ]);
+                }
+                _ => {}
+            }
+        }
+        if let Some(text) = pending {
+            push_text(&mut status.messages, text);
+        }
+        status.gps.sort_by_key(|g| g.instance);
+        status.armed = self.vehicle.armed;
+        Ok(status)
+    }
+
+    /// Sends a command without waiting for its acknowledgement.
+    fn command(&self, command: MavCmd, p: [f32; 7]) -> Result<()> {
+        self.send(&MavMessage::COMMAND_LONG(COMMAND_LONG_DATA {
+            command,
+            param1: p[0],
+            param2: p[1],
+            param3: p[2],
+            param4: p[3],
+            param5: p[4],
+            param6: p[5],
+            param7: p[6],
+            target_system: self.vehicle.system_id,
+            target_component: self.vehicle.component_id,
+            ..Default::default()
+        }))
+    }
+}
+
+const STATUSTEXT_LEN: usize = 50;
+
+fn push_text(messages: &mut Vec<String>, text: String) {
+    let text = text.trim().to_owned();
+    if !text.is_empty() && !messages.contains(&text) {
+        messages.push(text);
+    }
+}
+
+fn upsert(list: &mut Vec<GpsStatus>, g: GpsStatus) {
+    match list.iter_mut().find(|x| x.instance == g.instance) {
+        Some(x) => *x = g,
+        None => list.push(g),
     }
 }
 

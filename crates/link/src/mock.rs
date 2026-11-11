@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
     MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_ACK_DATA,
-    FILE_TRANSFER_PROTOCOL_DATA, HEARTBEAT_DATA, LOG_DATA_DATA, LOG_ENTRY_DATA, PARAM_VALUE_DATA,
+    FILE_TRANSFER_PROTOCOL_DATA, GPS_RAW_INT_DATA, GpsFixType, HEARTBEAT_DATA, LOG_DATA_DATA, LOG_ENTRY_DATA, MavSeverity,
+    PARAM_VALUE_DATA, RC_CHANNELS_DATA, STATUSTEXT_DATA,
 };
 use mavlink::{MavConnection, MavHeader};
 
@@ -41,6 +42,12 @@ pub struct MockState {
     pub drop_param_indices: BTreeSet<u16>,
     pub reboots: usize,
     pub param_sets: usize,
+    /// Reasons sent as "PreArm: …" when the pre-arm checks are run.
+    pub prearm_failures: Vec<String>,
+    /// GPS fix type, satellites and HDOP; `None` sends no GPS messages.
+    pub gps: Option<(GpsFixType, u8, f32)>,
+    pub mode: u32,
+    pub rc: [u16; 8],
 }
 
 impl MockState {
@@ -117,6 +124,10 @@ impl MockState {
             logs,
             first_log_num: 1,
             deleted: BTreeSet::new(),
+            prearm_failures: Vec::new(),
+            gps: Some((GpsFixType::GPS_FIX_TYPE_3D_FIX, 14, 0.8)),
+            mode: 0,
+            rc: [1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000],
             drop_log_chunk_every: None,
             drop_param_indices: BTreeSet::new(),
             reboots: 0,
@@ -188,8 +199,30 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
 
     while !stop.load(Ordering::Relaxed) {
         if last_heartbeat.elapsed() > Duration::from_millis(200) {
-            let armed = state.lock().unwrap().armed;
-            send(heartbeat(armed));
+            let st = state.lock().unwrap().clone();
+            send(heartbeat(st.armed, st.mode));
+            if let Some((fix_type, satellites, hdop)) = st.gps {
+                send(MavMessage::GPS_RAW_INT(GPS_RAW_INT_DATA {
+                    fix_type,
+                    satellites_visible: satellites,
+                    eph: (hdop * 100.0) as u16,
+                    epv: u16::MAX,
+                    ..Default::default()
+                }));
+            }
+            let rc = st.rc;
+            send(MavMessage::RC_CHANNELS(RC_CHANNELS_DATA {
+                chancount: 8,
+                chan1_raw: rc[0],
+                chan2_raw: rc[1],
+                chan3_raw: rc[2],
+                chan4_raw: rc[3],
+                chan5_raw: rc[4],
+                chan6_raw: rc[5],
+                chan7_raw: rc[6],
+                chan8_raw: rc[7],
+                ..Default::default()
+            }));
             last_heartbeat = Instant::now();
         }
 
@@ -225,13 +258,13 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
     }
 }
 
-fn heartbeat(armed: bool) -> MavMessage {
+fn heartbeat(armed: bool, custom_mode: u32) -> MavMessage {
     let mut mode = MavModeFlag::MAV_MODE_FLAG_CUSTOM_MODE_ENABLED;
     if armed {
         mode |= MavModeFlag::MAV_MODE_FLAG_SAFETY_ARMED;
     }
     MavMessage::HEARTBEAT(HEARTBEAT_DATA {
-        custom_mode: 0,
+        custom_mode,
         mavtype: MavType::MAV_TYPE_QUADROTOR,
         autopilot: MavAutopilot::MAV_AUTOPILOT_ARDUPILOTMEGA,
         base_mode: mode,
@@ -328,6 +361,16 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
             *stream = None;
             Vec::new()
         }
+        MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_RUN_PREARM_CHECKS => {
+            let mut out = vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })];
+            for reason in &st.prearm_failures {
+                out.extend(status_texts(&format!("PreArm: {reason}")));
+            }
+            out
+        }
+        MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL => {
+            vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })]
+        }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN => {
             // Like ArduPilot, refuse to reboot while armed.
             let result = if st.armed {
@@ -340,6 +383,19 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
         }
         _ => Vec::new(),
     }
+}
+
+/// A status text, split into 50-character pieces like ArduPilot does.
+fn status_texts(text: &str) -> Vec<MavMessage> {
+    text.as_bytes()
+        .chunks(50)
+        .map(|chunk| {
+            MavMessage::STATUSTEXT(STATUSTEXT_DATA {
+                severity: MavSeverity::MAV_SEVERITY_CRITICAL,
+                text: String::from_utf8_lossy(chunk).as_ref().into(),
+            })
+        })
+        .collect()
 }
 
 /// FTP over a single directory, `/APM/LOGS`, like a ChibiOS board's SD card.

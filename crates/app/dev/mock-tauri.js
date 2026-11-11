@@ -95,6 +95,22 @@
       return { backup: "/Users/pilot/Documents/ArduTune/backups/backup-sys1-20261110-153000.param", results: [{ name: "INS_GYRO_FILTER", value: 60, error: null }] };
     },
     reboot: async () => (connected = false),
+    arming_check: async () => {
+      await sleep(1500);
+      return {
+        armed: false,
+        ready: false,
+        mode: "Stabilize",
+        gps: [{ instance: 0, fix: "3D fix", satellites: 26, hdop: 0.55 }],
+        problems: [
+          { status: "fail", area: "Compass", title: "The compass reading doesn't match the Earth's field here", messages: ["Check mag field (xy diff:117>100)"], advice: "Move away from metal, cars, laptops and phones and check again. If it still fails, calibrate the compass outdoors with the battery mounted as it flies, then reboot. COMPASS_ORIENT is 0, so the GPS/compass arrow must point forward." },
+          { status: "fail", area: "Attitude", title: "The two attitude estimates disagree", messages: ["AHRS: DCM Roll/Pitch inconsistent 19 deg. Wait or reboot"], advice: "Reboot with the vehicle level and still. A bad compass can also tilt the EKF's attitude, so fix any compass problem first." },
+          { status: "fail", area: "Logging", title: "Logging to the SD card failed", messages: ["Logging failed"], advice: "Insert an SD card formatted FAT32 and reboot." },
+        ],
+        how_to_arm: ["Arm switch on channel 5: flip it from low to high. It is off now.", "Sticks: throttle down and yaw right for 2 s to arm, yaw left to disarm."],
+        messages: ["PreArm: Check mag field (xy diff:117>100)", "PreArm: Logging failed"],
+      };
+    },
     list_backups: async () => backups,
     backup_params: async ({ note }) => {
       await progress("Reading parameters", 1233);

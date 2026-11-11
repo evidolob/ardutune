@@ -13,6 +13,7 @@ const LOG_VIEWS = [
 ];
 const VEHICLE_VIEWS = [
   ["connection", "Connection"],
+  ["prearm", "Pre-arm check"],
   ["vlogs", "Logs on vehicle"],
   ["params", "Parameters"],
 ];
@@ -28,6 +29,7 @@ const state = {
   connecting: false,
   vehicleLogs: null,
   backups: null, // parameter backups on this computer
+  arming: null, // latest pre-arm check report
   vehicleBusy: null, // text while a vehicle task runs
   modal: null,
   toast: null,
@@ -90,6 +92,7 @@ function go(view) {
   if (view === "connection" && !state.ports) refreshPorts();
   if (view === "vlogs" && state.vehicle && !state.vehicleLogs) refreshVehicleLogs();
   if (view === "params") refreshBackups();
+  if (view === "prearm" && state.vehicle && !state.arming && !state.vehicleBusy) armingCheck();
 }
 
 async function refreshPorts() {
@@ -104,7 +107,7 @@ async function connect() {
   set({ connecting: true });
   try {
     const vehicle = await invoke("connect", { address: state.address });
-    set({ vehicle, connecting: false, vehicleLogs: null });
+    set({ vehicle, connecting: false, vehicleLogs: null, arming: null });
     toast(`Connected: ${vehicle.kind}, ${vehicle.params} parameters read.`, "info");
   } catch (e) {
     set({ connecting: false });
@@ -175,6 +178,14 @@ async function confirmDelete() {
     set({ vehicleLogs: logs });
     toast(id === null ? "All logs erased." : `Log ${id} deleted. The remaining logs may be renumbered.`, "info");
   }
+}
+
+async function armingCheck() {
+  const listen = 8;
+  const report = await vehicleTask(`Running pre-arm checks and listening for ${listen} s — try arming now (props off) to see why it refuses…`, () =>
+    invoke("arming_check", { listenS: listen }),
+  );
+  if (report) set({ arming: report });
 }
 
 async function reboot() {
@@ -289,6 +300,7 @@ const actions = {
   restoreBackup: (d) => restoreBackup(d.path),
   askDeleteBackup: (d) => askDeleteBackup(d.path),
   confirmDeleteBackup,
+  armingCheck,
   refreshPorts,
   connect,
   disconnect,
@@ -724,6 +736,44 @@ function vehicleLogsView() {
     </div>`;
 }
 
+function prearmView() {
+  const head = `<h1>Pre-arm check</h1><p class="lead">Why won't it arm? ArduTune asks the flight controller to run its pre-arm checks, listens to what it says and explains each problem. Start a check and try to arm while it listens to catch the reason it refuses.</p>`;
+  if (!state.vehicle) return head + notConnected("check why it won't arm");
+  const r = state.arming;
+  const props = `<div class="banner warn"><b>Remove the propellers</b> before you try arming indoors or on the bench. If arming succeeds, the motors start spinning straight away.</div>`;
+  const run = `${props}<div class="actions"><button class="btn primary" data-action="armingCheck" ${state.vehicleBusy ? "disabled" : ""}>${r ? "Check again" : "Run the check"}</button></div>`;
+  if (!r) return head + (state.vehicleBusy ? busy(state.vehicleBusy) : run);
+  const gps = r.gps.length
+    ? r.gps.map((g) => `${esc(g.fix)}${g.satellites !== null ? `, ${g.satellites} sats` : ""}${g.hdop !== null && g.fix !== "no GPS" ? `, HDOP ${num(g.hdop, 2)}` : ""}`).join("; ")
+    : "no data";
+  const banner = r.armed
+    ? `<div class="banner info">The vehicle is armed.</div>`
+    : r.ready
+      ? `<div class="banner pass">No pre-arm problems reported: it should arm. If it still refuses, run the check again and try arming while it listens.</div>`
+      : `<div class="banner fail">It won't arm until the problems marked FAIL are fixed. Fix them in the order shown.</div>`;
+  const kind = (st) => (st === "fail" ? "fail" : st === "warn" ? "warn" : "info");
+  return `${head}
+    <div class="stats">
+      ${stat("Flight mode", esc(r.mode ?? "unknown"))}
+      ${stat("GPS", esc(gps))}
+      ${stat("Ready to arm", r.armed ? chip("info", "armed") : r.ready ? chip("pass", "yes") : chip("fail", "no"))}
+    </div>
+    ${banner}
+    ${state.vehicleBusy ? busy(state.vehicleBusy) : ""}
+    ${r.problems
+      .map(
+        (p) => `<div class="card">
+        <h2>${chip(kind(p.status), p.status)} <span class="muted">${esc(p.area)}:</span> ${esc(p.title)}</h2>
+        ${p.messages.length ? `<div class="muted" style="margin-bottom:6px">Vehicle says: ${p.messages.map((m) => `<code>${esc(m)}</code>`).join(" ")}</div>` : ""}
+        ${p.advice ? `<div class="advice"><b>What to do:</b> ${esc(p.advice)}</div>` : ""}
+      </div>`,
+      )
+      .join("")}
+    <div class="card"><h2>How to arm this vehicle</h2>${list(r.how_to_arm)}</div>
+    ${r.messages.length ? `<div class="card"><h2>Everything the vehicle said</h2>${list(r.messages)}</div>` : ""}
+    ${run}`;
+}
+
 function paramsView() {
   const v = state.vehicle;
   const busyNow = !!state.vehicleBusy;
@@ -858,6 +908,8 @@ function content() {
       return vehicleLogsView();
     case "params":
       return paramsView();
+    case "prearm":
+      return prearmView();
     default:
       return welcome();
   }

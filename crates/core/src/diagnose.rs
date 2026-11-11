@@ -148,7 +148,7 @@ fn min_of(v: &[f64]) -> Option<f64> {
     v.iter().copied().reduce(f64::min)
 }
 
-fn mode_name(num: u32) -> String {
+pub(crate) fn mode_name(num: u32) -> String {
     COPTER_MODES.iter().find(|(n, _)| *n == num).map_or(format!("mode {num}"), |(_, s)| (*s).to_owned())
 }
 
