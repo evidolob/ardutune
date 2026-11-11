@@ -79,7 +79,7 @@ pub fn assess(param: impl Fn(&str) -> Option<f64>, live: &Live) -> Guide {
     }
 }
 
-fn item(status: Status, title: impl Into<String>, detail: impl Into<String>) -> Item {
+pub(crate) fn item(status: Status, title: impl Into<String>, detail: impl Into<String>) -> Item {
     Item { status, title: title.into(), detail: detail.into() }
 }
 
@@ -109,7 +109,7 @@ pub(crate) fn change(p: Param, name: &str, value: f64, reason: impl Into<String>
     (current != value).then(|| ParamChange { name: name.to_owned(), current: Some(current), value, reason: reason.into() })
 }
 
-fn int(p: Param, name: &str) -> Option<i64> {
+pub(crate) fn int(p: Param, name: &str) -> Option<i64> {
     p(name).map(|v| v as i64)
 }
 
@@ -124,7 +124,7 @@ fn port_list(ports: &[u32]) -> String {
 
 // ---------- 1. Frame and motors ----------
 
-fn frame_type_name(t: i64) -> &'static str {
+pub(crate) fn frame_type_name(t: i64) -> &'static str {
     match t {
         0 => "Plus",
         1 => "X",
@@ -144,7 +144,7 @@ fn frame_type_name(t: i64) -> &'static str {
     }
 }
 
-fn motor_count(class: i64) -> Option<usize> {
+pub(crate) fn motor_count(class: i64) -> Option<usize> {
     match class {
         1 => Some(4),
         2 | 3 => Some(6),
@@ -177,7 +177,7 @@ fn frame(p: Param) -> Step {
             items.push(item(
                 Status::Pass,
                 format!("{class_name}, {} layout (FRAME_CLASS {c}, FRAME_TYPE {t})", frame_type_name(t)),
-                "Check the layout matches the motor order diagram for this frame type; a motor test confirms order and direction.",
+                "Check the layout matches the motor order diagram for this frame type; ArduTune's Motor test confirms order and direction.",
             ));
             if let Some(n) = motor_count(c) {
                 let missing: Vec<usize> = (1..=n)

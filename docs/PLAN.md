@@ -182,8 +182,9 @@ Started: Setup guide screen and `ardutune setup` check frame and motors, ESC
 telemetry/RPM, radio (incl. CRSF RSSI), failsafes, battery monitor, sensor
 calibration and logging for tuning from live parameters and status, with
 safe fixes. Pre-arm check explains why a vehicle won't arm. Initial tune
-gives prop-size starting values (`ardutune tune`). Next: motor
-order/direction test, compass calibration, a record of what was configured.
+gives prop-size starting values (`ardutune tune`). Motor test checks order
+and direction and fixes them in software (`ardutune motors`). Next: compass
+calibration, a record of what was configured.
 
 ## Separate track: vehicle tools
 

@@ -195,6 +195,15 @@ pub fn confirm(question: &str, default_yes: bool) -> Result<bool> {
     Ok(if a.is_empty() { default_yes } else { a == "y" || a == "yes" })
 }
 
+/// A line typed by the user, trimmed and lower-cased.
+pub fn ask(question: &str) -> Result<String> {
+    print!("{question} ");
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin().lock().read_line(&mut answer)?;
+    Ok(answer.trim().to_lowercase())
+}
+
 pub fn print_logs(entries: &[LogEntry]) {
     // Deleted files leave empty entries behind.
     let entries: Vec<&LogEntry> = entries.iter().filter(|e| e.size > 0).collect();

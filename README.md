@@ -42,6 +42,11 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   battery monitor, sensors and calibration, logging for tuning), each with
   plain findings and safe fixes written through the review/backup/verify
   flow. `ardutune setup` on the command line.
+- Motor test: spins each motor in turn (props off, disarmed), you say which
+  motor turned and which way, and ArduTune works out the fix: output
+  remapping (`SERVOn_FUNCTION`) and DShot direction reversal
+  (`SERVO_BLH_RVMASK`) for ArduPilot's quad layouts, shown on a top-view
+  diagram. `ardutune motors` asks the same questions on the command line.
 - Initial tune: starting filter, acceleration-limit, thrust-curve and battery
   values for a new build from its prop size and pack (the formulas of
   ArduPilot's initial tune parameters calculator, with ArduCopter 4.7 names),

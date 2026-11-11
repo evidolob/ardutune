@@ -142,6 +142,15 @@ enum Cmd {
         #[command(flatten)]
         apply_opts: ApplyArgs,
     },
+    /// Motor order and direction test: spins each motor in turn (props off!),
+    /// asks what you saw and suggests the fix
+    Motors {
+        /// Throttle percent while a motor spins
+        #[arg(long, default_value_t = 7.0)]
+        throttle: f32,
+        #[command(flatten)]
+        apply_opts: ApplyArgs,
+    },
     /// Show the vehicle's firmware, check for newer releases, or flash firmware
     Firmware {
         /// Check firmware.ardupilot.org for newer releases for this board (needs internet)
@@ -429,6 +438,7 @@ fn main() -> Result<()> {
                 println!("  - {a}");
             }
         }
+        Cmd::Motors { throttle, apply_opts } => motor_test(&cli.conn, throttle, &(&apply_opts).into())?,
         Cmd::Firmware { check, flash, install } => firmware(&cli.conn, check, flash.as_deref(), install.as_deref())?,
         Cmd::Reboot => {
             vehicle::connect(&cli.conn)?.reboot()?;
@@ -835,6 +845,75 @@ fn firmware(conn: &str, check: bool, flash: Option<&Path>, install: Option<&str>
     })
     .map_err(anyhow::Error::msg)?;
     println!("Flashed and verified via {port}. Reconnect in a few seconds and check the parameters.");
+    Ok(())
+}
+
+fn motor_test(conn: &str, throttle: f32, opts: &vehicle::ApplyOptions) -> Result<()> {
+    use ardutune_core::motors::{self, Observation, Spin};
+    let mut link = vehicle::connect(conn)?;
+    let params = vehicle::fetch_params(&mut link)?;
+    let p = |n: &str| params.get(n).map(|p| p.value as f64);
+    let layout = motors::layout(p).map_err(anyhow::Error::msg)?;
+    println!("{}: motors in test order (clockwise from the front right)", layout.frame);
+    for pos in &layout.positions {
+        match pos.spin {
+            Some(s) => println!("  {}  {:<12} motor {} should spin {}", pos.letter, pos.name, pos.motor, s.name()),
+            None => println!("  {}", pos.letter),
+        }
+    }
+    println!("\nREMOVE ALL PROPELLERS. Connect the flight battery; the motors really spin.");
+    if !vehicle::confirm("Are the propellers off?", false)? {
+        return Ok(());
+    }
+    let mut seen = Vec::new();
+    for (i, pos) in layout.positions.iter().enumerate() {
+        vehicle::ask(&format!("\nPress Enter to spin test {} ({}).", pos.letter, if pos.name.is_empty() { "?" } else { &pos.name }))?;
+        link.motor_test(i as u8 + 1, throttle, 2.0)?;
+        if !layout.known {
+            continue;
+        }
+        let names: Vec<String> = layout.positions.iter().enumerate().map(|(j, q)| format!("{} = {}", j + 1, q.name)).collect();
+        let spun = loop {
+            let a = vehicle::ask(&format!("Which motor spun? ({}, 0 = nothing)", names.join(", ")))?;
+            match a.parse::<usize>() {
+                Ok(0) => break None,
+                Ok(n) if n <= layout.positions.len() => break Some(n - 1),
+                _ => println!("Type a number."),
+            }
+        };
+        let spin = if spun.is_some() {
+            loop {
+                match vehicle::ask("Direction seen from above? (cw / ccw)")?.as_str() {
+                    "cw" => break Some(Spin::Cw),
+                    "ccw" => break Some(Spin::Ccw),
+                    _ => println!("Type cw or ccw."),
+                }
+            }
+        } else {
+            None
+        };
+        seen.push(Observation { spun, spin });
+    }
+    if !layout.known {
+        println!("\nCompare with the motor order diagram for your frame in the ArduPilot documentation.");
+        return Ok(());
+    }
+    let v = motors::check(p, &seen).map_err(anyhow::Error::msg)?;
+    println!();
+    for it in &v.items {
+        println!("{} {}", if v.ok { "OK " } else { "-> " }, it.title);
+        if !it.detail.is_empty() {
+            println!("    {}", it.detail);
+        }
+    }
+    if !v.changes.is_empty() {
+        let wanted: Vec<vehicle::Wanted> =
+            v.changes.iter().map(|c| vehicle::Wanted { name: c.name.clone(), value: c.value, reason: Some(c.reason.clone()) }).collect();
+        vehicle::apply(&mut link, &params, &wanted, opts)?;
+        if v.needs_reboot {
+            println!("Reboot (`ardutune reboot`) for direction changes to take effect, then test again.");
+        }
+    }
     Ok(())
 }
 

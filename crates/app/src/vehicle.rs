@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, paramdoc, params, setup, tune};
+use ardutune_core::{arming, motors, paramdoc, params, setup, tune};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, Link, Params};
 use serde::{Deserialize, Serialize};
@@ -281,6 +281,7 @@ pub async fn prepare_changes<R: Runtime>(
     label: Option<String>,
     values: Option<Vec<(String, f64)>>,
     tune: Option<TuneInput>,
+    observations: Option<Vec<motors::Observation>>,
 ) -> CmdResult<PlanView> {
     blocking(app, move |app| {
         let state = app.state::<AppState>();
@@ -298,6 +299,10 @@ pub async fn prepare_changes<R: Runtime>(
             _ if source == "initial_tune" => {
                 let t = tune.ok_or("No prop size given.")?;
                 initial(&c.params, &t)?.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect()
+            }
+            _ if source == "motors" => {
+                let seen = observations.ok_or("No motor test results given.")?;
+                motor_verdict(&c.params, &seen)?.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect()
             }
             _ => wanted(app, &c.params, &source, path)?,
         };
@@ -414,6 +419,46 @@ pub async fn initial_tune<R: Runtime>(app: AppHandle<R>, tune: TuneInput) -> Cmd
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
         initial(&connected(&mut slot)?.params, &tune)
+    })
+    .await
+}
+
+fn motor_verdict(live: &Params, seen: &[motors::Observation]) -> CmdResult<motors::Verdict> {
+    motors::check(|n| live.get(n).map(|p| p.value as f64), seen)
+}
+
+/// The frame's motors in test order, with where each should be and which
+/// way it should spin.
+#[tauri::command]
+pub async fn motor_layout<R: Runtime>(app: AppHandle<R>) -> CmdResult<motors::Layout> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let c = connected(&mut slot)?;
+        motors::layout(|n| c.params.get(n).map(|p| p.value as f64))
+    })
+    .await
+}
+
+/// Spins one motor (test letter `seq`, 1 = A) briefly; disarmed only.
+#[tauri::command]
+pub async fn motor_test<R: Runtime>(app: AppHandle<R>, seq: u8, throttle: f32, seconds: f32) -> CmdResult<()> {
+    blocking(app, move |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let r = connected(&mut slot)?.link.motor_test(seq, throttle.clamp(3.0, 20.0), seconds.clamp(0.5, 3.0));
+        check(&mut slot, r)
+    })
+    .await
+}
+
+/// What the motor test results mean, and the changes that fix them.
+#[tauri::command]
+pub async fn motor_check<R: Runtime>(app: AppHandle<R>, observations: Vec<motors::Observation>) -> CmdResult<motors::Verdict> {
+    blocking(app, move |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        motor_verdict(&connected(&mut slot)?.params, &observations)
     })
     .await
 }

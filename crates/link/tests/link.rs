@@ -232,3 +232,21 @@ fn reads_firmware_info_and_reboots_to_bootloader() {
     link.reboot_to_bootloader().unwrap();
     assert_eq!(mock.state().bootloader_reboots, 1);
 }
+
+#[test]
+fn runs_motor_tests_and_explains_refusals() {
+    let mock = MockVehicle::start(MockState::quad(Vec::new())).unwrap();
+    let mut link = connect(&mock);
+    link.motor_test(2, 7.0, 2.0).unwrap();
+    assert_eq!(mock.state().motor_tests, vec![(2, 7.0, 2.0)]);
+
+    mock.state().motor_test_refusal = Some("RC not calibrated".to_owned());
+    let err = link.motor_test(1, 7.0, 2.0).unwrap_err().to_string();
+    assert!(err.contains("Motor Test: RC not calibrated"), "{err}");
+
+    mock.state().motor_test_refusal = None;
+    mock.state().armed = true;
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(matches!(link.motor_test(1, 7.0, 2.0), Err(Error::Armed)));
+    assert_eq!(mock.state().motor_tests.len(), 1);
+}

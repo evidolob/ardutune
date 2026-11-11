@@ -91,6 +91,19 @@ fn analyse_connect_download_write_and_reboot() {
     assert_eq!(plan["rows"].as_array().unwrap().len(), result["changes"].as_array().unwrap().len());
     assert!(call("initial_tune", json!({ "tune": { "prop_in": 0.0 } })).unwrap_err().contains("Prop size"));
 
+    // Motor test: the expected layout, a spin, and a reversed back-left
+    // motor fixed through SERVO_BLH_RVMASK.
+    let layout = call("motor_layout", json!({})).unwrap();
+    assert_eq!(layout["positions"][0]["name"], "front right", "{layout}");
+    call("motor_test", json!({ "seq": 1, "throttle": 7.0, "seconds": 0.5 })).unwrap();
+    assert_eq!(mock.state().motor_tests, vec![(1, 7.0, 0.5)]);
+    let seen = json!([{ "spun": 0, "spin": "ccw" }, { "spun": 1, "spin": "cw" }, { "spun": 2, "spin": "cw" }, { "spun": 3, "spin": "cw" }]);
+    let verdict = call("motor_check", json!({ "observations": seen })).unwrap();
+    assert_eq!(verdict["ok"], json!(false));
+    assert_eq!(verdict["changes"][0]["name"], "SERVO_BLH_RVMASK", "{verdict}");
+    let plan = call("prepare_changes", json!({ "source": "motors", "label": "writing motor fixes", "observations": seen })).unwrap();
+    assert_eq!(plan["rows"][0]["value"], json!(4.0), "{plan}");
+
     // The full parameter list: values, defaults, docs; edits are planned
     // with warnings for suspicious values, then written like anything else.
     let table = call("param_table", json!({})).unwrap();

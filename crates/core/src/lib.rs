@@ -5,6 +5,7 @@ pub mod dataflash;
 pub mod diagnose;
 pub mod filters;
 pub mod log;
+pub mod motors;
 pub mod noise;
 pub mod paramdoc;
 pub mod params;

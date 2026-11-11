@@ -54,6 +54,10 @@ pub struct MockState {
     pub board_name: String,
     /// Reboots that asked to stay in the bootloader.
     pub bootloader_reboots: usize,
+    /// Motor tests run: (test letter number, throttle %, seconds).
+    pub motor_tests: Vec<(u8, f32, f32)>,
+    /// When set, motor tests are refused with this "Motor Test: …" reason.
+    pub motor_test_refusal: Option<String>,
 }
 
 impl MockState {
@@ -118,6 +122,13 @@ impl MockState {
         for (n, v, t) in base {
             params.insert(n.to_owned(), (v, t));
         }
+        // A BetaFlight X quad with DShot600, motors 1-4 on outputs 1-4.
+        for (n, v) in [("FRAME_CLASS", 1.0), ("FRAME_TYPE", 18.0), ("MOT_PWM_TYPE", 6.0), ("SERVO_BLH_RVMASK", 0.0)] {
+            params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_INT8));
+        }
+        for o in 1..=4 {
+            params.insert(format!("SERVO{o}_FUNCTION"), (32.0 + o as f32, MAV_PARAM_TYPE_INT16));
+        }
         for i in 0..300 {
             params.insert(format!("ZZ_FILL_{i:03}"), (i as f32, MAV_PARAM_TYPE_REAL32));
         }
@@ -138,6 +149,8 @@ impl MockState {
             board_id: 1048,
             board_name: "KakuteH7-bdshot".to_owned(),
             bootloader_reboots: 0,
+            motor_tests: Vec::new(),
+            motor_test_refusal: None,
             drop_log_chunk_every: None,
             drop_param_indices: BTreeSet::new(),
             reboots: 0,
@@ -400,6 +413,23 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL => {
             vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })]
+        }
+        MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_MOTOR_TEST => {
+            // Like ArduCopter, explain a refusal before acknowledging it.
+            let refusal = if st.armed { Some("vehicle is armed".to_owned()) } else { st.motor_test_refusal.clone() };
+            let mut out = Vec::new();
+            let result = match refusal {
+                Some(why) => {
+                    out.extend(status_texts(&format!("Motor Test: {why}")));
+                    MavResult::MAV_RESULT_FAILED
+                }
+                None => {
+                    st.motor_tests.push((c.param1 as u8, c.param3, c.param4));
+                    MavResult::MAV_RESULT_ACCEPTED
+                }
+            };
+            out.push(MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result }));
+            out
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN => {
             // Like ArduPilot, refuse to reboot while armed.

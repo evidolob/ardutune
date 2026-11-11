@@ -36,6 +36,31 @@
     { name: "ATC_ACC_R_MAX", current: 1100, value: 1686, reason: 'Acceleration limit for 5" props (1686 deg/s²); AutoTune refines it' },
     { name: "ACRO_Y_RATE", current: 202.5, value: 157.5, reason: "Acro yaw rate to match the yaw acceleration limit" },
   ];
+  // BetaFlight X, as on the KakuteH7.
+  const motorLayout = {
+    frame: "Quad BetaFlight X",
+    known: true,
+    dshot: true,
+    positions: [
+      { letter: "A", motor: 2, name: "front right", angle: 45, spin: "ccw", output: 2 },
+      { letter: "B", motor: 1, name: "back right", angle: 135, spin: "cw", output: 1 },
+      { letter: "C", motor: 3, name: "back left", angle: -135, spin: "ccw", output: 3 },
+      { letter: "D", motor: 4, name: "front left", angle: -45, spin: "cw", output: 4 },
+    ],
+  };
+  // Only direction mistakes are simulated.
+  const motorVerdict = (seen) => {
+    const wrong = seen.map((o, i) => [o, i]).filter(([o, i]) => o.spun === i && o.spin !== motorLayout.positions[i].spin);
+    if (!wrong.length)
+      return { ok: true, needs_reboot: false, changes: [], items: [{ status: "pass", title: "Every motor is in the right place and spins the right way", detail: "Fit the propellers to match." }] };
+    const mask = wrong.reduce((m, [, i]) => m | (1 << (motorLayout.positions[i].output - 1)), 0);
+    return {
+      ok: false,
+      needs_reboot: true,
+      items: wrong.map(([o, i]) => ({ status: "fail", title: `The ${motorLayout.positions[i].name} motor spins the wrong way`, detail: "Reverse it in software (SERVO_BLH_RVMASK), or swap any two of its three motor wires." })),
+      changes: [{ name: "SERVO_BLH_RVMASK", current: 0, value: mask, reason: "Reverse the motors (takes effect after a reboot)" }],
+    };
+  };
   const commands = {
     pick_file: async () => "/Users/pilot/logs/flight.bin",
     open_log: () => fixture("overview"),
@@ -71,12 +96,13 @@
       await progress("Downloading log", 89_600_000);
       return `/Users/pilot/Documents/ArduTune/logs/log_${id}.bin`;
     },
-    prepare_changes: async ({ source, values }) => {
+    prepare_changes: async ({ source, values, observations }) => {
       if (source === "edits") return { rows: values.map(([name, value]) => ({ name, current: 0, value, reason: null })), unchanged: [], unknown: [], skipped: [], armed: false };
       if (source.startsWith("setup:")) {
         const step = (await fixture("setup")).steps.find((x) => x.id === source.slice(6));
         return { rows: step.changes.map((c) => ({ ...c, current: c.current ?? 0 })), unchanged: [], unknown: [], skipped: [], armed: false };
       }
+      if (source === "motors") return { rows: motorVerdict(observations).changes, unchanged: [], unknown: [], skipped: [], armed: false };
       if (source === "initial_tune") return { rows: tuneChanges, unchanged: [], unknown: [], skipped: [], armed: false };
       if (source === "file")
         return {
@@ -151,6 +177,9 @@
       await sleep(400);
       return fixture("params");
     },
+    motor_layout: async () => motorLayout,
+    motor_test: async () => sleep(200),
+    motor_check: async ({ observations }) => motorVerdict(observations),
     vehicle_pack: async () => ({ cells: 8, chemistry: "li_ion", from_vehicle: true }),
     initial_tune: async ({ tune }) => {
       await sleep(200);

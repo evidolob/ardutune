@@ -738,3 +738,99 @@ table.ptable tr.editor td {
 .form input[type="text"] {
   min-width: 0;
 }
+
+.motors {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .motors {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.quad {
+  width: 220px;
+  height: 230px;
+}
+
+.quad .arm {
+  stroke: var(--border);
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+
+.quad .prop {
+  fill: var(--panel);
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+
+.quad .prop.spinning {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.quad .body {
+  fill: var(--border);
+}
+
+.quad .nose {
+  fill: var(--muted);
+}
+
+.quad text {
+  text-anchor: middle;
+  fill: var(--text);
+}
+
+.quad .letter {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.quad .sub {
+  font-size: 11px;
+  fill: var(--muted);
+}
+
+.mrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.mrow .btn {
+  min-width: 92px;
+}
+
+.mwhat {
+  flex: 1 1 180px;
+}
+
+.mseen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.form-inline {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.banner label.check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  font-weight: 600;
+}

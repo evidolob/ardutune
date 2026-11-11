@@ -14,6 +14,7 @@ const LOG_VIEWS = [
 const VEHICLE_VIEWS = [
   ["connection", "Connection"],
   ["setup", "Setup guide"],
+  ["motors", "Motor test"],
   ["tune", "Initial tune"],
   ["prearm", "Pre-arm check"],
   ["allparams", "Parameters"],
@@ -37,6 +38,7 @@ const state = {
   backups: null, // parameter backups on this computer
   arming: null, // latest pre-arm check report
   setup: null, // latest setup guide
+  motors: { layout: null, propsOff: false, throttle: 7, seen: [], verdict: null, spinning: null }, // motor test
   tune: { prop: "", cells: null, chemistry: null, pack: null, result: null }, // initial tune inputs and result
   ptable: null, // full parameter list from the vehicle
   pfilter: { text: "", changed: false, standard: false, group: "" },
@@ -108,6 +110,7 @@ function go(view) {
   if (view === "params") refreshBackups();
   if (view === "prearm" && state.vehicle && !state.arming && !state.vehicleBusy) armingCheck();
   if (view === "setup" && state.vehicle && !state.setup && !state.vehicleBusy) setupGuide();
+  if (view === "motors" && state.vehicle && !state.motors.layout && !state.vehicleBusy) loadMotors();
   if (view === "tune" && state.vehicle && !state.tune.pack && !state.vehicleBusy) loadPack();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
   if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
@@ -125,7 +128,7 @@ async function connect() {
   set({ connecting: true });
   try {
     const vehicle = await invoke("connect", { address: state.address });
-    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, tune: { ...state.tune, pack: null, result: null, cells: null, chemistry: null }, ptable: null, staged: {}, popen: null, fw: null, releases: null });
+    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, motors: { ...state.motors, layout: null, seen: [], verdict: null, propsOff: false }, tune: { ...state.tune, pack: null, result: null, cells: null, chemistry: null }, ptable: null, staged: {}, popen: null, fw: null, releases: null });
     toast(`Connected: ${vehicle.kind}, ${vehicle.params} parameters read.`, "info");
   } catch (e) {
     set({ connecting: false });
@@ -211,6 +214,45 @@ async function armingCheck() {
 async function setupGuide() {
   const guide = await vehicleTask("Checking the setup…", () => invoke("setup_guide"));
   if (guide) set({ setup: guide });
+}
+
+async function loadMotors() {
+  try {
+    const layout = await invoke("motor_layout");
+    set({ motors: { ...state.motors, layout, seen: layout.positions.map(() => ({ spun: null, spin: null })), verdict: null } });
+  } catch (e) {
+    set({ motors: { ...state.motors, layout: { error: String(e) } } });
+  }
+}
+
+const MOTOR_SECONDS = 2;
+
+async function spinMotor(i) {
+  const m = state.motors;
+  if (!m.propsOff) return toast("Confirm the propellers are off first.");
+  set({ motors: { ...m, spinning: i, verdict: null } });
+  try {
+    await invoke("motor_test", { seq: i + 1, throttle: m.throttle, seconds: MOTOR_SECONDS });
+    await new Promise((r) => setTimeout(r, MOTOR_SECONDS * 1000));
+  } catch (e) {
+    toast(e);
+  } finally {
+    set({ motors: { ...state.motors, spinning: null } });
+  }
+}
+
+function observations() {
+  return state.motors.seen.map((o) => ({ spun: o.spun === "none" ? null : o.spun, spin: o.spin }));
+}
+
+async function checkMotors() {
+  const verdict = await vehicleTask("Checking…", () => invoke("motor_check", { observations: observations() }));
+  if (verdict) set({ motors: { ...state.motors, verdict } });
+}
+
+function setSeen(i, patch) {
+  const seen = state.motors.seen.map((o, j) => (j === i ? { ...o, ...patch } : o));
+  set({ motors: { ...state.motors, seen, verdict: null } });
 }
 
 async function loadPack() {
@@ -355,6 +397,10 @@ async function confirmWrite(backup) {
     if (state.view === "allparams") loadParams();
     if (state.view === "setup") setupGuide();
     if (state.view === "tune") set({ tune: { ...state.tune, result: null } });
+    if (state.view === "motors") {
+      set({ motors: { ...state.motors, layout: null } });
+      loadMotors();
+    }
     if (state.view === "params") refreshBackups();
   } catch (e) {
     set({ modal: { ...m, stage: "confirm" } });
@@ -439,6 +485,9 @@ const actions = {
   armingCheck,
   setupGuide,
   calculateTune,
+  spinMotor: (d) => spinMotor(Number(d.index)),
+  checkMotors,
+  writeMotors: () => writeChanges("motors", "motor order and direction fixes", null, { observations: observations() }),
   writeTune: () => writeChanges("initial_tune", `initial tune for ${state.tune.result.prop_in}" props`, null, { tune: tuneInput() }),
   loadParams,
   loadFirmware,
@@ -486,6 +535,10 @@ document.addEventListener("change", (e) => {
   const t = e.target;
   if (t.id === "fwbackup" && state.modal) state.modal.backup = t.checked;
   if (t.name === "port") set({ address: t.value });
+  if (t.id === "propsOff") set({ motors: { ...state.motors, propsOff: t.checked } });
+  if (t.id === "mthrottle") set({ motors: { ...state.motors, throttle: Number(t.value) } });
+  if (t.dataset.mspun !== undefined) setSeen(Number(t.dataset.mspun), { spun: t.value === "" ? null : t.value === "none" ? "none" : Number(t.value) });
+  if (t.dataset.mspin !== undefined) setSeen(Number(t.dataset.mspin), { spin: t.value || null });
   if (t.id === "tcells") set({ tune: { ...state.tune, cells: Number(t.value), result: null } });
   if (t.id === "tchem") set({ tune: { ...state.tune, chemistry: t.value, result: null } });
   const m = state.modal;
@@ -1097,6 +1150,92 @@ function setupView() {
     ${again}`;
 }
 
+const SPIN = { cw: "clockwise ↻", ccw: "counter-clockwise ↺" };
+
+/** Top view of the expected layout: nose up, each motor with its test letter, number and direction. */
+function motorDiagram(l, spinning) {
+  const c = 120;
+  const at = (p) => {
+    const a = (p.angle * Math.PI) / 180;
+    return [c + 74 * Math.sin(a), c + 10 - 74 * Math.cos(a)];
+  };
+  const arms = l.positions.map((p) => at(p)).map(([x, y]) => `<line x1="${c}" y1="${c + 10}" x2="${x}" y2="${y}" class="arm"/>`);
+  const motors = l.positions.map((p, i) => {
+    const [x, y] = at(p);
+    return `<circle cx="${x}" cy="${y}" r="29" class="prop ${spinning === i ? "spinning" : ""}"/>
+        <text x="${x}" y="${y - 3}" class="letter">${esc(p.letter)}</text>
+        <text x="${x}" y="${y + 14}" class="sub">M${p.motor} ${p.spin === "cw" ? "↻" : "↺"}</text>`;
+  });
+  return `<svg viewBox="0 0 240 250" class="quad" role="img" aria-label="Expected motor layout, seen from above">
+    <text x="${c}" y="12" class="sub">FRONT</text>
+    ${arms.join("")}
+    <rect x="${c - 18}" y="${c - 8}" width="36" height="36" rx="7" class="body"/>
+    <path d="M${c - 8} ${c + 4} L${c} ${c - 6} L${c + 8} ${c + 4} Z" class="nose"/>
+    ${motors.join("")}
+  </svg>`;
+}
+
+function motorsView() {
+  const head = `<h1>Motor test</h1><p class="lead">Checks every motor is wired to the right output and spins the right way. ArduTune spins one motor at a time; you say which one turned and in which direction, and it works out the fix.</p>`;
+  if (!state.vehicle) return head + notConnected("test its motors");
+  const m = state.motors;
+  const l = m.layout;
+  if (!l) return head + busy("Reading the frame layout…");
+  if (l.error) return head + `<div class="banner warn">${esc(l.error)}</div>`;
+  const off = !m.propsOff || state.vehicleBusy || m.spinning !== null || state.vehicle.armed;
+  const safety = `<div class="banner fail"><b>Remove all propellers.</b> The motors really spin. Connect the flight battery (ESCs need it) and keep clear of the motors.
+      <label class="check"><input type="checkbox" id="propsOff" ${m.propsOff ? "checked" : ""}> The propellers are off</label></div>`;
+  const throttle = `<label>Throttle <select id="mthrottle">${[5, 7, 10, 15].map((t) => `<option value="${t}" ${t === m.throttle ? "selected" : ""}>${t}%</option>`).join("")}</select></label>
+    <span class="muted">for ${MOTOR_SECONDS} s. Raise it if a motor only twitches.</span>`;
+  const options = (i) =>
+    `<option value="" ${m.seen[i].spun === null ? "selected" : ""}>Which motor spun?</option>${l.positions
+      .map((p, j) => `<option value="${j}" ${m.seen[i].spun === j ? "selected" : ""}>${esc(p.name)}</option>`)
+      .join("")}<option value="none" ${m.seen[i].spun === "none" ? "selected" : ""}>Nothing spun</option>`;
+  const dirs = (i) =>
+    `<option value="" ${!m.seen[i].spin ? "selected" : ""}>Direction?</option>${Object.entries(SPIN)
+      .map(([v, label]) => `<option value="${v}" ${m.seen[i].spin === v ? "selected" : ""}>${label}</option>`)
+      .join("")}`;
+  const rows = l.positions
+    .map(
+      (p, i) => `<div class="mrow">
+        <button class="btn ${m.spinning === i ? "primary" : ""}" data-action="spinMotor" data-index="${i}" ${off ? "disabled" : ""}>${m.spinning === i ? "Spinning…" : `Spin ${esc(p.letter)}`}</button>
+        <div class="mwhat">${l.known ? `<b>${esc(p.name)}</b>, ${SPIN[p.spin]}<div class="muted">motor ${p.motor}${p.output ? ` on output ${p.output}` : ", no output"}</div>` : `<span class="muted">test ${esc(p.letter)}</span>`}</div>
+        ${l.known ? `<div class="mseen"><select data-mspun="${i}">${options(i)}</select><select data-mspin="${i}" ${m.seen[i].spun === "none" ? "disabled" : ""}>${dirs(i)}</select></div>` : ""}
+      </div>`,
+    )
+    .join("");
+  const complete = m.seen.every((o) => o.spun !== null && (o.spun === "none" || o.spin));
+  const v = m.verdict;
+  const verdict = v
+    ? `<div class="card"><h2>Result ${v.ok ? chip("pass", "OK") : chip("fail", "fix")}</h2>
+        <ul class="checks">${v.items
+          .map((it) => `<li><div>${chip(it.status)}</div><div><div class="title">${esc(it.title)}</div>${it.detail ? `<div class="detail">${esc(it.detail)}</div>` : ""}</div></li>`)
+          .join("")}</ul>
+        ${
+          v.changes.length
+            ? `${changesTable(v.changes, true)}
+              ${v.needs_reboot ? `<p class="muted">Motor direction changes take effect after a reboot (Connection → Reboot). Then test again.</p>` : `<p class="muted">Then test again.</p>`}
+              <div class="actions"><button class="btn primary" data-action="writeMotors" ${state.vehicleBusy ? "disabled" : ""}>Write to vehicle…</button></div>`
+            : ""
+        }</div>`
+    : "";
+  return `${head}${safety}
+    <div class="card">
+      <h2>${esc(l.frame)}</h2>
+      ${l.known ? "" : `<p class="muted">ArduTune knows the expected layout for quads only. Tests still go clockwise from the front: compare with the motor order diagram for your frame in the ArduPilot documentation.</p>`}
+      <div class="motors">
+        ${l.known ? motorDiagram(l, m.spinning) : ""}
+        <div>
+          <div class="form-inline">${throttle}</div>
+          <div class="mrows">${rows}</div>
+          ${l.known ? `<p class="muted">Watch the motor bell from above; a strip of tape on it makes the direction easy to see.</p>
+            <div class="actions"><button class="btn primary" data-action="checkMotors" ${complete && !state.vehicleBusy ? "" : "disabled"}>Check the results</button></div>` : ""}
+        </div>
+      </div>
+    </div>
+    ${verdict}`;
+}
+
 const CHEMISTRIES = [
   ["li_po", "LiPo (4.2 V full)"],
   ["li_po_hv", "LiPo HV (4.35 V full)"],
@@ -1386,6 +1525,8 @@ function content() {
       return setupView();
     case "tune":
       return tuneView();
+    case "motors":
+      return motorsView();
     case "firmware":
       return firmwareView();
     case "allparams":

@@ -496,6 +496,46 @@ impl Link {
         }
     }
 
+    /// Spins one motor by test letter (`seq` 1 = A: front right, then
+    /// clockwise) at `throttle_pct` for `seconds`, while disarmed. Returns
+    /// once the vehicle accepts; a refusal carries what the vehicle said.
+    pub fn motor_test(&mut self, seq: u8, throttle_pct: f32, seconds: f32) -> Result<()> {
+        if self.refresh_armed()? {
+            return Err(Error::Armed);
+        }
+        let cmd = MavCmd::MAV_CMD_DO_MOTOR_TEST;
+        // Throttle type 0 is percent; motor count 0 tests just this one.
+        self.command(cmd, [f32::from(seq), 0.0, throttle_pct, seconds, 0.0, 0.0, 0.0])?;
+        let mut said = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut result = None;
+        while let Some(msg) = self.next(deadline)? {
+            match msg {
+                MavMessage::STATUSTEXT(t) => push_text(&mut said, t.text.to_str().unwrap_or_default().to_owned()),
+                MavMessage::COMMAND_ACK(a) if a.command == cmd => {
+                    result = Some(a.result);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        match result {
+            Some(MavResult::MAV_RESULT_ACCEPTED) => Ok(()),
+            Some(r) => {
+                // The reason follows the refusal closely, when it isn't before it.
+                let more = Instant::now() + Duration::from_millis(300);
+                while let Some(msg) = self.next(more)? {
+                    if let MavMessage::STATUSTEXT(t) = msg {
+                        push_text(&mut said, t.text.to_str().unwrap_or_default().to_owned());
+                    }
+                }
+                let why = if said.is_empty() { format!("{r:?}") } else { said.join("; ") };
+                Err(Error::Command(format!("motor test refused: {why}")))
+            }
+            None => Err(Error::Timeout("waiting for the motor test to be acknowledged".to_owned())),
+        }
+    }
+
     /// Lists the logs stored on the flight controller, oldest first.
     pub fn list_logs(&mut self) -> Result<Vec<LogEntry>> {
         for _ in 0..3 {
