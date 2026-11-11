@@ -207,6 +207,12 @@ complete replacement for a ground station's parameter screen.
   marked "reboot required" say so.
 - Compare with a backup or `.param` file, and with defaults.
 
+Done: Parameters screen and `ardutune params --changed`. Values and defaults
+from `@PARAM/param.pck` (0.4 s for 1273 parameters on a KakuteH7), Copter
+metadata bundled (latest master, 162 kB compressed). Not yet: metadata per
+firmware version (renamed parameters show no description), comparing with
+a backup inside the list.
+
 ### Firmware version and upgrade
 
 - Show what the vehicle runs: vehicle type, version and git hash, board

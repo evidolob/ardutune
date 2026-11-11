@@ -1,9 +1,10 @@
 //! Vehicle commands: connect, read parameters, download logs and write
 //! parameter changes (backup, write, verify, reboot).
 
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, params, setup};
+use ardutune_core::{arming, paramdoc, params, setup};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, Link, Params};
 use serde::Serialize;
@@ -19,6 +20,9 @@ pub struct Connected {
     link: Link,
     params: Params,
     address: String,
+    /// Default values, once read from the vehicle (`None` until then, or
+    /// when the firmware doesn't offer them).
+    defaults: Option<HashMap<String, f32>>,
 }
 
 /// Changes shown to the user and waiting for confirmation. They are planned
@@ -129,7 +133,7 @@ pub async fn connect<R: Runtime>(app: AppHandle<R>, address: String) -> CmdResul
         let mut link = Link::connect(&address, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
         let mut progress = Reporter::new(app, "Reading parameters");
         let params = link.fetch_params(&mut |got, total| progress.update(got, total)).map_err(|e| e.to_string())?;
-        let c = Connected { link, params, address };
+        let c = Connected { link, params, address, defaults: None };
         let info = c.info();
         *slot = Some(c);
         Ok(info)
@@ -275,12 +279,23 @@ pub async fn prepare_changes<R: Runtime>(
     source: String,
     path: Option<String>,
     label: Option<String>,
+    values: Option<Vec<(String, f64)>>,
 ) -> CmdResult<PlanView> {
     blocking(app, move |app| {
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
         let c = connected(&mut slot)?;
-        let mut wanted = wanted(app, &c.params, &source, path)?;
+        let mut wanted = match values {
+            // Edits from the parameter list, with anything worth a second look.
+            Some(values) if source == "edits" => values
+                .into_iter()
+                .map(|(n, v)| {
+                    let warnings = paramdoc::warnings(&n, v);
+                    (n, v, (!warnings.is_empty()).then(|| warnings.join("; ")))
+                })
+                .collect(),
+            _ => wanted(app, &c.params, &source, path)?,
+        };
         let mut skipped = Vec::new();
         if source == "file" {
             wanted.retain(|(n, ..)| {
@@ -367,10 +382,10 @@ pub struct ApplyView {
     results: Vec<WriteResult>,
 }
 
-/// Backs up all parameters, then writes and verifies the prepared changes,
-/// or only those named in `names` (the ones the user kept ticked).
+/// Writes and verifies the prepared changes, or only those named in `names`
+/// (the ones the user kept ticked); with `backup`, saves all parameters first.
 #[tauri::command]
-pub async fn apply_changes<R: Runtime>(app: AppHandle<R>, names: Option<Vec<String>>) -> CmdResult<ApplyView> {
+pub async fn apply_changes<R: Runtime>(app: AppHandle<R>, names: Option<Vec<String>>, backup: Option<bool>) -> CmdResult<ApplyView> {
     blocking(app, move |app| {
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
@@ -383,7 +398,10 @@ pub async fn apply_changes<R: Runtime>(app: AppHandle<R>, names: Option<Vec<Stri
         if changes.is_empty() {
             return Ok(ApplyView { backup: None, results: vec![] });
         }
-        let backup = backups::save(app, c.system_id(), &c.params, &format!("Before {}", pending.label))?;
+        let backup = match backup {
+            Some(true) => Some(backups::save(app, c.system_id(), &c.params, &format!("Before {}", pending.label))?),
+            _ => None,
+        };
 
         let mut progress = Reporter::new(app, "Writing parameters");
         let mut written = 0;
@@ -405,7 +423,7 @@ pub async fn apply_changes<R: Runtime>(app: AppHandle<R>, names: Option<Vec<Stri
                 Err(e) => results.push(WriteResult { name: ch.name.clone(), value: None, error: Some(e.to_string()) }),
             }
         }
-        Ok(ApplyView { backup: Some(backup.display().to_string()), results })
+        Ok(ApplyView { backup: backup.map(|b| b.display().to_string()), results })
     })
     .await
 }
@@ -437,6 +455,66 @@ pub async fn setup_guide<R: Runtime>(app: AppHandle<R>) -> CmdResult<setup::Guid
         let status = check(&mut slot, r)?;
         let c = connected(&mut slot)?;
         Ok(setup::assess(|n| c.params.get(n).map(|p| p.value as f64), &status.setup_live()))
+    })
+    .await
+}
+
+#[derive(Serialize)]
+pub struct ParamRow {
+    name: String,
+    value: f64,
+    default: Option<f64>,
+    /// Integer parameters take whole numbers only.
+    integer: bool,
+    doc: Option<&'static paramdoc::Doc>,
+}
+
+#[derive(Serialize)]
+pub struct ParamTable {
+    rows: Vec<ParamRow>,
+    /// Whether defaults came from the vehicle.
+    has_defaults: bool,
+    docs_source: String,
+    docs_fetched: String,
+}
+
+/// Every parameter with its current value, default and documentation. The
+/// values and defaults are read fresh from the vehicle's packed parameter
+/// file (fast), falling back to the values read on connect.
+#[tauri::command]
+pub async fn param_table<R: Runtime>(app: AppHandle<R>) -> CmdResult<ParamTable> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let r = connected(&mut slot)?.link.param_defaults();
+        let packed = check(&mut slot, r)?;
+        let c = connected(&mut slot)?;
+        if let Some(packed) = packed {
+            for p in &packed {
+                if let Some(param) = c.params.get_mut(&p.name) {
+                    param.value = p.value;
+                }
+            }
+            c.defaults = Some(packed.into_iter().filter_map(|p| Some((p.name, p.default?))).collect());
+        }
+        let rows = c
+            .params
+            .iter()
+            .map(|(name, p)| ParamRow {
+                name: name.clone(),
+                value: p.value as f64,
+                default: c.defaults.as_ref().and_then(|d| d.get(name)).map(|v| *v as f64),
+                integer: p.is_integer(),
+                doc: paramdoc::doc(name),
+            })
+            .collect();
+        let docs = paramdoc::docs();
+        Ok(ParamTable {
+            rows,
+            has_defaults: c.defaults.is_some(),
+            docs_source: docs.source.clone(),
+            docs_fetched: docs.fetched.clone(),
+        })
     })
     .await
 }

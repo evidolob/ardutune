@@ -8,3 +8,5 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 rustfft = "6"
+flate2 = "1"
+serde_json.workspace = true

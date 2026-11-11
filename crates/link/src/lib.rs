@@ -869,8 +869,12 @@ impl Link {
 
     /// Sends an FTP request and waits for its reply, resending on silence.
     fn ftp(&mut self, opcode: u8, offset: u32, data: &[u8]) -> Result<ftp::Packet> {
+        self.ftp_in_session(0, opcode, offset, data)
+    }
+
+    fn ftp_in_session(&mut self, session: u8, opcode: u8, offset: u32, data: &[u8]) -> Result<ftp::Packet> {
         self.ftp_seq = self.ftp_seq.wrapping_add(1);
-        let req = ftp::Packet::new(self.ftp_seq, opcode, offset, data);
+        let req = ftp::Packet { session, ..ftp::Packet::new(self.ftp_seq, opcode, offset, data) };
         let expected = req.seq.wrapping_add(1);
         for _ in 0..3 {
             self.send(&MavMessage::FILE_TRANSFER_PROTOCOL(FILE_TRANSFER_PROTOCOL_DATA {
@@ -891,6 +895,51 @@ impl Link {
             }
         }
         Err(Error::Timeout("waiting for a file transfer reply (does this firmware support MAVLink FTP?)".to_owned()))
+    }
+}
+
+impl Link {
+    /// Reads a whole file from the vehicle over MAVLink FTP.
+    /// `progress(bytes)` after each piece.
+    pub fn read_file(&mut self, path: &str, progress: &mut dyn FnMut(usize)) -> Result<Vec<u8>> {
+        // Close a session a previous program may have left open.
+        self.ftp(ftp::RESET_SESSIONS, 0, &[])?;
+        let open = self.ftp(ftp::OPEN_FILE_RO, 0, path.as_bytes())?;
+        if open.opcode != ftp::ACK {
+            return Err(Error::Ftp(format!("opening {path} ({})", nak_reason(&open))));
+        }
+        let session = open.session;
+        let mut data = Vec::new();
+        let result = loop {
+            // The request's size field asks for that many bytes.
+            let reply = self.ftp_in_session(session, ftp::READ_FILE, data.len() as u32, &[0; ftp::DATA_MAX])?;
+            if reply.opcode == ftp::NAK {
+                if reply.data.first() == Some(&ftp::ERR_EOF) {
+                    break Ok(());
+                }
+                break Err(Error::Ftp(format!("reading {path} ({})", nak_reason(&reply))));
+            }
+            if reply.offset as usize != data.len() {
+                continue;
+            }
+            data.extend_from_slice(&reply.data);
+            progress(data.len());
+            if reply.data.len() < ftp::DATA_MAX {
+                break Ok(());
+            }
+        };
+        let _ = self.ftp_in_session(session, ftp::TERMINATE_SESSION, 0, &[]);
+        result.map(|_| data)
+    }
+
+    /// Every parameter with its default value, from ArduPilot's packed
+    /// parameter file (4.1+). `None` when the firmware doesn't offer it.
+    pub fn param_defaults(&mut self) -> Result<Option<Vec<ftp::PackedParam>>> {
+        match self.read_file("@PARAM/param.pck?withdefaults=1", &mut |_| {}) {
+            Ok(bytes) => ftp::parse_param_pck(&bytes).map(Some).map_err(Error::Ftp),
+            Err(Error::Ftp(_)) | Err(Error::Timeout(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 

@@ -125,8 +125,10 @@ dependencies = [
 name = "ardutune-core"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "rustfft",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

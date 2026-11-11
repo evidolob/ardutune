@@ -573,6 +573,7 @@ label.port {
 
 .progress {
   position: fixed;
+  z-index: 90;
   left: 236px;
   right: 16px;
   bottom: 16px;
@@ -601,6 +602,7 @@ label.port {
 .modal-back {
   position: fixed;
   inset: 0;
+  z-index: 100;
   background: rgb(0 0 0 / 0.4);
   display: flex;
   align-items: flex-start;
@@ -619,6 +621,7 @@ label.port {
 
 .toast {
   position: fixed;
+  z-index: 110;
   right: 16px;
   top: 64px;
   max-width: 440px;
@@ -657,4 +660,65 @@ button.btn.destroy {
 
 input[type="checkbox"] {
   accent-color: var(--accent);
+}
+
+.ptools {
+  position: sticky;
+  top: -24px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.ptools #psearch {
+  flex: 1;
+  min-width: 320px;
+}
+
+select {
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  max-width: 100%;
+}
+
+table.ptable tr.prow {
+  cursor: pointer;
+}
+
+table.ptable tr.prow:hover td,
+table.ptable tr.prow.open td {
+  background: var(--code-bg);
+}
+
+table.ptable tr.editor td {
+  background: var(--code-bg);
+  padding: 10px 14px 14px;
+}
+
+.bits {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 4px 16px;
+}
+
+.staged {
+  flex-basis: 100%;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.staged .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }

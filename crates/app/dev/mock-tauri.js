@@ -65,7 +65,8 @@
       await progress("Downloading log", 89_600_000);
       return `/Users/pilot/Documents/ArduTune/logs/log_${id}.bin`;
     },
-    prepare_changes: async ({ source }) => {
+    prepare_changes: async ({ source, values }) => {
+      if (source === "edits") return { rows: values.map(([name, value]) => ({ name, current: 0, value, reason: null })), unchanged: [], unknown: [], skipped: [], armed: false };
       if (source.startsWith("setup:")) {
         const step = (await fixture("setup")).steps.find((x) => x.id === source.slice(6));
         return { rows: step.changes.map((c) => ({ ...c, current: c.current ?? 0 })), unchanged: [], unknown: [], skipped: [], armed: false };
@@ -94,9 +95,9 @@
         armed: false,
       };
     },
-    apply_changes: async () => {
+    apply_changes: async ({ backup }) => {
       await progress("Writing parameters", 4);
-      return { backup: "/Users/pilot/Documents/ArduTune/backups/backup-sys1-20261110-153000.param", results: [{ name: "INS_GYRO_FILTER", value: 60, error: null }] };
+      return { backup: backup ? "/Users/pilot/Documents/ArduTune/backups/backup-sys1-20261110-153000.param" : null, results: [{ name: "INS_GYRO_FILTER", value: 60, error: null }] };
     },
     reboot: async () => (connected = false),
     arming_check: async () => {
@@ -114,6 +115,10 @@
         how_to_arm: ["Arm switch on channel 5: flip it from low to high. It is off now.", "Sticks: throttle down and yaw right for 2 s to arm, yaw left to disarm."],
         messages: ["PreArm: Check mag field (xy diff:117>100)", "PreArm: Logging failed"],
       };
+    },
+    param_table: async () => {
+      await sleep(400);
+      return fixture("params");
     },
     setup_guide: async () => {
       await sleep(800);

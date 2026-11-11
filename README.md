@@ -22,6 +22,14 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   slew limiter, I offset, saturation), cautious bounded gain suggestions, and
   gains from a finished AutoTune that weren't saved; optional SVG plot and
   direct apply.
+- Parameters: every parameter of the connected vehicle with its current
+  value, default (read from the vehicle in under a second over MAVLink FTP)
+  and ArduPilot's description, units, range, named values and bitmask bits;
+  search, filter by group or "changed from default", stage edits (or
+  defaults) and write them through the review/backup/verify flow, with
+  warnings for out-of-range or undocumented values. Descriptions are bundled
+  for offline use; refresh them with `tools/update-param-docs.py`.
+  `ardutune params --changed` lists what differs from the defaults.
 - Setup guide (start of the configuration guide): the live vehicle checked
   step by step (frame and motors, ESC telemetry and RPM, radio, failsafes,
   battery monitor, sensors and calibration, logging for tuning), each with

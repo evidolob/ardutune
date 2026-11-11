@@ -134,6 +134,9 @@ enum Cmd {
     Params {
         #[arg(short, long, value_name = "FILE")]
         out: Option<PathBuf>,
+        /// Instead, list the parameters that differ from their defaults
+        #[arg(long)]
+        changed: bool,
     },
     /// Write parameters from a .param file to the vehicle (also restores backups)
     Apply {
@@ -363,7 +366,22 @@ fn main() -> Result<()> {
             let params = vehicle::fetch_params(&mut link)?;
             println!("{} parameters", params.len());
         }
-        Cmd::Params { out } => {
+        Cmd::Params { changed: true, .. } => {
+            let mut link = vehicle::connect(&cli.conn)?;
+            let start = std::time::Instant::now();
+            let params = link.param_defaults()?.context("this firmware doesn't offer parameter defaults")?;
+            eprintln!("Read {} parameters with defaults in {:.1} s", params.len(), start.elapsed().as_secs_f64());
+            for p in params.iter().filter(|p| p.default.is_some_and(|d| d != p.value)) {
+                let what = ardutune_core::paramdoc::doc(&p.name).map_or("", |d| d.name.as_str());
+                println!(
+                    "{:<18} {:>12}  (default {:>10})  {what}",
+                    p.name,
+                    format_value(p.value as f64),
+                    format_value(p.default.unwrap_or(0.0) as f64)
+                );
+            }
+        }
+        Cmd::Params { out, .. } => {
             let mut link = vehicle::connect(&cli.conn)?;
             let params = vehicle::fetch_params(&mut link)?;
             let path = vehicle::save_params(&link, &params, out.as_deref())?;

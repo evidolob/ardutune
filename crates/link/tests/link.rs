@@ -196,3 +196,18 @@ fn reports_arming_status_and_joins_long_messages() {
     assert_eq!(s.rc.unwrap()[4], 1900);
     assert!(!s.armed);
 }
+
+#[test]
+fn reads_parameter_defaults_over_ftp() {
+    let mut state = MockState::quad(Vec::new());
+    state.defaults.insert("ATC_RAT_RLL_SMAX".into(), 50.0);
+    let total = state.params.len();
+    let mock = MockVehicle::start(state).unwrap();
+    let mut link = connect(&mock);
+    let params = link.param_defaults().unwrap().expect("defaults offered");
+    assert_eq!(params.len(), total);
+    let smax = params.iter().find(|p| p.name == "ATC_RAT_RLL_SMAX").unwrap();
+    assert_eq!((smax.value, smax.default), (0.0, Some(50.0)));
+    let bitmask = params.iter().find(|p| p.name == "LOG_BITMASK").unwrap();
+    assert_eq!(bitmask.value, 176_126.0);
+}

@@ -15,9 +15,12 @@ const VEHICLE_VIEWS = [
   ["connection", "Connection"],
   ["setup", "Setup guide"],
   ["prearm", "Pre-arm check"],
+  ["allparams", "Parameters"],
+  ["params", "Backups"],
   ["vlogs", "Logs on vehicle"],
-  ["params", "Parameters"],
 ];
+/** Rows shown at once in the parameter list; refine the search for more. */
+const PARAM_ROWS = 300;
 
 const state = {
   view: "welcome",
@@ -32,6 +35,10 @@ const state = {
   backups: null, // parameter backups on this computer
   arming: null, // latest pre-arm check report
   setup: null, // latest setup guide
+  ptable: null, // full parameter list from the vehicle
+  pfilter: { text: "", changed: false, standard: false, group: "" },
+  popen: null, // parameter whose editor is open
+  staged: {}, // name -> value waiting to be written
   vehicleBusy: null, // text while a vehicle task runs
   modal: null,
   toast: null,
@@ -96,6 +103,7 @@ function go(view) {
   if (view === "params") refreshBackups();
   if (view === "prearm" && state.vehicle && !state.arming && !state.vehicleBusy) armingCheck();
   if (view === "setup" && state.vehicle && !state.setup && !state.vehicleBusy) setupGuide();
+  if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
 }
 
 async function refreshPorts() {
@@ -110,7 +118,7 @@ async function connect() {
   set({ connecting: true });
   try {
     const vehicle = await invoke("connect", { address: state.address });
-    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null });
+    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, ptable: null, staged: {}, popen: null });
     toast(`Connected: ${vehicle.kind}, ${vehicle.params} parameters read.`, "info");
   } catch (e) {
     set({ connecting: false });
@@ -198,11 +206,48 @@ async function setupGuide() {
   if (guide) set({ setup: guide });
 }
 
+async function loadParams() {
+  const ptable = await vehicleTask("Reading all parameters with their defaults…", () => invoke("param_table"));
+  if (ptable) set({ ptable });
+}
+
+/** The value in the open editor, from its number box, option list or bit boxes. */
+function editorValue() {
+  const bits = [...document.querySelectorAll("[data-pbit]")];
+  if (bits.length) return bits.reduce((v, b) => (b.checked ? v + 2 ** Number(b.dataset.pbit) : v), 0);
+  const raw = document.getElementById("pval")?.value ?? "";
+  return raw.trim() === "" ? NaN : Number(raw);
+}
+
+function stageParam(name, value) {
+  const row = state.ptable?.rows.find((r) => r.name === name);
+  if (!row || !Number.isFinite(value)) return toast("Enter a number.");
+  if (row.integer && !Number.isInteger(value)) return toast(`${name} takes whole numbers only.`);
+  const staged = { ...state.staged };
+  if (value === row.value) delete staged[name];
+  else staged[name] = value;
+  set({ staged });
+}
+
 async function reboot() {
   const ok = await vehicleTask("Rebooting…", () => invoke("reboot").then(() => true));
   if (ok) {
     set({ vehicle: null, vehicleLogs: null, modal: null });
     toast("The flight controller is rebooting. Reconnect in a few seconds.", "info");
+  }
+}
+
+/** Reviews and writes the staged parameter edits. */
+async function writeEdits() {
+  const values = Object.entries(state.staged);
+  if (!values.length) return;
+  set({ modal: { stage: "planning", title: "parameter edits", source: "edits" } });
+  try {
+    const plan = await invoke("prepare_changes", { source: "edits", label: "writing parameter edits", values });
+    set({ modal: { stage: "confirm", title: "parameter edits", source: "edits", plan, selected: new Set(plan.rows.map((r) => r.name)) } });
+  } catch (e) {
+    set({ modal: null });
+    toast(e);
   }
 }
 
@@ -223,12 +268,15 @@ async function writeChanges(source, title, path = null) {
   }
 }
 
-async function confirmWrite() {
+async function confirmWrite(backup) {
   const m = state.modal;
-  set({ modal: { ...m, stage: "writing" } });
+  set({ modal: { ...m, stage: "writing", backup } });
   try {
-    const result = await invoke("apply_changes", { names: [...m.selected] });
-    set({ modal: { ...m, stage: "done", result }, backups: null, setup: state.view === "setup" ? state.setup : null });
+    const result = await invoke("apply_changes", { names: [...m.selected], backup });
+    const staged = { ...state.staged };
+    if (m.source === "edits") result.results.filter((x) => !x.error).forEach((x) => delete staged[x.name]);
+    set({ modal: { ...m, stage: "done", result }, backups: null, setup: state.view === "setup" ? state.setup : null, staged });
+    if (state.view === "allparams") loadParams();
     if (state.view === "setup") setupGuide();
     if (state.view === "params") refreshBackups();
   } catch (e) {
@@ -313,6 +361,17 @@ const actions = {
   confirmDeleteBackup,
   armingCheck,
   setupGuide,
+  loadParams,
+  openParam: (d) => set({ popen: state.popen === d.name ? null : d.name }),
+  stageParam: (d) => stageParam(d.name, editorValue()),
+  defaultParam: (d) => stageParam(d.name, Number(d.value)),
+  unstageParam: (d) => {
+    const staged = { ...state.staged };
+    delete staged[d.name];
+    set({ staged });
+  },
+  discardStaged: () => set({ staged: {} }),
+  writeStaged: () => writeEdits(),
   refreshPorts,
   connect,
   disconnect,
@@ -324,7 +383,8 @@ const actions = {
   askErase,
   confirmDelete,
   write: (d) => writeChanges(d.source, d.title),
-  confirmWrite,
+  confirmWrite: () => confirmWrite(false),
+  backupAndWrite: () => confirmWrite(true),
   closeModal: () => set({ modal: null }),
   closeToast: () => set({ toast: null }),
   retry: (d) => {
@@ -354,6 +414,17 @@ document.addEventListener("change", (e) => {
 
 document.addEventListener("input", (e) => {
   if (e.target.id === "address") state.address = e.target.value;
+  if (e.target.id === "psearch") set({ pfilter: { ...state.pfilter, text: e.target.value }, popen: null });
+});
+
+document.addEventListener("change", (e) => {
+  const f = e.target.dataset.pfilter;
+  if (f === "group") set({ pfilter: { ...state.pfilter, group: e.target.value } });
+  else if (f) set({ pfilter: { ...state.pfilter, [f]: e.target.checked } });
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id === "pval" && state.popen) stageParam(state.popen, editorValue());
 });
 
 // ---------- progress (updated in place: events arrive ten times a second) ----------
@@ -748,8 +819,131 @@ function vehicleLogsView() {
     </div>`;
 }
 
+function paramValueText(row, v) {
+  const named = row.doc?.values?.find(([x]) => x === v);
+  const units = row.doc?.units ? ` ${row.doc.units}` : "";
+  return named && !row.doc?.bits?.length ? `${fmt(v)} <span class="muted">${esc(named[1])}</span>` : `${fmt(v)}${esc(units)}`;
+}
+
+function paramEditor(row) {
+  const d = row.doc;
+  const staged = state.staged[row.name];
+  const v = staged ?? row.value;
+  let input;
+  if (d?.bits?.length) {
+    input = `<div class="bits">${d.bits
+      .map(([b, n]) => `<label><input type="checkbox" data-pbit="${b}" ${Math.floor(v / 2 ** b) % 2 ? "checked" : ""}> ${b}: ${esc(n)}</label>`)
+      .join("")}</div>`;
+  } else if (d?.values?.length) {
+    const known = d.values.some(([x]) => x === v);
+    input = `<select id="pval">${known ? "" : `<option value="${v}" selected>${fmt(v)} (not documented)</option>`}${d.values
+      .map(([x, n]) => `<option value="${x}" ${x === v ? "selected" : ""}>${fmt(x)}: ${esc(n)}</option>`)
+      .join("")}</select>`;
+  } else {
+    input = `<input type="text" id="pval" value="${fmt(v)}" spellcheck="false" inputmode="decimal">${d?.units ? ` <span class="muted">${esc(d.units)}</span>` : ""}`;
+  }
+  const facts = [
+    d?.range ? `Range ${fmt(d.range[0])} to ${fmt(d.range[1])}` : null,
+    d?.step ? `step ${fmt(d.step)}` : null,
+    row.default !== null ? `default ${fmt(row.default)}` : null,
+    row.integer ? "whole numbers" : null,
+    d?.reboot ? "<b>reboot required</b>" : null,
+    d?.readonly ? "<b>read-only</b>" : null,
+  ].filter(Boolean);
+  return `<tr class="editor"><td colspan="4">
+    ${d ? `<div><b>${esc(d.name)}</b></div><p style="margin:4px 0 8px">${esc(d.desc)}</p>` : `<p class="muted">No description in the bundled metadata (the name may differ in this firmware version).</p>`}
+    ${facts.length ? `<div class="muted" style="margin-bottom:8px">${facts.join(" · ")}</div>` : ""}
+    ${input}
+    <div class="actions">
+      <button class="btn primary" data-action="stageParam" data-name="${esc(row.name)}" ${d?.readonly ? "disabled" : ""}>Stage change</button>
+      ${row.default !== null && row.default !== row.value ? `<button class="btn" data-action="defaultParam" data-name="${esc(row.name)}" data-value="${row.default}">Stage default (${fmt(row.default)})</button>` : ""}
+      ${staged !== undefined ? `<button class="btn" data-action="unstageParam" data-name="${esc(row.name)}">Undo</button>` : ""}
+    </div>
+  </td></tr>`;
+}
+
+function allParamsView() {
+  const head = `<h1>Parameters</h1><p class="lead">Every parameter on the vehicle with its default and description. Stage changes, then review and write them together; every value is read back to verify it.</p>`;
+  if (!state.vehicle) return head + notConnected("see and change its parameters");
+  const t = state.ptable;
+  if (!t) return head + (state.vehicleBusy ? busy(state.vehicleBusy) : `<button class="btn primary" data-action="loadParams">Read parameters</button>`);
+  const f = state.pfilter;
+  const words = f.text.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const groups = [...new Set(t.rows.map((r) => r.name.split("_")[0]))].sort();
+  // Best matches first: the name itself, name parts ("rc opt" → RC_OPTIONS),
+  // then the display name, then the description.
+  const score = (r) => {
+    if (!words.length) return 1;
+    const name = r.name.toLowerCase();
+    const parts = name.split("_");
+    const title = (r.doc?.name ?? "").toLowerCase();
+    const desc = (r.doc?.desc ?? "").toLowerCase();
+    if (words.join("_") === name || words.join("") === name.replace(/_/g, "")) return 100;
+    let ordered = 0;
+    let at = 0;
+    for (const w of words) {
+      const i = parts.findIndex((p, k) => k >= at && p.startsWith(w));
+      if (i < 0) break;
+      ordered += 1;
+      at = i + 1;
+    }
+    if (ordered === words.length) return 50 + (parts[0].startsWith(words[0]) ? 10 : 0);
+    if (words.every((w) => name.includes(w))) return 30;
+    if (words.every((w) => title.includes(w) || name.includes(w))) return 20;
+    if (words.every((w) => title.includes(w) || name.includes(w) || desc.includes(w))) return 10;
+    return 0;
+  };
+  const matches = t.rows
+    .filter((r) => {
+      if (f.group && r.name.split("_")[0] !== f.group) return false;
+      if (f.changed && (r.default === null || r.default === r.value)) return false;
+      if (f.standard && r.doc?.advanced) return false;
+      return true;
+    })
+    .map((r) => [score(r), r])
+    .filter(([sc]) => sc > 0)
+    .sort((a, b) => b[0] - a[0] || a[1].name.localeCompare(b[1].name, undefined, { numeric: true }))
+    .map(([, r]) => r);
+  const shown = matches.slice(0, PARAM_ROWS);
+  const staged = Object.entries(state.staged);
+  const rows = shown
+    .map((r) => {
+      const changed = r.default !== null && r.default !== r.value;
+      const s = state.staged[r.name];
+      return `<tr class="prow ${state.popen === r.name ? "open" : ""}" data-action="openParam" data-name="${esc(r.name)}">
+        <td class="mono">${esc(r.name)}${changed ? ` <span class="dot on" title="changed from default"></span>` : ""}</td>
+        <td class="num">${s !== undefined ? `<s class="muted">${fmt(r.value)}</s> <b class="new">${fmt(s)}</b>` : paramValueText(r, r.value)}</td>
+        <td class="num muted">${r.default === null ? "–" : fmt(r.default)}</td>
+        <td>${esc(r.doc?.name ?? "")}</td></tr>${state.popen === r.name ? paramEditor(r) : ""}`;
+    })
+    .join("");
+  const stagedBar = staged.length
+    ? `<div class="staged"><b>${staged.length} staged change${staged.length > 1 ? "s" : ""}</b>
+        <span class="muted">${staged.map(([n, v]) => `${esc(n)} → ${fmt(v)}`).join(", ")}</span>
+        <span style="flex:1"></span>
+        <button class="btn" data-action="discardStaged">Discard</button>
+        <button class="btn primary" data-action="writeStaged">Review and write…</button></div>`
+    : "";
+  return `${head}
+    <div class="card ptools">
+      <input type="text" id="psearch" value="${esc(f.text)}" placeholder="Search names and descriptions, e.g. notch, RC_OPTIONS, failsafe" spellcheck="false" autocomplete="off">
+      <select data-pfilter="group"><option value="">All groups</option>${groups.map((g) => `<option ${g === f.group ? "selected" : ""}>${esc(g)}</option>`).join("")}</select>
+      <label><input type="checkbox" data-pfilter="changed" ${f.changed ? "checked" : ""}> Changed from default</label>
+      <label><input type="checkbox" data-pfilter="standard" ${f.standard ? "checked" : ""}> Hide advanced</label>
+      <button class="btn" data-action="loadParams" ${state.vehicleBusy ? "disabled" : ""}>Reload</button>
+      ${stagedBar}
+    </div>
+    ${state.vehicleBusy ? busy(state.vehicleBusy) : ""}
+    ${t.has_defaults ? "" : `<div class="banner info">This firmware doesn't report default values, so "changed from default" isn't available.</div>`}
+    <div class="card" style="padding:6px 10px">
+      <table class="ptable"><tr><th>Name</th><th class="num">Value</th><th class="num">Default</th><th>What it is</th></tr>${rows}</table>
+      <div class="muted" style="padding:8px">${matches.length > shown.length ? `Showing ${shown.length} of ${matches.length}: refine the search to see the rest.` : `${matches.length} of ${t.rows.length} parameters.`}
+        Descriptions: ArduPilot parameter metadata from ${esc(t.docs_fetched)}.</div>
+    </div>`;
+}
+
 function setupView() {
-  const head = `<h1>Setup guide</h1><p class="lead">Your vehicle's setup checked step by step, from frame to logging, against its live parameters and status. Fix the steps in order; changes are reviewed, backed up and verified before they are written.</p>`;
+  const head = `<h1>Setup guide</h1><p class="lead">Your vehicle's setup checked step by step, from frame to logging, against its live parameters and status. Fix the steps in order; you review every change before it is written, and each value is verified.</p>`;
   if (!state.vehicle) return head + notConnected("check its setup");
   const g = state.setup;
   const again = `<div class="actions"><button class="btn" data-action="setupGuide" ${state.vehicleBusy ? "disabled" : ""}>${g ? "Check again" : "Check the setup"}</button></div>`;
@@ -838,7 +1032,7 @@ function paramsView() {
       : busy("Reading backups…");
   return `
     <h1>Parameters</h1>
-    <p class="lead">Back up all of the vehicle's parameters before you experiment, and put any of them back later. ArduTune also backs up automatically before every write. Backups are kept in Documents/ArduTune/backups.</p>
+    <p class="lead">Back up all of the vehicle's parameters before you experiment, and put any of them back later. When writing changes you can also choose "Back up and write". Backups are kept in Documents/ArduTune/backups.</p>
     ${
       v
         ? `<div class="card"><h2>Back up now</h2>
@@ -855,6 +1049,14 @@ function paramsView() {
       <div class="actions"><button class="btn" data-action="pickParamFile" ${!v || busyNow ? "disabled" : ""}>Restore from another file…</button>
       <span class="hint">Restoring shows every difference first, and you choose which values to write.</span></div>
     </div>`;
+}
+
+/** When a backup before writing is worth it, and how to make one. */
+function backupAdvice(m, n) {
+  const big = n >= 10 || m.source === "file";
+  return big
+    ? "<b>A backup is recommended</b> for a change this size: Back up and write saves every parameter first, so you can undo it from Backups."
+    : "Back up and write saves every parameter first, so you can undo it from Backups. Worth doing before bigger changes; a backup from Backups works too.";
 }
 
 function modal() {
@@ -904,13 +1106,19 @@ function modal() {
         ${p.skipped?.length ? `<p class="muted">Left out ${p.skipped.length} value${p.skipped.length > 1 ? "s" : ""} the firmware manages itself (statistics, versions, sensor IDs).</p>` : ""}
         ${p.unknown.length ? `<div class="banner warn">The vehicle has no parameter ${p.unknown.map(esc).join(", ")}; skipped.</div>` : ""}
         <div class="actions">
-          ${p.rows.length ? `<button class="btn primary" data-action="confirmWrite" ${p.armed || !n ? "disabled" : ""}>Back up and write ${n} parameter${n === 1 ? "" : "s"}</button>` : ""}
+          ${
+            p.rows.length
+              ? `<button class="btn primary" data-action="confirmWrite" ${p.armed || !n ? "disabled" : ""}>Write ${n} parameter${n === 1 ? "" : "s"}</button>
+                 <button class="btn" data-action="backupAndWrite" ${p.armed || !n ? "disabled" : ""}>Back up and write</button>`
+              : ""
+          }
           <button class="btn" data-action="closeModal">${p.rows.length ? "Cancel" : "Close"}</button>
-        </div>`;
+        </div>
+        ${p.rows.length ? `<p class="muted" style="margin-bottom:0">${backupAdvice(m, n)}</p>` : ""}`;
       break;
     }
     case "writing":
-      body = busy("Backing up, writing and verifying…");
+      body = busy(m.backup ? "Backing up, writing and verifying…" : "Writing and verifying…");
       break;
     case "done": {
       const r = m.result;
@@ -956,6 +1164,8 @@ function content() {
       return prearmView();
     case "setup":
       return setupView();
+    case "allparams":
+      return allParamsView();
     default:
       return welcome();
   }
@@ -969,9 +1179,21 @@ const shown = {};
 /** Replaces a region only when its HTML changed: plots are large, and this keeps scroll position. */
 function put(sel, html) {
   if (shown[sel] === html) return;
+  const sameView = sel === "main" && shown.view === state.view;
+  const focused = document.activeElement;
+  const keep = focused?.id && regions[sel].contains(focused) ? { id: focused.id, start: focused.selectionStart, end: focused.selectionEnd } : null;
+  const scroll = regions[sel].scrollTop;
   shown[sel] = html;
   regions[sel].innerHTML = html;
-  if (sel === "main") regions.main.scrollTop = 0;
+  if (sel === "main") {
+    regions.main.scrollTop = sameView ? scroll : 0;
+    shown.view = state.view;
+  }
+  if (keep) {
+    const el = document.getElementById(keep.id);
+    el?.focus();
+    if (el && keep.start !== null && el.setSelectionRange) el.setSelectionRange(keep.start, keep.end);
+  }
 }
 
 function render() {

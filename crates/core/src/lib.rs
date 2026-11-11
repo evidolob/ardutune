@@ -6,6 +6,7 @@ pub mod diagnose;
 pub mod filters;
 pub mod log;
 pub mod noise;
+pub mod paramdoc;
 pub mod params;
 pub mod pid;
 pub mod plot;

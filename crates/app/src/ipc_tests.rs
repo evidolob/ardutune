@@ -80,6 +80,23 @@ fn analyse_connect_download_write_and_reboot() {
     let plan = call("prepare_changes", json!({ "source": "setup:logging", "label": "writing logging for tuning" })).unwrap();
     assert!(!plan["rows"].as_array().unwrap().is_empty());
 
+    // The full parameter list: values, defaults, docs; edits are planned
+    // with warnings for suspicious values, then written like anything else.
+    let table = call("param_table", json!({})).unwrap();
+    let rows = table["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), mock.state().params.len());
+    assert_eq!(table["has_defaults"], json!(true));
+    let mode = rows.iter().find(|r| r["name"] == "INS_HNTCH_MODE").unwrap();
+    assert!(mode["doc"]["values"].as_array().unwrap().len() >= 4, "{mode}");
+    let edits = json!([["ATC_RAT_RLL_P", 2.0], ["ATC_RAT_RLL_D", 0.004]]);
+    let plan = call("prepare_changes", json!({ "source": "edits", "label": "writing parameter edits", "values": edits })).unwrap();
+    let rows = plan["rows"].as_array().unwrap();
+    let rll = rows.iter().find(|r| r["name"] == "ATC_RAT_RLL_P").unwrap();
+    assert!(rll["reason"].as_str().unwrap().contains("outside the documented range"), "{plan}");
+    let result = call("apply_changes", json!({ "names": ["ATC_RAT_RLL_D"] })).unwrap();
+    assert_eq!(result["backup"], Value::Null, "no backup unless asked");
+    assert!((mock.state().params["ATC_RAT_RLL_D"].0 - 0.004).abs() < 1e-6);
+
     // Download the vehicle's log (default logging: not enough for tuning) and open it.
     let logs = call("list_vehicle_logs", json!({})).unwrap();
     let id = logs[0]["id"].clone();
@@ -98,7 +115,7 @@ fn analyse_connect_download_write_and_reboot() {
     let plan = call("prepare_changes", json!({ "source": "readiness" })).unwrap();
     let rows = plan["rows"].as_array().unwrap();
     assert!(rows.iter().any(|r| r["name"] == "INS_RAW_LOG_OPT"), "{plan}");
-    let result = call("apply_changes", json!({})).unwrap();
+    let result = call("apply_changes", json!({ "backup": true })).unwrap();
     let results = result["results"].as_array().unwrap();
     assert_eq!(results.len(), rows.len());
     assert!(results.iter().all(|r| r["error"].is_null()), "{result}");
@@ -137,7 +154,7 @@ fn analyse_connect_download_write_and_reboot() {
     let names: Vec<&str> = plan["rows"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["ATC_RAT_PIT_SMAX", "ATC_RAT_RLL_SMAX"], "{plan}");
     assert_eq!(plan["skipped"], json!(["STAT_BOOTCNT"]));
-    let result = call("apply_changes", json!({ "names": ["ATC_RAT_RLL_SMAX"] })).unwrap();
+    let result = call("apply_changes", json!({ "names": ["ATC_RAT_RLL_SMAX"], "backup": true })).unwrap();
     assert_eq!(result["results"].as_array().unwrap().len(), 1);
     assert_eq!(mock.state().params["ATC_RAT_RLL_SMAX"].0, 0.0);
     assert_eq!(mock.state().params["ATC_RAT_PIT_SMAX"].0, 30.0);

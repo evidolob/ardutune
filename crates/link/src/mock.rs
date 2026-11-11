@@ -48,6 +48,8 @@ pub struct MockState {
     pub gps: Option<(GpsFixType, u8, f32)>,
     pub mode: u32,
     pub rc: [u16; 8],
+    /// Default values; parameters not listed default to their starting value.
+    pub defaults: BTreeMap<String, f32>,
 }
 
 impl MockState {
@@ -128,6 +130,7 @@ impl MockState {
             gps: Some((GpsFixType::GPS_FIX_TYPE_3D_FIX, 14, 0.8)),
             mode: 0,
             rc: [1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000],
+            defaults: BTreeMap::new(),
             drop_log_chunk_every: None,
             drop_param_indices: BTreeSet::new(),
             reboots: 0,
@@ -385,6 +388,25 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
     }
 }
 
+/// The packed parameter file; defaults are the values the quad started with.
+fn param_pck(st: &MockState) -> Vec<u8> {
+    let params: Vec<(String, f32, f32, u8)> = st
+        .params
+        .iter()
+        .map(|(name, (value, kind))| {
+            let default = st.defaults.get(name).copied().unwrap_or(*value);
+            let code = match kind {
+                MavParamType::MAV_PARAM_TYPE_INT8 | MavParamType::MAV_PARAM_TYPE_UINT8 => 1,
+                MavParamType::MAV_PARAM_TYPE_INT16 | MavParamType::MAV_PARAM_TYPE_UINT16 => 2,
+                MavParamType::MAV_PARAM_TYPE_INT32 | MavParamType::MAV_PARAM_TYPE_UINT32 => 3,
+                _ => 4,
+            };
+            (name.clone(), *value, default, code)
+        })
+        .collect();
+    ftp::encode_param_pck(&params)
+}
+
 /// A status text, split into 50-character pieces like ArduPilot does.
 fn status_texts(text: &str) -> Vec<MavMessage> {
     text.as_bytes()
@@ -413,6 +435,25 @@ fn handle_ftp(st: &mut MockState, req: &Packet) -> Packet {
             Packet::reply(req, ftp::ACK, &ftp::encode_entries(rest))
         }
         ftp::LIST_DIRECTORY => nak(ftp::ERR_FILE_NOT_FOUND),
+        ftp::RESET_SESSIONS | ftp::TERMINATE_SESSION => Packet::reply(req, ftp::ACK, &[]),
+        ftp::OPEN_FILE_RO if path.starts_with("@PARAM/param.pck") => {
+            let file = param_pck(st);
+            let mut reply = Packet::reply(req, ftp::ACK, &(file.len() as u32).to_le_bytes());
+            reply.session = 1;
+            reply
+        }
+        ftp::OPEN_FILE_RO => nak(ftp::ERR_FILE_NOT_FOUND),
+        ftp::READ_FILE => {
+            let file = param_pck(st);
+            let ofs = req.offset as usize;
+            if ofs >= file.len() {
+                return nak(ftp::ERR_EOF);
+            }
+            let end = (ofs + ftp::DATA_MAX).min(file.len());
+            let mut reply = Packet::reply(req, ftp::ACK, &file[ofs..end]);
+            reply.offset = req.offset;
+            reply
+        }
         ftp::REMOVE_FILE => {
             let index = path
                 .strip_prefix(DIR)
