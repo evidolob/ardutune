@@ -5,6 +5,7 @@
 
 mod analysis;
 mod backups;
+mod firmware;
 #[cfg(test)]
 mod ipc_tests;
 mod vehicle;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub log: Mutex<Option<analysis::Loaded>>,
     pub vehicle: Mutex<Option<vehicle::Connected>>,
     pub pending: Mutex<Option<vehicle::Pending>>,
+    pub firmware: Mutex<Option<firmware::PendingFirmware>>,
 }
 
 /// Locks a mutex, recovering the data if a panicking command poisoned it.
@@ -43,10 +45,10 @@ where
 }
 
 #[derive(Clone, Serialize)]
-struct Progress<'a> {
-    task: &'a str,
-    done: usize,
-    total: usize,
+pub struct Progress<'a> {
+    pub task: &'a str,
+    pub done: usize,
+    pub total: usize,
 }
 
 /// Sends `progress` events for a long task, about ten a second.
@@ -89,6 +91,7 @@ async fn pick_file<R: Runtime>(app: AppHandle<R>, kind: String) -> CmdResult<Opt
         let dialog = app.dialog().file();
         let dialog = match kind.as_str() {
             "param" => dialog.set_title("Open a parameter file").add_filter("Parameter file", &["param", "parm", "txt"]),
+            "apj" => dialog.set_title("Open a firmware file").add_filter("ArduPilot firmware", &["apj"]),
             _ => dialog.set_title("Open a flight log").add_filter("DataFlash log", &["bin", "BIN"]),
         };
         Ok(dialog.blocking_pick_file().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
@@ -117,6 +120,10 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         vehicle::arming_check,
         vehicle::setup_guide,
         vehicle::param_table,
+        firmware::firmware_info,
+        firmware::firmware_releases,
+        firmware::firmware_prepare,
+        firmware::firmware_flash,
         backups::backup_params,
         backups::list_backups,
         backups::delete_backup,

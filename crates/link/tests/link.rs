@@ -211,3 +211,24 @@ fn reads_parameter_defaults_over_ftp() {
     let bitmask = params.iter().find(|p| p.name == "LOG_BITMASK").unwrap();
     assert_eq!(bitmask.value, 176_126.0);
 }
+
+#[test]
+fn reads_firmware_info_and_reboots_to_bootloader() {
+    let mock = MockVehicle::start(MockState::quad(Vec::new())).unwrap();
+    let mut link = connect(&mock);
+    let info = link.firmware_info().unwrap();
+    assert_eq!(info.version.unwrap().to_string(), "4.7.0-dev");
+    assert_eq!(info.board_id, Some(1048));
+    assert_eq!(info.board.as_deref(), Some("KakuteH7-bdshot"));
+    assert_eq!(info.git_hash.as_deref(), Some("d0b31066"));
+    assert!(info.description.unwrap().starts_with("ArduCopter V4.7.0-dev"));
+
+    mock.state().armed = true;
+    let link = match link.reboot_to_bootloader() {
+        Err(Error::Armed) => connect(&mock),
+        other => panic!("armed reboot not refused: {other:?}"),
+    };
+    mock.state().armed = false;
+    link.reboot_to_bootloader().unwrap();
+    assert_eq!(mock.state().bootloader_reboots, 1);
+}

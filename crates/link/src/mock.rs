@@ -12,7 +12,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
-    MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_ACK_DATA,
+    MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, AUTOPILOT_VERSION_DATA, COMMAND_ACK_DATA,
     FILE_TRANSFER_PROTOCOL_DATA, GPS_RAW_INT_DATA, GpsFixType, HEARTBEAT_DATA, LOG_DATA_DATA, LOG_ENTRY_DATA, MavSeverity,
     PARAM_VALUE_DATA, RC_CHANNELS_DATA, STATUSTEXT_DATA,
 };
@@ -50,6 +50,10 @@ pub struct MockState {
     pub rc: [u16; 8],
     /// Default values; parameters not listed default to their starting value.
     pub defaults: BTreeMap<String, f32>,
+    pub board_id: u32,
+    pub board_name: String,
+    /// Reboots that asked to stay in the bootloader.
+    pub bootloader_reboots: usize,
 }
 
 impl MockState {
@@ -131,6 +135,9 @@ impl MockState {
             mode: 0,
             rc: [1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000],
             defaults: BTreeMap::new(),
+            board_id: 1048,
+            board_name: "KakuteH7-bdshot".to_owned(),
+            bootloader_reboots: 0,
             drop_log_chunk_every: None,
             drop_param_indices: BTreeSet::new(),
             reboots: 0,
@@ -371,6 +378,26 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
             }
             out
         }
+        MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_REQUEST_MESSAGE && c.param1 == 148.0 => {
+            let mut hash = [0u8; 8];
+            hash.copy_from_slice(b"d0b31066");
+            vec![
+                MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED }),
+                MavMessage::AUTOPILOT_VERSION(AUTOPILOT_VERSION_DATA {
+                    flight_sw_version: 0x0407_0000,
+                    board_version: st.board_id << 16,
+                    flight_custom_version: hash,
+                    ..Default::default()
+                }),
+            ]
+        }
+        MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_SEND_BANNER => {
+            let mut out = vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })];
+            for line in ["ArduCopter V4.7.0-dev (d0b31066)", "ChibiOS: 1fa4b8e0", &format!("{} 003A00243233510A33353533", st.board_name)] {
+                out.extend(status_texts(line));
+            }
+            out
+        }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL => {
             vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })]
         }
@@ -380,6 +407,9 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
                 MavResult::MAV_RESULT_FAILED
             } else {
                 st.reboots += 1;
+                if c.param1 == 3.0 {
+                    st.bootloader_reboots += 1;
+                }
                 MavResult::MAV_RESULT_ACCEPTED
             };
             vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result })]

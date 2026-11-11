@@ -17,12 +17,12 @@ const REBOOT_TIMEOUT: Duration = Duration::from_secs(40);
 const SETUP_LISTEN: Duration = Duration::from_secs(3);
 
 pub struct Connected {
-    link: Link,
-    params: Params,
-    address: String,
+    pub(crate) link: Link,
+    pub(crate) params: Params,
+    pub(crate) address: String,
     /// Default values, once read from the vehicle (`None` until then, or
     /// when the firmware doesn't offer them).
-    defaults: Option<HashMap<String, f32>>,
+    pub(crate) defaults: Option<HashMap<String, f32>>,
 }
 
 /// Changes shown to the user and waiting for confirmation. They are planned
@@ -53,7 +53,7 @@ impl Connected {
         self.link.vehicle().system_id
     }
 
-    fn info(&self) -> VehicleInfo {
+    pub(crate) fn info(&self) -> VehicleInfo {
         let v = self.link.vehicle();
         VehicleInfo {
             address: self.address.clone(),
@@ -67,7 +67,7 @@ impl Connected {
 }
 
 /// Turns a link error into a message, forgetting a connection that is gone.
-fn check<T>(slot: &mut Option<Connected>, r: ardutune_link::Result<T>) -> CmdResult<T> {
+pub(crate) fn check<T>(slot: &mut Option<Connected>, r: ardutune_link::Result<T>) -> CmdResult<T> {
     r.map_err(|e| {
         if matches!(e, ardutune_link::Error::Disconnected) {
             *slot = None;
@@ -76,7 +76,7 @@ fn check<T>(slot: &mut Option<Connected>, r: ardutune_link::Result<T>) -> CmdRes
     })
 }
 
-fn connected(slot: &mut Option<Connected>) -> CmdResult<&mut Connected> {
+pub(crate) fn connected(slot: &mut Option<Connected>) -> CmdResult<&mut Connected> {
     slot.as_mut().ok_or_else(|| "Not connected to a vehicle.".to_owned())
 }
 

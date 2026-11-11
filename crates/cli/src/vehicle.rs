@@ -186,7 +186,7 @@ pub fn delete_log(conn: &str, id: u16) -> Result<Link> {
     }
 }
 
-fn confirm(question: &str, default_yes: bool) -> Result<bool> {
+pub fn confirm(question: &str, default_yes: bool) -> Result<bool> {
     print!("{question} {} ", if default_yes { "[Y/n]" } else { "[y/N]" });
     io::stdout().flush()?;
     let mut answer = String::new();

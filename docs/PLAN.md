@@ -230,6 +230,14 @@ a backup inside the list.
   recovery if an upload is interrupted. Variant builds matter (e.g. the
   KakuteH7 "-bdshot" firmware for bidirectional DShot).
 
+Done: Firmware screen and `ardutune firmware`. Bootloader protocol (sync,
+identify, erase, program, CRC verify, reboot) tested against a simulated
+bootloader, including the real KakuteH7 4.7.2 image; refuses wrong board,
+oversize images, external-flash images and armed vehicles before erasing.
+Flashed on real hardware: KakuteH7-bdshot from 4.6.3 to 4.7.2, parameters
+converted by the firmware and compared. Not yet: external flash, DFU, heli/other
+vehicle types.
+
 ## Risks
 
 - Bad advice from poor logs → readiness check + confidence on every finding.

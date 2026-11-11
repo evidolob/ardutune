@@ -606,6 +606,9 @@ fn suggest(ax: &AxisDef, g: &Gains, s: &StepResponse, osc: Option<&Oscillation>,
     }
 }
 
+/// Above this, a maximum acceleration is in centidegrees/s², not degrees/s².
+const MAX_ACCEL_DEG: f64 = 10_000.0;
+
 /// Gains printed by AutoTune for axes it finished, e.g.
 /// "AutoTune: Roll Rate: P:0.042, I:0.042, D:0.0031" and
 /// "AutoTune: Roll Angle P:19.298, Max Accel:114972".
@@ -635,7 +638,15 @@ fn autotune_results(log: &Log) -> Vec<Suggestion> {
             }
         } else if body.contains("Angle P:") {
             add(format!("ATC_ANG_{}_P", ax.param), number_after(body, "Angle P:"), "angle P");
-            add(format!("ATC_ACCEL_{}_MAX", ax.accel), number_after(body, "Max Accel:"), "max acceleration");
+            // 4.7 renamed ATC_ACCEL_x_MAX (centidegrees/s²) to ATC_ACC_x_MAX (degrees/s²).
+            let accel = number_after(body, "Max Accel:");
+            let new_name = format!("ATC_ACC_{}_MAX", ax.accel);
+            if log.param(&new_name).is_some() {
+                // Values this large are centidegrees, as older AutoTune prints them.
+                add(new_name, accel.map(|v| if v >= MAX_ACCEL_DEG { v / 100.0 } else { v }), "max acceleration");
+            } else {
+                add(format!("ATC_ACCEL_{}_MAX", ax.accel), accel, "max acceleration");
+            }
         }
     }
     found
@@ -754,5 +765,18 @@ mod tests {
             ]
         );
         assert_eq!(r.autotune[0].current, Some(0.1f32 as f64));
+    }
+
+    #[test]
+    fn autotune_accel_uses_the_4_7_name_and_units() {
+        let mut w = LogWriter::new();
+        let parm = w.define("PARM", "QNff", "TimeUS,Name,Value,Default");
+        let msg = w.define("MSG", "QZ", "TimeUS,Message");
+        w.write(parm, &[V::I(1), V::S("ATC_ACC_R_MAX"), V::F(1100.0), V::F(1100.0)]);
+        w.write(msg, &[V::I(2), V::S("AutoTune: Roll Angle P:19.298, Max Accel:114972")]);
+        let log = Log::from_bytes(&w.into_bytes());
+        let found = autotune_results(&log);
+        let accel = found.iter().find(|s| s.name.starts_with("ATC_ACC")).unwrap();
+        assert_eq!((accel.name.as_str(), accel.value, accel.current), ("ATC_ACC_R_MAX", 1149.72, Some(1100.0)));
     }
 }

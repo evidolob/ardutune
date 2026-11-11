@@ -97,6 +97,19 @@ fn analyse_connect_download_write_and_reboot() {
     assert_eq!(result["backup"], Value::Null, "no backup unless asked");
     assert!((mock.state().params["ATC_RAT_RLL_D"].0 - 0.004).abs() < 1e-6);
 
+    // Firmware: what it runs, and firmware files checked against the board.
+    let info = call("firmware_info", json!({})).unwrap();
+    assert_eq!((info["version"].as_str(), info["board_id"].as_u64()), (Some("4.7.0-dev"), Some(1048)), "{info}");
+    let good = data.join("good.apj");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(&good, ardutune_link::firmware::make_apj(1048, &[1, 2, 3, 4, 5], "KakuteH7-bdshot")).unwrap();
+    let prepared = call("firmware_prepare", json!({ "source": "file", "path": good })).unwrap();
+    assert_eq!(prepared["matches_board"], json!(true));
+    let wrong = data.join("wrong.apj");
+    std::fs::write(&wrong, ardutune_link::firmware::make_apj(9, &[1, 2, 3, 4], "OtherBoard")).unwrap();
+    let err = call("firmware_prepare", json!({ "source": "file", "path": wrong })).unwrap_err();
+    assert!(err.contains("board ID 9"), "{err}");
+
     // Download the vehicle's log (default logging: not enough for tuning) and open it.
     let logs = call("list_vehicle_logs", json!({})).unwrap();
     let id = logs[0]["id"].clone();

@@ -30,6 +30,13 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   warnings for out-of-range or undocumented values. Descriptions are bundled
   for offline use; refresh them with `tools/update-param-docs.py`.
   `ardutune params --changed` lists what differs from the defaults.
+- Firmware: version, board and board ID from the vehicle; newer Copter
+  releases for the board from firmware.ardupilot.org (stable, beta, latest;
+  the only feature that goes online, and only when asked); flashing a
+  release or an `.apj` file through the ArduPilot bootloader over USB, with
+  the board ID checked before anything is erased, CRC verification, an
+  optional parameter backup, and a before/after parameter comparison.
+  `ardutune firmware [--check] [--install stable | --flash FILE]`.
 - Setup guide (start of the configuration guide): the live vehicle checked
   step by step (frame and motors, ESC telemetry and RPM, radio, failsafes,
   battery monitor, sensors and calibration, logging for tuning), each with

@@ -17,6 +17,7 @@ const VEHICLE_VIEWS = [
   ["prearm", "Pre-arm check"],
   ["allparams", "Parameters"],
   ["params", "Backups"],
+  ["firmware", "Firmware"],
   ["vlogs", "Logs on vehicle"],
 ];
 /** Rows shown at once in the parameter list; refine the search for more. */
@@ -39,6 +40,8 @@ const state = {
   pfilter: { text: "", changed: false, standard: false, group: "" },
   popen: null, // parameter whose editor is open
   staged: {}, // name -> value waiting to be written
+  fw: null, // firmware info from the vehicle
+  releases: null, // what firmware.ardupilot.org offers for the board
   vehicleBusy: null, // text while a vehicle task runs
   modal: null,
   toast: null,
@@ -104,6 +107,7 @@ function go(view) {
   if (view === "prearm" && state.vehicle && !state.arming && !state.vehicleBusy) armingCheck();
   if (view === "setup" && state.vehicle && !state.setup && !state.vehicleBusy) setupGuide();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
+  if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
 }
 
 async function refreshPorts() {
@@ -118,7 +122,7 @@ async function connect() {
   set({ connecting: true });
   try {
     const vehicle = await invoke("connect", { address: state.address });
-    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, ptable: null, staged: {}, popen: null });
+    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, ptable: null, staged: {}, popen: null, fw: null, releases: null });
     toast(`Connected: ${vehicle.kind}, ${vehicle.params} parameters read.`, "info");
   } catch (e) {
     set({ connecting: false });
@@ -227,6 +231,55 @@ function stageParam(name, value) {
   if (value === row.value) delete staged[name];
   else staged[name] = value;
   set({ staged });
+}
+
+async function loadFirmware() {
+  const fw = await vehicleTask("Reading the firmware version…", () => invoke("firmware_info"));
+  if (fw) set({ fw });
+}
+
+async function checkReleases() {
+  if (!state.fw?.board) return toast("The vehicle didn't report its board name.");
+  set({ releases: "loading" });
+  try {
+    set({ releases: await invoke("firmware_releases", { board: state.fw.board, current: state.fw.version }) });
+  } catch (e) {
+    set({ releases: null });
+    toast(e);
+  }
+}
+
+async function prepareFirmware(source, path = null) {
+  const release = Array.isArray(state.releases) ? state.releases.find((r) => r.channel === source) : null;
+  set({ modal: { stage: "fw-loading", title: source === "file" ? "Checking the firmware file" : `Downloading ${source} firmware` } });
+  try {
+    const prep = await invoke("firmware_prepare", { source, path });
+    set({ modal: { stage: "fw-confirm", title: `Flash ${prep.label}`, prep, release, backup: true } });
+  } catch (e) {
+    set({ modal: null });
+    toast(e);
+  } finally {
+    hideProgress();
+  }
+}
+
+async function pickFirmware() {
+  const path = await invoke("pick_file", { kind: "apj" });
+  if (path) prepareFirmware("file", path);
+}
+
+async function flashFirmware() {
+  const m = state.modal;
+  set({ modal: { ...m, stage: "fw-flashing" } });
+  try {
+    const result = await invoke("firmware_flash", { backup: m.backup });
+    set({ modal: { ...m, stage: "fw-done", result }, vehicle: result.vehicle, fw: null, releases: null, ptable: null, setup: null, arming: null });
+    if (result.reconnected) loadFirmware();
+  } catch (e) {
+    set({ modal: { ...m, stage: "fw-failed", error: String(e) }, vehicle: null });
+  } finally {
+    hideProgress();
+  }
 }
 
 async function reboot() {
@@ -362,6 +415,11 @@ const actions = {
   armingCheck,
   setupGuide,
   loadParams,
+  loadFirmware,
+  checkReleases,
+  installRelease: (d) => prepareFirmware(d.channel),
+  pickFirmware,
+  flashFirmware,
   openParam: (d) => set({ popen: state.popen === d.name ? null : d.name }),
   stageParam: (d) => stageParam(d.name, editorValue()),
   defaultParam: (d) => stageParam(d.name, Number(d.value)),
@@ -400,6 +458,7 @@ document.addEventListener("click", (e) => {
 
 document.addEventListener("change", (e) => {
   const t = e.target;
+  if (t.id === "fwbackup" && state.modal) state.modal.backup = t.checked;
   if (t.name === "port") set({ address: t.value });
   const m = state.modal;
   if (m?.selected && t.dataset.name) {
@@ -942,6 +1001,41 @@ function allParamsView() {
     </div>`;
 }
 
+function firmwareView() {
+  const head = `<h1>Firmware</h1><p class="lead">What the flight controller runs, newer ArduPilot releases for its board, and installing firmware over USB.</p>`;
+  if (!state.vehicle) return head + notConnected("see and update its firmware");
+  const fw = state.fw;
+  if (!fw) return head + (state.vehicleBusy ? busy(state.vehicleBusy) : `<button class="btn primary" data-action="loadFirmware">Read firmware version</button>`);
+  const r = state.releases;
+  const releases =
+    r === "loading"
+      ? busy("Checking firmware.ardupilot.org…")
+      : Array.isArray(r)
+        ? `<table><tr><th>Channel</th><th>Version</th><th></th><th></th></tr>${r
+            .map((x) => {
+              const what = { stable: "Stable: recommended", beta: "Beta: release candidate", latest: "Latest: development build" }[x.channel];
+              const ver = x.error ? `<span class="muted">couldn't check: ${esc(x.error)}</span>` : x.version ? esc(x.version) : `<span class="muted">no build for this board</span>`;
+              return `<tr><td>${esc(what)}</td><td>${ver}</td><td>${x.newer ? chip("pass", "newer") : x.version && x.version === fw.version ? chip("info", "installed") : ""}</td>
+                <td class="num">${x.version ? `<button class="btn ${x.channel === "stable" && x.newer ? "primary" : ""}" data-action="installRelease" data-channel="${x.channel}" ${state.vehicleBusy ? "disabled" : ""}>Install…</button>` : ""}</td></tr>`;
+            })
+            .join("")}</table>`
+        : `<p class="muted" style="margin:0">ArduTune works offline; checking for releases contacts firmware.ardupilot.org.</p>`;
+  return `${head}
+    <div class="stats">
+      ${stat("Firmware", esc(fw.version ?? "unknown"), esc(fw.description ?? ""))}
+      ${stat("Board", esc(fw.board ?? "unknown"), fw.board_id ? `board ID ${fw.board_id}` : "")}
+      ${stat("Build", esc(fw.git_hash ?? "–"), fw.version?.includes("dev") ? "development build" : fw.version?.includes("beta") ? "beta" : "release")}
+    </div>
+    <div class="card"><h2>Releases for ${esc(fw.board ?? "this board")}</h2>${releases}
+      <div class="actions">
+        ${Array.isArray(r) ? "" : `<button class="btn primary" data-action="checkReleases" ${!fw.board ? "disabled" : ""}>Check for updates</button>`}
+        <button class="btn" data-action="pickFirmware" ${state.vehicleBusy ? "disabled" : ""}>Install from file…</button>
+        <span class="hint">A firmware file (.apj) must be built for this board; ArduTune checks the board ID before writing anything.</span>
+      </div>
+    </div>
+    ${fw.banner?.length ? `<div class="card"><h2>Startup banner</h2>${list(fw.banner)}</div>` : ""}`;
+}
+
 function setupView() {
   const head = `<h1>Setup guide</h1><p class="lead">Your vehicle's setup checked step by step, from frame to logging, against its live parameters and status. Fix the steps in order; you review every change before it is written, and each value is verified.</p>`;
   if (!state.vehicle) return head + notConnected("check its setup");
@@ -1076,6 +1170,58 @@ function modal() {
         <div class="actions"><button class="btn destroy" data-action="confirmDelete" ${state.vehicle?.armed ? "disabled" : ""}>${m.id === null ? "Erase all" : m.newest ? "Reboot and delete" : "Delete"}</button>
         <button class="btn" data-action="closeModal">Cancel</button></div>`;
       break;
+    case "fw-loading":
+      body = busy("Checking the firmware…");
+      break;
+    case "fw-confirm": {
+      const p = m.prep;
+      const cur = state.fw?.version;
+      const target = m.release?.version;
+      const direction = target && cur ? (m.release.newer ? "upgrade" : target === cur ? "reinstall" : "downgrade") : null;
+      body = `
+        <table>
+          <tr><td>Firmware</td><td><b>${esc(target ?? p.label)}</b>${p.git_identity ? ` <span class="muted">(${esc(p.git_identity)})</span>` : ""}</td></tr>
+          <tr><td>Installed now</td><td>${esc(cur ?? "unknown")}</td></tr>
+          <tr><td>Board</td><td>${p.matches_board ? chip("pass", "matches") : chip("warn", "not checked")} ${esc(p.board_name ?? "")} · board ID ${p.board_id}</td></tr>
+          <tr><td>Size</td><td>${num(p.size / 1e6, 2)} MB</td></tr>
+        </table>
+        ${direction === "downgrade" ? `<div class="banner warn">This is older than what's installed. Downgrading can reset or rename parameters; check them afterwards.</div>` : ""}
+        ${direction === "upgrade" && cur && target && cur.split(".").slice(0, 2).join(".") !== target.split(".").slice(0, 2).join(".") ? `<div class="banner info">A new major version: read the release notes, as some parameters may be renamed or have new defaults.</div>` : ""}
+        <div class="banner warn"><b>Before you start:</b> props off, keep the USB cable connected, don't power off until it says done (about a minute). The flight controller restarts twice.</div>
+        <label class="port"><input type="checkbox" id="fwbackup" ${m.backup ? "checked" : ""}> <span><b>Back up parameters first</b> <span class="muted">(recommended: a new firmware can change parameters)</span></span></label>
+        <div class="actions">
+          <button class="btn destroy" data-action="flashFirmware" ${state.vehicle?.armed ? "disabled" : ""}>Flash firmware</button>
+          <button class="btn" data-action="closeModal">Cancel</button>
+        </div>`;
+      break;
+    }
+    case "fw-flashing":
+      body = busy("Flashing: keep USB connected and don't power off…");
+      break;
+    case "fw-done": {
+      const r = m.result;
+      body = `
+        <div class="banner pass">Firmware written and verified${r.version ? `: now running <b>${esc(r.version)}</b>` : ""}.</div>
+        ${r.backup ? `<p>Previous parameters saved to <code>${esc(r.backup)}</code>.</p>` : ""}
+        ${
+          !r.reconnected
+            ? `<div class="banner warn">ArduTune couldn't reconnect. Unplug and replug USB, then connect again and check the parameters.</div>`
+            : r.changed.length
+              ? `<p><b>${r.changed.length} parameter${r.changed.length > 1 ? "s" : ""} changed</b> with the new firmware:</p>
+                 <div class="scroll"><table class="changes"><tr><th>Parameter</th><th class="num">Before</th><th></th><th class="num">After</th></tr>${r.changed
+                   .map((c) => `<tr><td class="mono">${esc(c.name)}</td><td class="num">${c.before === null ? "new" : fmt(c.before)}</td><td class="arrow">→</td><td class="num">${c.after === null ? "removed" : fmt(c.after)}</td></tr>`)
+                   .join("")}</table></div>
+                 <p class="muted">Restore any of them from Backups if needed.</p>`
+              : `<p>All parameters are unchanged.</p>`
+        }
+        <div class="actions"><button class="btn primary" data-action="closeModal">Done</button></div>`;
+      break;
+    }
+    case "fw-failed":
+      body = `<div class="banner fail">${esc(m.error)}</div>
+        <p>If the flight controller doesn't start, it is waiting in its bootloader: keep USB connected and flash again. If nothing responds at all, hold the board's BOOT button while plugging in USB and flash it with DFU (STM32CubeProgrammer, or ArduPilot's firmware with bootloader).</p>
+        <div class="actions"><button class="btn" data-action="go" data-view="connection">Connection</button><button class="btn" data-action="closeModal">Close</button></div>`;
+      break;
     case "deleteBackup":
       body = `<p>The backup file is deleted from this computer. This can't be undone.</p>
         <div class="actions"><button class="btn destroy" data-action="confirmDeleteBackup">Delete</button>
@@ -1136,7 +1282,7 @@ function modal() {
       break;
     }
   }
-  const writing = ["planning", "confirm", "writing", "done"].includes(m.stage);
+  const writing = ["planning", "confirm", "writing", "done"].includes(m.stage) && m.source !== undefined;
   const title = writing ? `${m.source === "file" ? "Restore" : "Write"} ${m.title}` : m.title;
   return `<div class="modal-back"><div class="modal"><h2>${esc(title)}</h2>${body}</div></div>`;
 }
@@ -1164,6 +1310,8 @@ function content() {
       return prearmView();
     case "setup":
       return setupView();
+    case "firmware":
+      return firmwareView();
     case "allparams":
       return allParamsView();
     default:

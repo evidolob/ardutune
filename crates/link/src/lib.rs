@@ -22,6 +22,7 @@ use mavlink::dialects::ardupilotmega::{
 use mavlink::error::MessageReadError;
 use mavlink::{MavConnection, MavHeader};
 
+pub mod firmware;
 pub mod ftp;
 pub mod mock;
 pub mod ports;
@@ -295,6 +296,12 @@ impl Link {
         drop(self);
         // Give it time to go down before the first attempt.
         thread::sleep(Duration::from_secs(2));
+        Link::connect_when_back(address, timeout)
+    }
+
+    /// Connects to `address`, retrying until `timeout` while the vehicle
+    /// restarts (its USB port disappears meanwhile).
+    pub fn connect_when_back(address: &str, timeout: Duration) -> Result<Self> {
         let deadline = Instant::now() + timeout;
         loop {
             match Link::connect(address, Duration::from_secs(3)) {
@@ -940,6 +947,89 @@ impl Link {
             Err(Error::Ftp(_)) | Err(Error::Timeout(_)) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+}
+
+const AUTOPILOT_VERSION_ID: f32 = 148.0;
+const BOOTLOADER_SEARCH: Duration = Duration::from_secs(25);
+
+impl Link {
+    /// The firmware version, board and banner, from AUTOPILOT_VERSION and
+    /// the startup banner (which the vehicle repeats on request).
+    pub fn firmware_info(&mut self) -> Result<firmware::FirmwareInfo> {
+        self.command(MavCmd::MAV_CMD_REQUEST_MESSAGE, [AUTOPILOT_VERSION_ID, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])?;
+        self.command(MavCmd::MAV_CMD_DO_SEND_BANNER, [0.0; 7])?;
+        let mut info = firmware::FirmwareInfo::default();
+        let mut pending: Option<String> = None;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while let Some(msg) = self.next(deadline)? {
+            match msg {
+                MavMessage::AUTOPILOT_VERSION(v) => {
+                    info.version = Some(firmware::Version::from_packed(v.flight_sw_version));
+                    let id = v.board_version >> 16;
+                    info.board_id = (id != 0).then_some(id);
+                    let hash: String = v.flight_custom_version.iter().take_while(|b| **b != 0).map(|b| *b as char).collect();
+                    if !hash.is_empty() {
+                        info.git_hash = Some(hash);
+                    }
+                }
+                MavMessage::STATUSTEXT(t) => {
+                    let raw = t.text.to_str().unwrap_or_default().to_owned();
+                    let text = pending.take().map_or(raw.clone(), |head| head + &raw);
+                    if raw.len() >= STATUSTEXT_LEN {
+                        pending = Some(text);
+                    } else {
+                        info.add_banner_line(&text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(info)
+    }
+
+    /// Reboots into the bootloader to flash firmware (only while disarmed).
+    /// The link is gone afterwards: the board comes back as a bootloader.
+    pub fn reboot_to_bootloader(mut self) -> Result<()> {
+        if self.refresh_armed()? {
+            return Err(Error::Armed);
+        }
+        let cmd = MavCmd::MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN;
+        self.send(&MavMessage::COMMAND_LONG(COMMAND_LONG_DATA {
+            param1: 3.0, // reboot and stay in the bootloader
+            command: cmd,
+            target_system: self.vehicle.system_id,
+            target_component: self.vehicle.component_id,
+            ..Default::default()
+        }))?;
+        let result = self.wait_for(Duration::from_secs(3), |m| match m {
+            MavMessage::COMMAND_ACK(a) if a.command == cmd => Some(a.result),
+            _ => None,
+        })?;
+        match result {
+            Some(MavResult::MAV_RESULT_ACCEPTED) => Ok(()),
+            Some(r) => Err(Error::Command(format!("reboot to bootloader refused ({r:?})"))),
+            None => Err(Error::Timeout("waiting for the reboot to be acknowledged".to_owned())),
+        }
+    }
+}
+
+/// Finds the bootloader on a USB port (after [`Link::reboot_to_bootloader`])
+/// and flashes `apj` with it. Returns the bootloader's port.
+pub fn flash_firmware(apj: &firmware::Apj, progress: &mut dyn FnMut(firmware::Stage)) -> std::result::Result<String, String> {
+    let deadline = Instant::now() + BOOTLOADER_SEARCH;
+    loop {
+        for port in ports::list().into_iter().filter(|p| p.likely_autopilot) {
+            let Ok(serial) = serialport::new(&port.name, 115_200).timeout(Duration::from_millis(100)).open() else { continue };
+            if let Ok(bl) = firmware::Bootloader::identify(serial) {
+                bl.flash(apj, progress).map_err(|e| e.to_string())?;
+                return Ok(port.name);
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("no bootloader found on USB; unplug and replug the flight controller, then try again".to_owned());
+        }
+        thread::sleep(Duration::from_millis(300));
     }
 }
 

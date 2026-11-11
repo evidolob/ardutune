@@ -124,6 +124,18 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Show the vehicle's firmware, check for newer releases, or flash firmware
+    Firmware {
+        /// Check firmware.ardupilot.org for newer releases for this board (needs internet)
+        #[arg(long)]
+        check: bool,
+        /// Flash this .apj file
+        #[arg(long, value_name = "FILE", conflicts_with = "install")]
+        flash: Option<PathBuf>,
+        /// Download and flash a release: stable, beta or latest
+        #[arg(long, value_name = "CHANNEL")]
+        install: Option<String>,
+    },
     /// Reboot the flight controller (only while disarmed)
     Reboot,
     /// List serial ports and which look like flight controllers
@@ -356,6 +368,7 @@ fn main() -> Result<()> {
                 print_setup(&guide);
             }
         }
+        Cmd::Firmware { check, flash, install } => firmware(&cli.conn, check, flash.as_deref(), install.as_deref())?,
         Cmd::Reboot => {
             vehicle::connect(&cli.conn)?.reboot()?;
             println!("Rebooting. Reconnect in a few seconds.");
@@ -689,6 +702,79 @@ fn print_noise(r: &NoiseReport) {
     for n in &r.notes {
         println!("\nNote: {n}");
     }
+}
+
+fn firmware(conn: &str, check: bool, flash: Option<&Path>, install: Option<&str>) -> Result<()> {
+    use ardutune_link::firmware::{self, Apj, Channel, Stage};
+    let mut link = vehicle::connect(conn)?;
+    let info = link.firmware_info()?;
+    println!("Firmware: {}", info.description.as_deref().unwrap_or("unknown"));
+    if let Some(v) = &info.version {
+        println!("Version:  {v}{}", info.git_hash.as_ref().map_or(String::new(), |h| format!(" ({h})")));
+    }
+    println!("Board:    {}{}", info.board.as_deref().unwrap_or("unknown"), info.board_id.map_or(String::new(), |id| format!(", board ID {id}")));
+    if info.board.is_none() {
+        for line in &info.banner {
+            println!("  banner: {line}");
+        }
+    }
+
+    if check {
+        let board = info.board.as_deref().context("the vehicle didn't report its board name")?;
+        println!("\nReleases for {board} on {}:", firmware::SERVER);
+        for (channel, result) in firmware::available(board) {
+            let line = match result {
+                Ok(Some(v)) => {
+                    let newer = info.version.as_ref().is_some_and(|cur| v.is_newer_than(cur));
+                    format!("{v}{}", if newer { "  (newer)" } else { "" })
+                }
+                Ok(None) => "no build for this board".to_owned(),
+                Err(e) => format!("couldn't check: {e}"),
+            };
+            println!("  {:<7} {line}", channel.dir());
+        }
+    }
+
+    let (bytes, what) = match (flash, install) {
+        (Some(path), _) => (std::fs::read(path).with_context(|| format!("reading {}", path.display()))?, path.display().to_string()),
+        (None, Some(ch)) => {
+            let channel = Channel::from_dir(ch).context("channel must be stable, beta or latest")?;
+            let board = info.board.as_deref().context("the vehicle didn't report its board name")?;
+            eprintln!("Downloading {} firmware for {board} ...", channel.dir());
+            (firmware::download(channel, board).map_err(anyhow::Error::msg)?, format!("{} {board}", channel.dir()))
+        }
+        (None, None) => return Ok(()),
+    };
+    let apj = Apj::parse(&bytes).map_err(anyhow::Error::msg)?;
+    if let Some(id) = info.board_id {
+        if id != apj.board_id {
+            anyhow::bail!("{what} is for board ID {} but this flight controller is board ID {id}; nothing written", apj.board_id);
+        }
+    }
+    println!("\nFirmware to flash: {what} ({} bytes, board ID {}{})", apj.image.len(), apj.board_id, apj.git_identity.as_deref().map_or(String::new(), |g| format!(", {g}")));
+    println!("Keep USB connected until it finishes. Parameters are normally kept, but back them up first: ardutune params");
+    if !vehicle::confirm("Reboot into the bootloader and flash it now?", false)? {
+        println!("Nothing written.");
+        return Ok(());
+    }
+    link.reboot_to_bootloader()?;
+    eprintln!("Waiting for the bootloader ...");
+    let mut last = 0;
+    let port = ardutune_link::flash_firmware(&apj, &mut |stage| match stage {
+        Stage::Erasing => eprintln!("Erasing ..."),
+        Stage::Programming { done, total } => {
+            let pct = done * 100 / total.max(1);
+            if pct >= last + 5 || done == total {
+                last = pct;
+                eprint!("\rProgramming {pct:>3}%");
+            }
+        }
+        Stage::Verifying => eprintln!("\nVerifying ..."),
+        Stage::Rebooting => eprintln!("Rebooting into the new firmware ..."),
+    })
+    .map_err(anyhow::Error::msg)?;
+    println!("Flashed and verified via {port}. Reconnect in a few seconds and check the parameters.");
+    Ok(())
 }
 
 fn print_setup(g: &ardutune_core::setup::Guide) {

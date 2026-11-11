@@ -116,6 +116,30 @@
         messages: ["PreArm: Check mag field (xy diff:117>100)", "PreArm: Logging failed"],
       };
     },
+    firmware_info: async () => ({
+      description: "ArduCopter V4.7.0-dev (d0b31066)",
+      version: "4.7.0-dev",
+      git_hash: "d0b31066",
+      board: "KakuteH7-bdshot",
+      board_id: 1048,
+      banner: ["ArduCopter V4.7.0-dev (d0b31066)", "ChibiOS: 1fa4b8e0", "KakuteH7-bdshot 003A00243233510A33353533", "RCOut: DS600:1-4"],
+    }),
+    firmware_releases: async () => {
+      await sleep(600);
+      return [
+        { channel: "stable", version: "4.7.2", newer: true, error: null },
+        { channel: "beta", version: "4.7.3-beta1", newer: true, error: null },
+        { channel: "latest", version: "4.8.0-dev", newer: true, error: null },
+      ];
+    },
+    firmware_prepare: async ({ source }) => {
+      await progress("Downloading firmware", 1288447);
+      return { label: `${source} firmware for KakuteH7-bdshot`, board_id: 1048, board_name: "KakuteH7-bdshot", size: 1440580, git_identity: "fb773567", matches_board: true, vehicle_board_id: 1048 };
+    },
+    firmware_flash: async () => {
+      await progress("Writing firmware (keep USB connected)", 1440580);
+      return { backup: null, version: "4.7.2", reconnected: true, changed: [{ name: "ATC_ACC_R_MAX", before: null, after: 78000 }, { name: "ATC_ACCEL_R_MAX", before: 78000, after: null }], vehicle };
+    },
     param_table: async () => {
       await sleep(400);
       return fixture("params");
