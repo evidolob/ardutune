@@ -237,7 +237,7 @@ fn advice_for(area: &str, msgs: &[String], param: &impl Fn(&str) -> Option<f64>)
             });
             format!(
                 "Move away from metal, cars, laptops and phones and check again. If it still fails, calibrate the \
-                 compass outdoors with the battery mounted as it flies, then reboot.{orient} If a good calibration \
+                 compass outdoors with the battery mounted as it flies (ArduTune's Compass calibration), then reboot.{orient} If a good calibration \
                  still fails, the compass is too close to power wiring: raise or move it."
             )
         }

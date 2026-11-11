@@ -36,6 +36,7 @@
     { name: "ATC_ACC_R_MAX", current: 1100, value: 1686, reason: 'Acceleration limit for 5" props (1686 deg/s²); AutoTune refines it' },
     { name: "ACRO_Y_RATE", current: 202.5, value: 157.5, reason: "Acro yaw rate to match the yaw acceleration limit" },
   ];
+  let calStart = 0;
   // BetaFlight X, as on the KakuteH7.
   const motorLayout = {
     frame: "Quad BetaFlight X",
@@ -177,6 +178,24 @@
       await sleep(400);
       return fixture("params");
     },
+    compass_cal_start: async () => {
+      calStart = Date.now();
+    },
+    compass_cal_poll: async () => {
+      await sleep(400);
+      const frac = Math.min(1, (Date.now() - calStart) / 8000);
+      const bits = Math.floor(frac * 80);
+      const coverage = Array.from({ length: 10 }, (_, i) => (bits >= (i + 1) * 8 ? 255 : bits > i * 8 ? (1 << (bits - i * 8)) - 1 : 0));
+      const done = frac >= 1;
+      return {
+        compasses: [
+          { id: 0, status: done ? "success" : "running", done, ok: done, percent: Math.round(frac * 100), attempt: 1, coverage, fitness: done ? 7.4 : null, offsets: done ? [-38.6, 117.8, -129.7] : null, autosaved: done, advice: null },
+          { id: 1, status: done ? "bad_radius" : "running", done, ok: false, percent: Math.round(frac * 90), attempt: 1, coverage, fitness: done ? 31 : null, offsets: null, autosaved: false, advice: done ? "The measured field strength is wrong for your location: strong interference (battery leads, motors, steel nearby) or a faulty compass." : null },
+        ],
+        messages: done ? ["Mag(0) good orientation: 0 1.0"] : [],
+      };
+    },
+    compass_cal_finish: async () => {},
     motor_layout: async () => motorLayout,
     motor_test: async () => sleep(200),
     motor_check: async ({ observations }) => motorVerdict(observations),

@@ -834,3 +834,34 @@ table.ptable tr.editor td {
   margin-top: 8px;
   font-weight: 600;
 }
+
+.bar.big {
+  height: 10px;
+  background: var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.bar.big div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+.coverage {
+  display: grid;
+  grid-template-columns: repeat(20, 12px);
+  gap: 3px;
+  margin: 8px 0;
+}
+
+.coverage span {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.coverage span.on {
+  background: var(--pass);
+}

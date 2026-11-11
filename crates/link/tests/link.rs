@@ -250,3 +250,34 @@ fn runs_motor_tests_and_explains_refusals() {
     assert!(matches!(link.motor_test(1, 7.0, 2.0), Err(Error::Armed)));
     assert_eq!(mock.state().motor_tests.len(), 1);
 }
+
+#[test]
+fn calibrates_the_compass() {
+    let mock = MockVehicle::start(MockState::quad(Vec::new())).unwrap();
+    let mut link = connect(&mock);
+    link.compass_cal_start().unwrap();
+    let mut cal = ardutune_link::CompassCal::default();
+    let mut seen_running = false;
+    for _ in 0..20 {
+        link.compass_cal_poll(&mut cal, Duration::from_millis(250)).unwrap();
+        seen_running |= cal.compasses.first().is_some_and(|c| c.status == "running" && c.percent < 100);
+        if cal.finished() {
+            break;
+        }
+    }
+    assert!(seen_running && cal.finished(), "{cal:?}");
+    let c = &cal.compasses[0];
+    assert!(c.ok && c.autosaved && c.percent == 100, "{c:?}");
+    assert_eq!(c.offsets.map(|o| o[1]), Some(117.8));
+
+    // Cancel a second run; a failure is reported as such.
+    mock.state().mag_cal_failure = Some(mavlink::dialects::ardupilotmega::MagCalStatus::MAG_CAL_FAILED_RADIUS);
+    link.compass_cal_start().unwrap();
+    link.compass_cal_finish(false).unwrap();
+    assert_eq!(mock.state().mag_cal_cancels, 1);
+    mock.state().mag_cal_started = Some(std::time::Instant::now() - Duration::from_secs(5));
+    let mut cal = ardutune_link::CompassCal::default();
+    link.compass_cal_poll(&mut cal, Duration::from_millis(500)).unwrap();
+    assert_eq!(cal.compasses[0].status, "bad_radius");
+    assert!(cal.finished() && !cal.compasses[0].ok);
+}

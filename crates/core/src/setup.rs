@@ -665,7 +665,7 @@ fn sensors(p: Param, live: &Live) -> Step {
             if !used {
                 items.push(item(Status::Info, format!("Compass {n} ({kind}) is not used"), ""));
             } else if ofs.iter().all(|v| *v == 0.0) {
-                items.push(item(Status::Fail, format!("Compass {n} ({kind}) not calibrated"), "Calibrate outdoors with the battery mounted, away from metal, then reboot."));
+                items.push(item(Status::Fail, format!("Compass {n} ({kind}) not calibrated"), "Calibrate outdoors with the battery mounted, away from metal (ArduTune's Compass calibration), then reboot."));
             } else {
                 let size = ofs.iter().map(|v| v * v).sum::<f64>().sqrt();
                 let max = p("COMPASS_OFFS_MAX").unwrap_or(1800.0);

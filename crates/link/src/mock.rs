@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use mavlink::dialects::ardupilotmega::{
     MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, AUTOPILOT_VERSION_DATA, COMMAND_ACK_DATA,
     FILE_TRANSFER_PROTOCOL_DATA, GPS_RAW_INT_DATA, GpsFixType, HEARTBEAT_DATA, LOG_DATA_DATA, LOG_ENTRY_DATA, MavSeverity,
-    PARAM_VALUE_DATA, RC_CHANNELS_DATA, STATUSTEXT_DATA,
+    PARAM_VALUE_DATA, RC_CHANNELS_DATA, STATUSTEXT_DATA, MAG_CAL_PROGRESS_DATA, MAG_CAL_REPORT_DATA, MagCalStatus,
 };
 use mavlink::{MavConnection, MavHeader};
 
@@ -58,6 +58,13 @@ pub struct MockState {
     pub motor_tests: Vec<(u8, f32, f32)>,
     /// When set, motor tests are refused with this "Motor Test: …" reason.
     pub motor_test_refusal: Option<String>,
+    /// When the running compass calibration started.
+    pub mag_cal_started: Option<Instant>,
+    /// How long a compass calibration takes.
+    pub mag_cal_duration: Duration,
+    /// How the calibration ends: success, or this failure.
+    pub mag_cal_failure: Option<MagCalStatus>,
+    pub mag_cal_cancels: usize,
 }
 
 impl MockState {
@@ -126,6 +133,9 @@ impl MockState {
         for (n, v) in [("FRAME_CLASS", 1.0), ("FRAME_TYPE", 18.0), ("MOT_PWM_TYPE", 6.0), ("SERVO_BLH_RVMASK", 0.0)] {
             params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_INT8));
         }
+        for a in ["X", "Y", "Z"] {
+            params.insert(format!("COMPASS_OFS_{a}"), (0.0, MAV_PARAM_TYPE_REAL32));
+        }
         for o in 1..=4 {
             params.insert(format!("SERVO{o}_FUNCTION"), (32.0 + o as f32, MAV_PARAM_TYPE_INT16));
         }
@@ -151,6 +161,10 @@ impl MockState {
             bootloader_reboots: 0,
             motor_tests: Vec::new(),
             motor_test_refusal: None,
+            mag_cal_started: None,
+            mag_cal_duration: Duration::from_millis(1500),
+            mag_cal_failure: None,
+            mag_cal_cancels: 0,
             drop_log_chunk_every: None,
             drop_param_indices: BTreeSet::new(),
             reboots: 0,
@@ -247,6 +261,9 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
                 ..Default::default()
             }));
             last_heartbeat = Instant::now();
+            for msg in mag_cal(&mut state.lock().unwrap()) {
+                send(msg);
+            }
         }
 
         let incoming = conn.try_recv();
@@ -279,6 +296,47 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
             }
         }
     }
+}
+
+/// Progress of a running compass calibration; once complete, the report
+/// (sent repeatedly, like ArduPilot) and, on success, the saved offsets.
+fn mag_cal(st: &mut MockState) -> Vec<MavMessage> {
+    let Some(started) = st.mag_cal_started else { return Vec::new() };
+    let frac = (started.elapsed().as_secs_f32() / st.mag_cal_duration.as_secs_f32()).min(1.0);
+    if frac < 1.0 {
+        let covered = (frac * 80.0) as usize;
+        let mut completion_mask = [0u8; 10];
+        for bit in 0..covered {
+            completion_mask[bit / 8] |= 1 << (bit % 8);
+        }
+        return vec![MavMessage::MAG_CAL_PROGRESS(MAG_CAL_PROGRESS_DATA {
+            compass_id: 0,
+            cal_mask: 1,
+            cal_status: MagCalStatus::MAG_CAL_RUNNING_STEP_ONE,
+            attempt: 1,
+            completion_pct: (frac * 100.0) as u8,
+            completion_mask,
+            ..Default::default()
+        })];
+    }
+    let ofs = [-38.6, 117.8, -129.7];
+    let ok = st.mag_cal_failure.is_none();
+    if ok && st.params["COMPASS_OFS_X"].0 == 0.0 {
+        for (a, v) in ["X", "Y", "Z"].iter().zip(ofs) {
+            st.params.get_mut(&format!("COMPASS_OFS_{a}")).unwrap().0 = v;
+        }
+    }
+    vec![MavMessage::MAG_CAL_REPORT(MAG_CAL_REPORT_DATA {
+        compass_id: 0,
+        cal_mask: 1,
+        cal_status: st.mag_cal_failure.unwrap_or(MagCalStatus::MAG_CAL_SUCCESS),
+        autosaved: u8::from(ok),
+        fitness: if ok { 7.4 } else { 31.0 },
+        ofs_x: ofs[0],
+        ofs_y: ofs[1],
+        ofs_z: ofs[2],
+        ..Default::default()
+    })]
 }
 
 fn heartbeat(armed: bool, custom_mode: u32) -> MavMessage {
@@ -412,6 +470,20 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
             out
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL => {
+            vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })]
+        }
+        MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_START_MAG_CAL => {
+            let result = if st.armed {
+                MavResult::MAV_RESULT_FAILED
+            } else {
+                st.mag_cal_started = Some(Instant::now());
+                MavResult::MAV_RESULT_ACCEPTED
+            };
+            vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result })]
+        }
+        MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_CANCEL_MAG_CAL => {
+            st.mag_cal_started = None;
+            st.mag_cal_cancels += 1;
             vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })]
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_MOTOR_TEST => {

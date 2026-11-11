@@ -151,6 +151,9 @@ enum Cmd {
         #[command(flatten)]
         apply_opts: ApplyArgs,
     },
+    /// Calibrate the compass(es): turn the vehicle through every direction
+    /// until it finishes
+    Compass,
     /// Show the vehicle's firmware, check for newer releases, or flash firmware
     Firmware {
         /// Check firmware.ardupilot.org for newer releases for this board (needs internet)
@@ -438,6 +441,7 @@ fn main() -> Result<()> {
                 println!("  - {a}");
             }
         }
+        Cmd::Compass => compass_cal(&cli.conn)?,
         Cmd::Motors { throttle, apply_opts } => motor_test(&cli.conn, throttle, &(&apply_opts).into())?,
         Cmd::Firmware { check, flash, install } => firmware(&cli.conn, check, flash.as_deref(), install.as_deref())?,
         Cmd::Reboot => {
@@ -845,6 +849,43 @@ fn firmware(conn: &str, check: bool, flash: Option<&Path>, install: Option<&str>
     })
     .map_err(anyhow::Error::msg)?;
     println!("Flashed and verified via {port}. Reconnect in a few seconds and check the parameters.");
+    Ok(())
+}
+
+fn compass_cal(conn: &str) -> Result<()> {
+    use std::io::Write;
+    let mut link = vehicle::connect(conn)?;
+    println!("Away from steel, turn the vehicle slowly so each side points down in turn, then through the angles in between.");
+    link.compass_cal_start()?;
+    let mut cal = ardutune_link::CompassCal::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    while !cal.finished() {
+        if std::time::Instant::now() > deadline {
+            link.compass_cal_finish(false)?;
+            anyhow::bail!("the calibration didn't finish in 5 minutes; cancelled");
+        }
+        link.compass_cal_poll(&mut cal, std::time::Duration::from_millis(500))?;
+        let bars: Vec<String> = cal.compasses.iter().map(|c| format!("compass {}: {:>3}% {}", c.id + 1, c.percent, c.status)).collect();
+        print!("\r{}   ", bars.join("   "));
+        std::io::stdout().flush()?;
+    }
+    println!();
+    for c in &cal.compasses {
+        let fit = c.fitness.map(|f| format!(", fitness {f:.1}")).unwrap_or_default();
+        let ofs = c.offsets.map(|o| format!(", offsets {:.0} {:.0} {:.0}", o[0], o[1], o[2])).unwrap_or_default();
+        println!("Compass {}: {}{fit}{ofs}", c.id + 1, c.status);
+        if let Some(a) = c.advice {
+            println!("  {a}");
+        }
+    }
+    if cal.compasses.iter().all(|c| c.ok) {
+        if !cal.compasses.iter().all(|c| c.autosaved) {
+            link.compass_cal_finish(true)?;
+        }
+        println!("Saved. Reboot the flight controller (`ardutune reboot`) to use the new calibration.");
+    } else {
+        println!("Nothing was saved. Try again.");
+    }
     Ok(())
 }
 

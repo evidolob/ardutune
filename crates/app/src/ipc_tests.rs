@@ -104,6 +104,21 @@ fn analyse_connect_download_write_and_reboot() {
     let plan = call("prepare_changes", json!({ "source": "motors", "label": "writing motor fixes", "observations": seen })).unwrap();
     assert_eq!(plan["rows"][0]["value"], json!(4.0), "{plan}");
 
+    // Compass calibration: started, followed to the end, saved.
+    assert!(call("compass_cal_poll", json!({})).unwrap_err().contains("No compass calibration"));
+    call("compass_cal_start", json!({})).unwrap();
+    let mut cal = Value::Null;
+    for _ in 0..20 {
+        cal = call("compass_cal_poll", json!({})).unwrap();
+        if cal["compasses"].as_array().is_some_and(|c| !c.is_empty() && c.iter().all(|c| c["done"] == json!(true))) {
+            break;
+        }
+    }
+    assert_eq!(cal["compasses"][0]["status"], "success", "{cal}");
+    assert_eq!(cal["compasses"][0]["autosaved"], json!(true));
+    call("compass_cal_finish", json!({ "accept": false })).unwrap();
+    assert_eq!(mock.state().mag_cal_cancels, 1);
+
     // The full parameter list: values, defaults, docs; edits are planned
     // with warnings for suspicious values, then written like anything else.
     let table = call("param_table", json!({})).unwrap();

@@ -15,6 +15,7 @@ const VEHICLE_VIEWS = [
   ["connection", "Connection"],
   ["setup", "Setup guide"],
   ["motors", "Motor test"],
+  ["compass", "Compass calibration"],
   ["tune", "Initial tune"],
   ["prearm", "Pre-arm check"],
   ["allparams", "Parameters"],
@@ -38,6 +39,7 @@ const state = {
   backups: null, // parameter backups on this computer
   arming: null, // latest pre-arm check report
   setup: null, // latest setup guide
+  compass: { cal: null, running: false }, // compass calibration progress
   motors: { layout: null, propsOff: false, throttle: 7, seen: [], verdict: null, spinning: null }, // motor test
   tune: { prop: "", cells: null, chemistry: null, pack: null, result: null }, // initial tune inputs and result
   ptable: null, // full parameter list from the vehicle
@@ -128,7 +130,7 @@ async function connect() {
   set({ connecting: true });
   try {
     const vehicle = await invoke("connect", { address: state.address });
-    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, motors: { ...state.motors, layout: null, seen: [], verdict: null, propsOff: false }, tune: { ...state.tune, pack: null, result: null, cells: null, chemistry: null }, ptable: null, staged: {}, popen: null, fw: null, releases: null });
+    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, compass: { cal: null, running: false }, motors: { ...state.motors, layout: null, seen: [], verdict: null, propsOff: false }, tune: { ...state.tune, pack: null, result: null, cells: null, chemistry: null }, ptable: null, staged: {}, popen: null, fw: null, releases: null });
     toast(`Connected: ${vehicle.kind}, ${vehicle.params} parameters read.`, "info");
   } catch (e) {
     set({ connecting: false });
@@ -214,6 +216,35 @@ async function armingCheck() {
 async function setupGuide() {
   const guide = await vehicleTask("Checking the setup…", () => invoke("setup_guide"));
   if (guide) set({ setup: guide });
+}
+
+async function startCompassCal() {
+  try {
+    await invoke("compass_cal_start");
+  } catch (e) {
+    return toast(e);
+  }
+  set({ compass: { cal: { compasses: [], messages: [] }, running: true } });
+  while (state.compass.running && state.vehicle) {
+    try {
+      const cal = await invoke("compass_cal_poll");
+      const finished = cal.compasses.length > 0 && cal.compasses.every((c) => c.done);
+      set({ compass: { cal, running: state.compass.running && !finished } });
+    } catch (e) {
+      set({ compass: { ...state.compass, running: false } });
+      toast(e);
+    }
+  }
+}
+
+async function finishCompassCal(accept) {
+  try {
+    await invoke("compass_cal_finish", { accept });
+    set({ compass: accept ? { ...state.compass, accepted: true } : { cal: null, running: false } });
+    if (accept) toast("Calibration saved. Reboot to use it.", "info");
+  } catch (e) {
+    toast(e);
+  }
 }
 
 async function loadMotors() {
@@ -485,6 +516,12 @@ const actions = {
   armingCheck,
   setupGuide,
   calculateTune,
+  startCompassCal,
+  cancelCompassCal: () => {
+    state.compass.running = false;
+    finishCompassCal(false);
+  },
+  acceptCompassCal: () => finishCompassCal(true),
   spinMotor: (d) => spinMotor(Number(d.index)),
   checkMotors,
   writeMotors: () => writeChanges("motors", "motor order and direction fixes", null, { observations: observations() }),
@@ -1150,6 +1187,73 @@ function setupView() {
     ${again}`;
 }
 
+const CAL_STATUS = {
+  waiting: ["info", "starting"],
+  running: ["info", "turn the vehicle"],
+  success: ["pass", "calibrated"],
+  failed: ["fail", "failed"],
+  bad_orientation: ["fail", "orientation wrong"],
+  bad_radius: ["fail", "field strength wrong"],
+  bad_offsets: ["fail", "offsets too large"],
+  bad_scaling: ["fail", "scaling wrong"],
+  bad_fit: ["fail", "poor fit"],
+};
+
+/** The 80 directions the calibration wants to see, filled as they are covered. */
+function coverage(mask) {
+  const cells = Array.from({ length: 80 }, (_, i) => (mask[i >> 3] >> (i & 7)) & 1);
+  return `<div class="coverage" title="Directions covered">${cells.map((on) => `<span class="${on ? "on" : ""}"></span>`).join("")}</div>`;
+}
+
+function compassView() {
+  const head = `<h1>Compass calibration</h1><p class="lead">The flight controller calibrates every compass while you turn the vehicle through all directions. A good calibration gives a steady heading; a bad one causes "toilet-bowling" and fly-aways in GPS modes.</p>`;
+  if (!state.vehicle) return head + notConnected("calibrate its compass");
+  const { cal, running, accepted } = state.compass;
+  const how = `<div class="card"><h2>How</h2><ul class="plain">
+      <li>Go outdoors or at least away from steel: desks, cars, rebar floors, speakers, phones. Take off any metal watch.</li>
+      <li>USB power is enough. Fit everything that flies with the vehicle (battery, GPS mast, camera) in its flight position, so the calibration includes it.</li>
+      <li>Hold the vehicle and turn it slowly so each side points down in turn (nose, tail, left, right, top, bottom), then roll it through the in-between angles until the bar is full.</li>
+    </ul></div>`;
+  const start = (label) => `<div class="actions"><button class="btn primary" data-action="startCompassCal" ${state.vehicleBusy || state.vehicle.armed ? "disabled" : ""}>${label}</button></div>`;
+  if (!cal) return head + how + start("Start calibration");
+  const all = cal.compasses;
+  const finished = all.length > 0 && all.every((c) => c.done);
+  const ok = finished && all.every((c) => c.ok);
+  const saved = ok && (all.every((c) => c.autosaved) || accepted);
+  const cards = all
+    .map((c) => {
+      const [kind, text] = CAL_STATUS[c.status] ?? ["info", c.status];
+      const ofs = c.offsets ? c.offsets.map((v) => num(v)).join(", ") : null;
+      return `<div class="card">
+        <h2>Compass ${c.id + 1} ${chip(kind, text)}</h2>
+        <div class="bar big"><div style="width:${c.percent}%"></div></div>
+        <div class="muted" style="margin:6px 0">${c.percent}%${c.attempt > 1 ? ` · attempt ${c.attempt}` : ""}${c.fitness !== null ? ` · fitness ${num(c.fitness, 1)} (lower is better; over 16 is rejected)` : ""}${ofs ? ` · offsets ${ofs}` : ""}</div>
+        ${c.done ? "" : coverage(c.coverage)}
+        ${c.advice ? `<div class="advice"><b>What it means:</b> ${esc(c.advice)}</div>` : ""}
+      </div>`;
+    })
+    .join("");
+  const banner = !finished
+    ? running
+      ? `<div class="banner info">Keep turning the vehicle slowly through every direction.${all.length ? "" : " Waiting for the flight controller…"}</div>`
+      : `<div class="banner warn">Calibration stopped.</div>`
+    : saved
+      ? `<div class="banner pass"><b>Calibration saved.</b> Reboot the flight controller to use it, then check the heading in a ground station matches the vehicle's nose.</div>`
+      : ok
+        ? `<div class="banner warn">Every compass calibrated, but the result wasn't saved automatically.</div>`
+        : `<div class="banner fail">The calibration failed and nothing was saved. Read the advice below, then try again.</div>`;
+  const buttons = running
+    ? `<button class="btn" data-action="cancelCompassCal">Cancel</button>`
+    : saved
+      ? `<button class="btn primary" data-action="reboot" ${state.vehicleBusy ? "disabled" : ""}>Reboot now</button>`
+      : ok
+        ? `<button class="btn primary" data-action="acceptCompassCal">Save the calibration</button>`
+        : `<button class="btn primary" data-action="startCompassCal" ${state.vehicleBusy ? "disabled" : ""}>Try again</button>`;
+  return `${head}${banner}${cards}<div class="actions">${buttons}</div>
+    ${cal.messages.length ? `<div class="card"><h2>What the vehicle said</h2>${list(cal.messages)}</div>` : ""}
+    ${finished ? "" : how}`;
+}
+
 const SPIN = { cw: "clockwise ↻", ccw: "counter-clockwise ↺" };
 
 /** Top view of the expected layout: nose up, each motor with its test letter, number and direction. */
@@ -1527,6 +1631,8 @@ function content() {
       return tuneView();
     case "motors":
       return motorsView();
+    case "compass":
+      return compassView();
     case "firmware":
       return firmwareView();
     case "allparams":

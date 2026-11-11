@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ardutune_core::{arming, motors, paramdoc, params, setup, tune};
 use ardutune_core::utc::{date_time, file_stamp};
-use ardutune_link::{plan, ports, Link, Params};
+use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -23,6 +23,8 @@ pub struct Connected {
     /// Default values, once read from the vehicle (`None` until then, or
     /// when the firmware doesn't offer them).
     pub(crate) defaults: Option<HashMap<String, f32>>,
+    /// The compass calibration being followed, if any.
+    pub(crate) compass_cal: Option<CompassCal>,
 }
 
 /// Changes shown to the user and waiting for confirmation. They are planned
@@ -133,7 +135,7 @@ pub async fn connect<R: Runtime>(app: AppHandle<R>, address: String) -> CmdResul
         let mut link = Link::connect(&address, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
         let mut progress = Reporter::new(app, "Reading parameters");
         let params = link.fetch_params(&mut |got, total| progress.update(got, total)).map_err(|e| e.to_string())?;
-        let c = Connected { link, params, address, defaults: None };
+        let c = Connected { link, params, address, defaults: None, compass_cal: None };
         let info = c.info();
         *slot = Some(c);
         Ok(info)
@@ -459,6 +461,52 @@ pub async fn motor_check<R: Runtime>(app: AppHandle<R>, observations: Vec<motors
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
         motor_verdict(&connected(&mut slot)?.params, &observations)
+    })
+    .await
+}
+
+/// Starts calibrating every compass; follow with `compass_cal_poll`.
+#[tauri::command]
+pub async fn compass_cal_start<R: Runtime>(app: AppHandle<R>) -> CmdResult<()> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let r = connected(&mut slot)?.link.compass_cal_start();
+        check(&mut slot, r)?;
+        connected(&mut slot)?.compass_cal = Some(CompassCal::default());
+        Ok(())
+    })
+    .await
+}
+
+/// The calibration's progress after listening briefly.
+#[tauri::command]
+pub async fn compass_cal_poll<R: Runtime>(app: AppHandle<R>) -> CmdResult<CompassCal> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let c = connected(&mut slot)?;
+        let mut cal = c.compass_cal.take().ok_or("No compass calibration is running.")?;
+        let r = c.link.compass_cal_poll(&mut cal, Duration::from_millis(400));
+        connected(&mut slot)?.compass_cal = Some(cal.clone());
+        check(&mut slot, r)?;
+        Ok(cal)
+    })
+    .await
+}
+
+/// Cancels a running calibration, or accepts a finished one that wasn't saved.
+#[tauri::command]
+pub async fn compass_cal_finish<R: Runtime>(app: AppHandle<R>, accept: bool) -> CmdResult<()> {
+    blocking(app, move |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let r = connected(&mut slot)?.link.compass_cal_finish(accept);
+        check(&mut slot, r)?;
+        if !accept {
+            connected(&mut slot)?.compass_cal = None;
+        }
+        Ok(())
     })
     .await
 }

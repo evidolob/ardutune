@@ -15,11 +15,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
-    MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_LONG_DATA,
+    MagCalStatus, MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_LONG_DATA,
     FILE_TRANSFER_PROTOCOL_DATA, GpsFixType, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA, LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA,
     PARAM_REQUEST_READ_DATA, PARAM_SET_DATA,
 };
 use mavlink::error::MessageReadError;
+use serde::Serialize;
 use mavlink::{MavConnection, MavHeader};
 
 pub mod firmware;
@@ -503,9 +504,72 @@ impl Link {
         if self.refresh_armed()? {
             return Err(Error::Armed);
         }
-        let cmd = MavCmd::MAV_CMD_DO_MOTOR_TEST;
         // Throttle type 0 is percent; motor count 0 tests just this one.
-        self.command(cmd, [f32::from(seq), 0.0, throttle_pct, seconds, 0.0, 0.0, 0.0])?;
+        self.command_explained(MavCmd::MAV_CMD_DO_MOTOR_TEST, [f32::from(seq), 0.0, throttle_pct, seconds, 0.0, 0.0, 0.0], "motor test")
+    }
+
+    /// Starts the onboard compass calibration of every compass, saving the
+    /// result when all succeed. No automatic retry: a failure stays
+    /// reported until the pilot starts again. Follow it with
+    /// [`Link::compass_cal_poll`] while the vehicle is rotated.
+    pub fn compass_cal_start(&mut self) -> Result<()> {
+        if self.refresh_armed()? {
+            return Err(Error::Armed);
+        }
+        for id in [MAG_CAL_PROGRESS_ID, MAG_CAL_REPORT_ID] {
+            self.command(MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL, [id, 250_000.0, 0.0, 0.0, 0.0, 0.0, 0.0])?;
+        }
+        self.command_explained(MavCmd::MAV_CMD_DO_START_MAG_CAL, [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0], "compass calibration")
+    }
+
+    /// Listens for `listen` and updates `cal` with the progress and results
+    /// the vehicle reported.
+    pub fn compass_cal_poll(&mut self, cal: &mut CompassCal, listen: Duration) -> Result<()> {
+        let deadline = Instant::now() + listen;
+        while let Some(msg) = self.next(deadline)? {
+            match msg {
+                MavMessage::MAG_CAL_PROGRESS(p) => {
+                    let c = cal.compass(p.compass_id);
+                    c.set_status(p.cal_status);
+                    c.percent = p.completion_pct;
+                    c.attempt = p.attempt;
+                    c.coverage = p.completion_mask;
+                }
+                MavMessage::MAG_CAL_REPORT(r) => {
+                    let c = cal.compass(r.compass_id);
+                    c.set_status(r.cal_status);
+                    c.fitness = Some(r.fitness);
+                    c.offsets = Some([r.ofs_x, r.ofs_y, r.ofs_z]);
+                    c.autosaved = r.autosaved != 0;
+                    c.check_offsets();
+                    if c.ok {
+                        c.percent = 100;
+                    }
+                }
+                MavMessage::STATUSTEXT(t) => push_text(&mut cal.messages, t.text.to_str().unwrap_or_default().to_owned()),
+                _ => {}
+            }
+        }
+        cal.compasses.sort_by_key(|c| c.id);
+        Ok(())
+    }
+
+    /// Accepts (saves) a finished calibration that wasn't saved
+    /// automatically, or cancels one in progress.
+    pub fn compass_cal_finish(&mut self, accept: bool) -> Result<()> {
+        let (cmd, what) = if accept {
+            (MavCmd::MAV_CMD_DO_ACCEPT_MAG_CAL, "accepting the compass calibration")
+        } else {
+            (MavCmd::MAV_CMD_DO_CANCEL_MAG_CAL, "cancelling the compass calibration")
+        };
+        self.command_explained(cmd, [0.0; 7], what)
+    }
+
+    /// Sends a command and waits for its acknowledgement; a refusal carries
+    /// the status texts the vehicle sent around it (ArduPilot explains most
+    /// refusals that way, e.g. "Motor Test: RC not calibrated").
+    fn command_explained(&mut self, cmd: MavCmd, p: [f32; 7], what: &str) -> Result<()> {
+        self.command(cmd, p)?;
         let mut said = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut result = None;
@@ -530,9 +594,9 @@ impl Link {
                     }
                 }
                 let why = if said.is_empty() { format!("{r:?}") } else { said.join("; ") };
-                Err(Error::Command(format!("motor test refused: {why}")))
+                Err(Error::Command(format!("{what} refused: {why}")))
             }
-            None => Err(Error::Timeout("waiting for the motor test to be acknowledged".to_owned())),
+            None => Err(Error::Timeout(format!("waiting for the {what} to be acknowledged"))),
         }
     }
 
@@ -790,6 +854,86 @@ impl Link {
 }
 
 const STATUSTEXT_LEN: usize = 50;
+const MAG_CAL_PROGRESS_ID: f32 = 191.0;
+const MAG_CAL_REPORT_ID: f32 = 192.0;
+
+/// Compass calibration as the vehicle reports it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CompassCal {
+    pub compasses: Vec<CompassProgress>,
+    /// Status texts sent meanwhile.
+    pub messages: Vec<String>,
+}
+
+impl CompassCal {
+    fn compass(&mut self, id: u8) -> &mut CompassProgress {
+        if let Some(i) = self.compasses.iter().position(|c| c.id == id) {
+            return &mut self.compasses[i];
+        }
+        self.compasses.push(CompassProgress { id, ..Default::default() });
+        self.compasses.last_mut().unwrap()
+    }
+
+    /// Every compass has finished, well or not.
+    pub fn finished(&self) -> bool {
+        !self.compasses.is_empty() && self.compasses.iter().all(|c| c.done)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CompassProgress {
+    /// Compass instance: 0 is the first.
+    pub id: u8,
+    /// waiting, running, success, failed, bad_orientation, bad_radius,
+    /// bad_offsets, bad_scaling or bad_fit.
+    pub status: &'static str,
+    pub done: bool,
+    pub ok: bool,
+    pub percent: u8,
+    pub attempt: u8,
+    /// Which of 80 directions have been covered, one bit each.
+    pub coverage: [u8; 10],
+    /// Lower is better; ArduPilot rejects above COMPASS_CAL_FIT (16).
+    pub fitness: Option<f32>,
+    pub offsets: Option<[f32; 3]>,
+    pub autosaved: bool,
+    /// What a failure (or a doubtful result) means and what to do.
+    pub advice: Option<&'static str>,
+}
+
+impl CompassProgress {
+    fn set_status(&mut self, s: MagCalStatus) {
+        use MagCalStatus::*;
+        (self.status, self.done, self.ok) = match s {
+            MAG_CAL_NOT_STARTED | MAG_CAL_WAITING_TO_START => ("waiting", false, false),
+            MAG_CAL_RUNNING_STEP_ONE | MAG_CAL_RUNNING_STEP_TWO => ("running", false, false),
+            MAG_CAL_SUCCESS => ("success", true, true),
+            MAG_CAL_FAILED => ("failed", true, false),
+            MAG_CAL_FAILED_ORIENTATION => ("bad_orientation", true, false),
+            MAG_CAL_FAILED_RADIUS => ("bad_radius", true, false),
+            MAG_CAL_FAILED_OFFSETS => ("bad_offsets", true, false),
+            MAG_CAL_FAILED_DIAG_SCALING => ("bad_scaling", true, false),
+            MAG_CAL_FAILED_RESIDUALS_HIGH => ("bad_fit", true, false),
+        };
+        self.advice = match self.status {
+            "failed" | "bad_fit" => Some("The readings didn't fit a clean sphere: usually metal or current-carrying wires nearby, or the vehicle wasn't turned through every direction. Move away from steel, desks and cars and try again, slowly."),
+            "bad_radius" => Some("The measured field strength is wrong for your location: strong interference (battery leads, motors, steel nearby) or a faulty compass. Calibrate away from metal; if it persists, move the compass away from power wiring."),
+            "bad_orientation" => Some("The compass seems mounted at a different angle than COMPASS_ORIENT says. Check the GPS/compass module's arrow points forward, or let ArduPilot detect it (COMPASS_AUTO_ROT = 2) and calibrate again."),
+            "bad_offsets" => Some("The offsets are too large: something magnetic sits close to the compass. Move the compass away from the battery, power leads and motors."),
+            "bad_scaling" => Some("The axes scale very differently: usually interference during the calibration. Try again away from metal."),
+            _ => None,
+        };
+    }
+
+    /// Flags large offsets after a successful calibration.
+    fn check_offsets(&mut self) {
+        if let (true, Some(o)) = (self.ok, self.offsets) {
+            if o.iter().any(|v| v.abs() > 600.0) {
+                self.advice = Some("Calibrated, but the offsets are large (over 600): a magnetic part or power wire sits close to the compass and may disturb it in flight as current changes.");
+            }
+        }
+    }
+}
 
 fn push_text(messages: &mut Vec<String>, text: String) {
     let text = text.trim().to_owned();

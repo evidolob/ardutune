@@ -47,6 +47,10 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   remapping (`SERVOn_FUNCTION`) and DShot direction reversal
   (`SERVO_BLH_RVMASK`) for ArduPilot's quad layouts, shown on a top-view
   diagram. `ardutune motors` asks the same questions on the command line.
+- Compass calibration: runs the flight controller's onboard calibration of
+  every compass with live progress and direction coverage, explains
+  failures (field strength, orientation, fit, large offsets) and saves the
+  result. `ardutune compass`.
 - Initial tune: starting filter, acceleration-limit, thrust-curve and battery
   values for a new build from its prop size and pack (the formulas of
   ArduPilot's initial tune parameters calculator, with ArduCopter 4.7 names),
