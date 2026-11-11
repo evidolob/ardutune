@@ -168,6 +168,16 @@ enum LogsCmd {
         #[arg(long)]
         check: bool,
     },
+    /// Delete one log from the flight controller
+    Delete {
+        /// Log id from `ardutune logs list`
+        #[arg(long)]
+        id: u16,
+    },
+    /// Erase every log on the flight controller
+    Erase,
+    /// List the log files on the SD card (over MAVLink FTP)
+    Files,
 }
 
 #[derive(clap::Args)]
@@ -352,6 +362,28 @@ fn main() -> Result<()> {
             if check {
                 println!();
                 print_report(&assess(&open(&path)?));
+            }
+        }
+        Cmd::Logs { cmd: LogsCmd::Delete { id } } => {
+            let mut link = vehicle::delete_log(&cli.conn, id)?;
+            println!("Deleted log {id}. Logs now on the vehicle:");
+            vehicle::print_logs(&link.list_logs()?);
+        }
+        Cmd::Logs { cmd: LogsCmd::Erase } => {
+            let mut link = vehicle::connect(&cli.conn)?;
+            link.erase_all_logs()?;
+            println!("All logs erased.");
+        }
+        Cmd::Logs { cmd: LogsCmd::Files } => {
+            let mut link = vehicle::connect(&cli.conn)?;
+            let (dir, _) = link.log_files()?;
+            println!("{dir}:");
+            for e in link.list_dir(dir)? {
+                match e {
+                    ardutune_link::ftp::Entry::File { name, size } => println!("  {name:<16} {size:>10} bytes"),
+                    ardutune_link::ftp::Entry::Dir(name) => println!("  {name}/"),
+                    ardutune_link::ftp::Entry::Skip => {}
+                }
             }
         }
         Cmd::Sample { out, preset } => {

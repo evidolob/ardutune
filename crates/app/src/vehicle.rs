@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{backups, blocking, data_dir, lock, AppState, CmdResult, Reporter};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const REBOOT_TIMEOUT: Duration = Duration::from_secs(40);
 
 pub struct Connected {
     link: Link,
@@ -187,12 +188,20 @@ fn log_list(slot: &mut Option<Connected>) -> CmdResult<Vec<LogView>> {
 }
 
 /// Deletes one log from the flight controller and returns the new list.
+/// The newest log may still be open on the vehicle, so it needs
+/// `reboot_first`: reboot, reconnect, then delete.
 #[tauri::command]
-pub async fn delete_vehicle_log<R: Runtime>(app: AppHandle<R>, id: u16) -> CmdResult<Vec<LogView>> {
+pub async fn delete_vehicle_log<R: Runtime>(app: AppHandle<R>, id: u16, reboot_first: Option<bool>) -> CmdResult<Vec<LogView>> {
     blocking(app, move |app| {
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
-        let r = connected(&mut slot)?.link.delete_log(id);
+        let rebooted = reboot_first.unwrap_or(false);
+        if rebooted {
+            let c = slot.take().ok_or("Not connected to a vehicle.")?;
+            let link = c.link.reboot_and_reconnect(&c.address, REBOOT_TIMEOUT).map_err(|e| format!("{e} (after rebooting)"))?;
+            *slot = Some(Connected { link, ..c });
+        }
+        let r = connected(&mut slot)?.link.delete_log(id, rebooted);
         check(&mut slot, r)?;
         log_list(&mut slot)
     })

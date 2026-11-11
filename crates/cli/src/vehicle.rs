@@ -11,8 +11,17 @@ use ardutune_link::{plan, ports, LogEntry, Link, Params};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The address to open: `auto` becomes the flight controller's USB port.
+pub fn address(conn: &str) -> Result<String> {
+    if conn == "auto" {
+        ports::auto_address().map_err(anyhow::Error::msg)
+    } else {
+        Ok(conn.to_owned())
+    }
+}
+
 pub fn connect(conn: &str) -> Result<Link> {
-    let address = if conn == "auto" { ports::auto_address().map_err(anyhow::Error::msg)? } else { conn.to_owned() };
+    let address = address(conn)?;
     eprintln!("Connecting to {address} ...");
     let link = Link::connect(&address, CONNECT_TIMEOUT)?;
     let v = link.vehicle();
@@ -154,6 +163,29 @@ pub fn apply_file(conn: &str, file: &Path, opts: &ApplyOptions) -> Result<()> {
     apply(&mut link, &current, &wanted, opts)
 }
 
+/// Deletes a log; for the newest one (possibly still open on the vehicle)
+/// offers to reboot first.
+pub fn delete_log(conn: &str, id: u16) -> Result<Link> {
+    let mut link = connect(conn)?;
+    match link.delete_log(id, false) {
+        Err(ardutune_link::Error::NewestLogOpen(_)) => {
+            println!(
+                "Log {id} is the newest log. The flight controller keeps it open after disarming, and deleting an open \
+                 file can corrupt the SD card."
+            );
+            if !confirm("Reboot the flight controller now and then delete it?", false)? {
+                bail!("nothing deleted");
+            }
+            let address = address(conn)?;
+            eprintln!("Rebooting and reconnecting ...");
+            let mut link = link.reboot_and_reconnect(&address, Duration::from_secs(40))?;
+            link.delete_log(id, true)?;
+            Ok(link)
+        }
+        r => r.map(|_| link).map_err(Into::into),
+    }
+}
+
 fn confirm(question: &str, default_yes: bool) -> Result<bool> {
     print!("{question} {} ", if default_yes { "[Y/n]" } else { "[y/N]" });
     io::stdout().flush()?;
@@ -164,6 +196,8 @@ fn confirm(question: &str, default_yes: bool) -> Result<bool> {
 }
 
 pub fn print_logs(entries: &[LogEntry]) {
+    // Deleted files leave empty entries behind.
+    let entries: Vec<&LogEntry> = entries.iter().filter(|e| e.size > 0).collect();
     if entries.is_empty() {
         println!("No logs on the flight controller.");
         return;

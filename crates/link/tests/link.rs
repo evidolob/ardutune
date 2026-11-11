@@ -141,8 +141,11 @@ fn deletes_single_logs_by_file_and_erases_all() {
     let mock = MockVehicle::start(state).unwrap();
     let mut link = connect(&mock);
 
+    // The newest log may be open until the vehicle reboots.
+    assert!(matches!(link.delete_log(4, false), Err(Error::NewestLogOpen(4))));
+
     // Log 2 is file 00000013.BIN; its entry stays, empty, like ArduPilot's.
-    link.delete_log(2).unwrap();
+    link.delete_log(2, false).unwrap();
     assert_eq!(mock.state().deleted, [1].into());
     let sizes: Vec<u32> = link.list_logs().unwrap().iter().map(|l| l.size).collect();
     assert_eq!(sizes, vec![1000, 0, 1600, 1900]);
@@ -150,15 +153,17 @@ fn deletes_single_logs_by_file_and_erases_all() {
     assert_eq!(link.download_log(&entry, &mut |_, _| {}).unwrap(), logs[2]);
 
     // Deleting the oldest renumbers the rest from the next file.
-    link.delete_log(1).unwrap();
+    link.delete_log(1, false).unwrap();
     let listed = link.list_logs().unwrap();
     assert_eq!(listed.iter().map(|l| (l.id, l.size)).collect::<Vec<_>>(), vec![(1, 1600), (2, 1900)]);
-    link.delete_log(2).unwrap();
+    let mut link = link.reboot_and_reconnect(mock.client_address(), Duration::from_secs(10)).unwrap();
+    assert_eq!(mock.state().reboots, 1);
+    link.delete_log(2, true).unwrap();
     assert_eq!(mock.state().deleted, [0, 1, 3].into());
-    assert!(matches!(link.delete_log(2), Err(Error::Command(_))));
+    assert!(matches!(link.delete_log(2, true), Err(Error::Command(_))));
 
     mock.state().armed = true;
-    assert!(matches!(link.delete_log(1), Err(Error::Armed)));
+    assert!(matches!(link.delete_log(1, true), Err(Error::Armed)));
     assert!(matches!(link.erase_all_logs(), Err(Error::Armed)));
     mock.state().armed = false;
 

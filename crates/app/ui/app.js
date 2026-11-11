@@ -160,7 +160,8 @@ async function downloadLog(id) {
 function askDelete(id) {
   const log = state.vehicleLogs?.find((l) => String(l.id) === String(id));
   const what = log ? `log ${log.id} (${log.date ?? "no GPS time"}, ${num(log.size_mb, 1)} MB)` : `log ${id}`;
-  set({ modal: { stage: "delete", title: `Delete ${what}?`, id: Number(id) } });
+  const newest = Math.max(...(state.vehicleLogs ?? []).map((l) => l.id)) === Number(id);
+  set({ modal: { stage: "delete", title: `Delete ${what}?`, id: Number(id), newest } });
 }
 
 function askErase() {
@@ -169,10 +170,11 @@ function askErase() {
 }
 
 async function confirmDelete() {
-  const { id } = state.modal;
+  const { id, newest } = state.modal;
   set({ modal: null });
-  const logs = await vehicleTask(id === null ? "Erasing all logs…" : `Deleting log ${id}…`, () =>
-    id === null ? invoke("erase_vehicle_logs") : invoke("delete_vehicle_log", { id }),
+  const text = id === null ? "Erasing all logs…" : newest ? `Rebooting the flight controller, then deleting log ${id}…` : `Deleting log ${id}…`;
+  const logs = await vehicleTask(text, () =>
+    id === null ? invoke("erase_vehicle_logs") : invoke("delete_vehicle_log", { id, rebootFirst: !!newest }),
   );
   if (logs) {
     set({ vehicleLogs: logs });
@@ -826,8 +828,9 @@ function modal() {
     case "delete":
       body = `<p>This permanently removes ${m.id === null ? "every log" : "the log"} from the flight controller's SD card. It can't be undone; download anything you want to keep first.</p>
         ${m.id === null ? "" : `<p class="muted">Single logs are deleted as files over MAVLink FTP. The vehicle numbers logs from the oldest one, so the others may get new numbers.</p>`}
+        ${m.newest ? `<div class="banner warn">This is the newest log. The flight controller keeps it open after disarming, and deleting an open file can corrupt the SD card, so ArduTune reboots the flight controller first, reconnects and then deletes it.</div>` : ""}
         ${state.vehicle?.armed ? `<div class="banner fail">The vehicle is armed. Disarm it first.</div>` : ""}
-        <div class="actions"><button class="btn destroy" data-action="confirmDelete" ${state.vehicle?.armed ? "disabled" : ""}>${m.id === null ? "Erase all" : "Delete"}</button>
+        <div class="actions"><button class="btn destroy" data-action="confirmDelete" ${state.vehicle?.armed ? "disabled" : ""}>${m.id === null ? "Erase all" : m.newest ? "Reboot and delete" : "Delete"}</button>
         <button class="btn" data-action="closeModal">Cancel</button></div>`;
       break;
     case "deleteBackup":

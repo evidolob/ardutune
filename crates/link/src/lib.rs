@@ -51,6 +51,9 @@ pub enum Error {
     Command(String),
     Send(String),
     Ftp(String),
+    /// The newest log may still be open for writing: ArduPilot keeps it open
+    /// after disarming. Deleting an open file can corrupt the SD card.
+    NewestLogOpen(u16),
 }
 
 impl fmt::Display for Error {
@@ -68,6 +71,10 @@ impl fmt::Display for Error {
             Error::Command(e) => write!(f, "command failed: {e}"),
             Error::Send(e) => write!(f, "send failed: {e}"),
             Error::Ftp(e) => write!(f, "file access on the vehicle failed: {e}"),
+            Error::NewestLogOpen(id) => write!(
+                f,
+                "log {id} is the newest log, which the flight controller may still have open; reboot it first, then delete"
+            ),
         }
     }
 }
@@ -277,6 +284,23 @@ impl Link {
                     stop.store(true, Ordering::Relaxed);
                     return Err(Error::NoVehicle);
                 }
+            }
+        }
+    }
+
+    /// Reboots the vehicle and connects to it again at `address` once it is
+    /// back (USB ports disappear while it restarts).
+    pub fn reboot_and_reconnect(mut self, address: &str, timeout: Duration) -> Result<Self> {
+        self.reboot()?;
+        drop(self);
+        // Give it time to go down before the first attempt.
+        thread::sleep(Duration::from_secs(2));
+        let deadline = Instant::now() + timeout;
+        loop {
+            match Link::connect(address, Duration::from_secs(3)) {
+                Ok(link) => return Ok(link),
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(500)),
+                Err(e) => return Err(e),
             }
         }
     }
@@ -732,7 +756,7 @@ const LOG_DIRS: [&str; 2] = ["/APM/LOGS", "logs"];
 const ERASE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A log file on the vehicle: (number, name, size).
-type LogFile = (u32, String, u64);
+pub type LogFile = (u32, String, u64);
 
 impl Link {
     /// Erases every log on the flight controller and waits until the list is
@@ -761,13 +785,20 @@ impl Link {
     /// Deletes one log's file over MAVLink FTP. The log list numbers logs from
     /// the oldest file, so log `id` is file number oldest + id - 1; that is
     /// only trusted when every listed log's size matches its file.
-    pub fn delete_log(&mut self, id: u16) -> Result<()> {
+    ///
+    /// ArduPilot keeps the newest log open after disarming, so it is only
+    /// deleted when `just_rebooted` says the vehicle hasn't armed since boot.
+    pub fn delete_log(&mut self, id: u16, just_rebooted: bool) -> Result<()> {
         if self.refresh_armed()? {
             return Err(Error::Armed);
         }
         let logs = self.list_logs()?;
         if !logs.iter().any(|l| l.id == id && l.size > 0) {
             return Err(Error::Command(format!("the vehicle has no log {id}")));
+        }
+        let newest = logs.iter().filter(|l| l.size > 0).map(|l| l.id).max();
+        if newest == Some(id) && !just_rebooted {
+            return Err(Error::NewestLogOpen(id));
         }
         let (dir, files) = self.log_files()?;
         let oldest = files.iter().map(|f| f.0).min().unwrap_or(0);
@@ -789,8 +820,8 @@ impl Link {
         }
     }
 
-    /// The log directory and the log files in it.
-    fn log_files(&mut self) -> Result<(&'static str, Vec<LogFile>)> {
+    /// The log directory and the log files in it, read over MAVLink FTP.
+    pub fn log_files(&mut self) -> Result<(&'static str, Vec<LogFile>)> {
         let mut last_err = None;
         for dir in LOG_DIRS {
             match self.list_dir(dir) {
@@ -810,7 +841,7 @@ impl Link {
         Err(last_err.unwrap_or_else(|| Error::Ftp("no log directory".to_owned())))
     }
 
-    fn list_dir(&mut self, path: &str) -> Result<Vec<ftp::Entry>> {
+    pub fn list_dir(&mut self, path: &str) -> Result<Vec<ftp::Entry>> {
         let mut entries = Vec::new();
         loop {
             let reply = self.ftp(ftp::LIST_DIRECTORY, entries.len() as u32, path.as_bytes())?;

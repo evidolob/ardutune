@@ -102,8 +102,13 @@ fn analyse_connect_download_write_and_reboot() {
 
     // Delete the downloaded log, then erase what's left.
     let mock_logs = mock.state().logs.len();
-    let left = call("delete_vehicle_log", json!({ "id": id })).unwrap();
+    let newest = mock_logs as u16;
+    let err = call("delete_vehicle_log", json!({ "id": newest })).unwrap_err();
+    assert!(err.contains("newest log"), "{err}");
+    let left = call("delete_vehicle_log", json!({ "id": newest, "rebootFirst": true })).unwrap();
     assert_eq!(left.as_array().unwrap().len(), mock_logs - 1);
+    assert_eq!(mock.state().reboots, 1);
+    assert_eq!(call("vehicle_status", json!({})).unwrap()["system_id"], json!(1), "still connected after the reboot");
     assert_eq!(call("erase_vehicle_logs", json!({})).unwrap(), json!([]));
 
     // Back up, change two values elsewhere, then restore just one of them.
@@ -134,7 +139,7 @@ fn analyse_connect_download_write_and_reboot() {
     assert!(call("delete_backup", json!({ "path": path })).is_err(), "only backups can be deleted");
 
     call("reboot", json!({})).unwrap();
-    assert_eq!(mock.state().reboots, 1);
+    assert_eq!(mock.state().reboots, 2);
     assert_eq!(call("vehicle_status", json!({})).unwrap(), Value::Null);
 
     let _ = std::fs::remove_dir_all(&data);
