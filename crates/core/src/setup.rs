@@ -431,20 +431,7 @@ fn failsafes(p: Param) -> Step {
         }
         None => {}
     }
-    match (int(p, "BATT_FS_LOW_ACT"), p("BATT_LOW_VOLT"), p("BATT_LOW_MAH")) {
-        (Some(0), ..) => items.push(item(
-            Status::Warn,
-            "No action on low battery",
-            "Set BATT_FS_LOW_ACT (2 = return home, 1 = land) and a threshold: BATT_LOW_VOLT (about 3.5 V per cell under load) or BATT_LOW_MAH.",
-        )),
-        (Some(_), Some(v), Some(mah)) if v == 0.0 && mah == 0.0 => items.push(item(
-            Status::Warn,
-            "Low-battery action set but no threshold",
-            "Set BATT_LOW_VOLT (about 3.5 V per cell under load) or BATT_LOW_MAH.",
-        )),
-        (Some(_), ..) => items.push(item(Status::Pass, "Low-battery failsafe set", "")),
-        _ => {}
-    }
+    battery_failsafe(p, &mut items, &mut changes);
     if int(p, "FS_EKF_ACTION") == Some(0) {
         items.push(item(Status::Warn, "EKF failsafe is off", "FS_EKF_ACTION = 1 lands if the position estimate goes bad."));
     }
@@ -457,6 +444,128 @@ fn failsafes(p: Param) -> Step {
         changes.extend(change(p, "FS_CRASH_CHECK", 1.0, "Disarm automatically after a crash"));
     }
     step("failsafes", "Failsafes", "What the vehicle does on its own when the radio, battery or position estimate fails.", items, changes)
+}
+
+/// Battery chemistry, from the per-cell voltages in MOT_BAT_VOLT_MAX/MIN
+/// (as ArduPilot's initial tune setup sets them).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Chemistry {
+    LiPo,
+    LiIon,
+}
+
+impl Chemistry {
+    fn name(self) -> &'static str {
+        match self {
+            Chemistry::LiPo => "LiPo",
+            Chemistry::LiIon => "Li-ion",
+        }
+    }
+
+    /// Low and critical failsafe voltages per cell, under load.
+    fn thresholds(self) -> (f64, f64) {
+        match self {
+            Chemistry::LiPo => (3.5, 3.3),
+            Chemistry::LiIon => (3.1, 2.8),
+        }
+    }
+}
+
+/// Cell count and chemistry from MOT_BAT_VOLT_MAX (4.05-4.45 V per full
+/// cell) and MOT_BAT_VOLT_MIN (below 3.0 V per cell means Li-ion).
+fn pack(p: Param) -> Option<(u32, Chemistry)> {
+    let max = p("MOT_BAT_VOLT_MAX").filter(|v| *v > 0.0)?;
+    let cells = (1..=14).find(|n| (4.05..=4.45).contains(&(max / f64::from(*n))))?;
+    let min_cell = p("MOT_BAT_VOLT_MIN").filter(|v| *v > 0.0).map(|v| v / f64::from(cells));
+    let chem = if min_cell.is_some_and(|v| v < 3.0) { Chemistry::LiIon } else { Chemistry::LiPo };
+    Some((cells, chem))
+}
+
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+fn battery_failsafe(p: Param, items: &mut Vec<Item>, changes: &mut Vec<ParamChange>) {
+    let Some(low_act) = int(p, "BATT_FS_LOW_ACT") else { return };
+    let gps = p("GPS1_TYPE").or_else(|| p("GPS_TYPE")).is_some_and(|t| t != 0.0);
+    let (rtl, rtl_name) = if gps { (2.0, "return home") } else { (1.0, "land") };
+    let Some((cells, chem)) = pack(p) else {
+        // Without the pack, only check that something is set.
+        let none = p("BATT_LOW_VOLT").unwrap_or(0.0) == 0.0 && p("BATT_LOW_MAH").unwrap_or(0.0) == 0.0;
+        if low_act == 0 || none {
+            items.push(item(
+                Status::Warn,
+                if low_act == 0 { "No action on low battery" } else { "Low-battery action set but no threshold" },
+                "Set BATT_FS_LOW_ACT (2 = return home, 1 = land) and BATT_LOW_VOLT: about 3.5 V per cell for LiPo, 3.1 V for Li-ion, under load. Set MOT_BAT_VOLT_MAX/MIN for your pack and ArduTune can suggest values.",
+            ));
+        } else {
+            items.push(item(Status::Pass, "Low-battery failsafe set", ""));
+        }
+        return;
+    };
+    let n = f64::from(cells);
+    let (low_cell, crit_cell) = chem.thresholds();
+    let (low, crit) = (round1(low_cell * n), round1(crit_cell * n));
+    items.push(item(
+        Status::Info,
+        format!("Battery: {cells}S {} (from MOT_BAT_VOLT_MAX/MIN)", chem.name()),
+        format!(
+            "Suggested failsafes for this pack: low {low} V ({low_cell} V per cell) → {rtl_name}, critical {crit} V ({crit_cell} V per cell) → land. If the pack is different, correct MOT_BAT_VOLT_MAX/MIN first."
+        ),
+    ));
+
+    let low_level = Level { param: "BATT_LOW_VOLT", action: "BATT_FS_LOW_ACT", what: "low", value: low, bounds: (crit_cell, 3.8), act: (rtl, rtl_name) };
+    check_level(p, n, chem, &low_level, items, changes);
+    if p("BATT_CRT_VOLT").is_some() {
+        let crit_level =
+            Level { param: "BATT_CRT_VOLT", action: "BATT_FS_CRT_ACT", what: "critical", value: crit, bounds: (crit_cell - 0.3, low_cell), act: (1.0, "land") };
+        check_level(p, n, chem, &crit_level, items, changes);
+    }
+}
+
+/// One battery failsafe level: its voltage and action parameters, the
+/// suggested voltage, acceptable volts per cell and the suggested action.
+struct Level {
+    param: &'static str,
+    action: &'static str,
+    what: &'static str,
+    value: f64,
+    bounds: (f64, f64),
+    act: (f64, &'static str),
+}
+
+fn check_level(p: Param, cells: f64, chem: Chemistry, l: &Level, items: &mut Vec<Item>, changes: &mut Vec<ParamChange>) {
+    // Vehicles store these as f32 (24.8 comes back as 24.799999).
+    let now = (p(l.param).unwrap_or(0.0) * 1000.0).round() / 1000.0;
+    let per_cell = now / cells;
+    let what = l.what;
+    if now == 0.0 || per_cell < l.bounds.0 || per_cell > l.bounds.1 {
+        let why = if now == 0.0 {
+            format!("{} isn't set", l.param)
+        } else if per_cell < l.bounds.0 {
+            format!("{} = {} V is {per_cell:.2} V per cell: too low for the {what} level on {}", l.param, format_value(now), chem.name())
+        } else {
+            format!("{} = {} V is {per_cell:.2} V per cell: it would trigger with a healthy pack", l.param, format_value(now))
+        };
+        items.push(item(Status::Warn, why, format!("{} V ({:.1} V per cell) is typical for the {what} level.", format_value(l.value), l.value / cells)));
+        changes.extend(change(p, l.param, l.value, format!("{} failsafe at {:.1} V per cell", capitalise(what), l.value / cells)));
+    } else {
+        items.push(item(Status::Pass, format!("{} level at {} V ({per_cell:.2} V per cell)", capitalise(what), format_value(now)), ""));
+    }
+    if int(p, l.action) == Some(0) {
+        let (value, name) = l.act;
+        items.push(item(
+            Status::Warn,
+            format!("Nothing happens at the {what} level ({} = 0, warning only)", l.action),
+            format!("{} = {} makes the vehicle {name}.", l.action, format_value(value)),
+        ));
+        changes.extend(change(p, l.action, value, format!("{} when the battery reaches the {what} level", capitalise(name))));
+    }
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map_or_else(String::new, |f| f.to_uppercase().collect::<String>() + c.as_str())
 }
 
 // ---------- 5. Battery monitor ----------
@@ -687,7 +796,12 @@ mod tests {
             ("RCMAP_THROTTLE", 3.0),
             ("BATT_MONITOR", 4.0),
             ("BATT_FS_LOW_ACT", 0.0),
-            ("BATT_LOW_VOLT", 0.0),
+            ("BATT_LOW_VOLT", 10.5),
+            ("BATT_CRT_VOLT", 0.0),
+            ("BATT_FS_CRT_ACT", 0.0),
+            ("MOT_BAT_VOLT_MAX", 32.8),
+            ("MOT_BAT_VOLT_MIN", 22.4),
+            ("GPS1_TYPE", 1.0),
             ("BATT_LOW_MAH", 0.0),
             ("BATT_CAPACITY", 1300.0),
             ("FS_EKF_ACTION", 1.0),
@@ -755,6 +869,9 @@ mod tests {
 
         let fs = step(&g, "failsafes");
         assert_eq!(fs.status, Status::Warn, "no low-battery action");
+        assert!(fs.items.iter().any(|i| i.title.contains("8S Li-ion")), "{:?}", fs.items);
+        let got: Vec<(&str, f64)> = fs.changes.iter().map(|c| (c.name.as_str(), c.value)).collect();
+        assert_eq!(got, [("BATT_LOW_VOLT", 24.8), ("BATT_FS_LOW_ACT", 2.0), ("BATT_CRT_VOLT", 22.4), ("BATT_FS_CRT_ACT", 1.0)]);
 
         let logging = step(&g, "logging");
         assert_eq!(logging.status, Status::Fail, "no gyro logging");
@@ -762,6 +879,49 @@ mod tests {
         assert!(names.contains(&"INS_RAW_LOG_OPT"), "{names:?}");
 
         assert_eq!(step(&g, "sensors").status, Status::Pass, "{:?}", step(&g, "sensors").items);
+    }
+
+    #[test]
+    fn battery_failsafe_by_pack() {
+        // 8S Li-ion with the low level at 20 V (2.5 V per cell): too low.
+        let mut p = kakute();
+        set(&mut p, "BATT_LOW_VOLT", 20.0);
+        set(&mut p, "BATT_FS_LOW_ACT", 2.0);
+        let g = assess(params(&p), &Live::default());
+        let fs = step(&g, "failsafes");
+        assert!(fs.items.iter().any(|i| i.title.contains("2.50 V per cell: too low")), "{:?}", fs.items);
+        assert!(fs.changes.iter().any(|c| c.name == "BATT_LOW_VOLT" && c.value == 24.8));
+        assert!(!fs.changes.iter().any(|c| c.name == "BATT_FS_LOW_ACT"), "action already set");
+
+        // A good setup passes.
+        set(&mut p, "BATT_LOW_VOLT", 25.0);
+        set(&mut p, "BATT_CRT_VOLT", 22.6);
+        set(&mut p, "BATT_FS_CRT_ACT", 1.0);
+        let g = assess(params(&p), &Live::default());
+        assert!(step(&g, "failsafes").changes.is_empty(), "{:?}", step(&g, "failsafes").items);
+
+        // 4S LiPo: 3.5 / 3.3 V per cell; land instead of RTL without GPS.
+        let lipo = params(&[
+            ("MOT_BAT_VOLT_MAX", 16.8),
+            ("MOT_BAT_VOLT_MIN", 13.2),
+            ("BATT_FS_LOW_ACT", 0.0),
+            ("BATT_LOW_VOLT", 0.0),
+            ("BATT_CRT_VOLT", 0.0),
+            ("BATT_FS_CRT_ACT", 0.0),
+            ("GPS1_TYPE", 0.0),
+        ]);
+        let g = assess(lipo, &Live::default());
+        let got: Vec<(String, f64)> = step(&g, "failsafes").changes.iter().map(|c| (c.name.clone(), c.value)).collect();
+        assert_eq!(
+            got,
+            [("BATT_LOW_VOLT".to_owned(), 14.0), ("BATT_FS_LOW_ACT".to_owned(), 1.0), ("BATT_CRT_VOLT".to_owned(), 13.2), ("BATT_FS_CRT_ACT".to_owned(), 1.0)]
+        );
+
+        // Unknown pack: advice only, no numbers.
+        let unknown = params(&[("BATT_FS_LOW_ACT", 0.0), ("BATT_LOW_VOLT", 0.0), ("BATT_LOW_MAH", 0.0)]);
+        let g = assess(unknown, &Live::default());
+        assert!(step(&g, "failsafes").changes.is_empty());
+        assert_eq!(step(&g, "failsafes").status, Status::Warn);
     }
 
     #[test]
