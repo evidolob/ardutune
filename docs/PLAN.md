@@ -185,6 +185,45 @@ safe fixes. Pre-arm check explains why a vehicle won't arm. Next: motor
 order/direction test, compass calibration, prop-size defaults, a record of
 what was configured.
 
+## Separate track: vehicle tools
+
+### Full parameter list
+
+Every parameter of the connected vehicle, searchable and editable, as a
+complete replacement for a ground station's parameter screen.
+
+- Table of all parameters: name, current value, default, units, range or
+  allowed values (enum names, bitmask bits as checkboxes), and the
+  description; filter by name, description text, group (`INS_`, `ATC_`…)
+  and "changed from default".
+- Descriptions, units, ranges and enums from ArduPilot's parameter metadata
+  (`apm.pdef.json` per vehicle and version), bundled with the app so it works
+  offline; the matching version picked from the vehicle's firmware, with the
+  nearest bundled one as fallback and a warning.
+- Defaults read from the vehicle where firmware supports it (MAVLink FTP
+  `@PARAM/param.pck` with defaults), otherwise from the metadata.
+- Edits are validated against range and type, staged, then written through
+  the same review → backup → write and verify → reboot flow; parameters
+  marked "reboot required" say so.
+- Compare with a backup or `.param` file, and with defaults.
+
+### Firmware version and upgrade
+
+- Show what the vehicle runs: vehicle type, version and git hash, board
+  and its ID (AUTOPILOT_VERSION, the boot banner), and whether the build is
+  stable, beta or dev.
+- Tell whether a newer release exists for this board: an optional online
+  check against firmware.ardupilot.org (the app stays usable offline), or a
+  firmware file the user downloaded.
+- Upload firmware: back up parameters first, reboot into the bootloader
+  (MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN), flash an `.apj` with the ArduPilot
+  bootloader protocol over USB, verify the CRC, reconnect and compare
+  parameters with the backup (major upgrades can rename or reset some).
+- Safety: refuse an `.apj` whose board ID doesn't match the board, refuse
+  while armed, warn about release notes between versions, and explain DFU
+  recovery if an upload is interrupted. Variant builds matter (e.g. the
+  KakuteH7 "-bdshot" firmware for bidirectional DShot).
+
 ## Risks
 
 - Bad advice from poor logs → readiness check + confidence on every finding.
