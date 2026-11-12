@@ -330,6 +330,32 @@ setup.
 - Checks: no GPS detected on the configured port, wrong baud, no fix after
   a few minutes outdoors, constellations that leave too few satellites.
 
+## Installers for Windows, macOS and Linux
+
+Installers for each desktop OS, built by Tauri's bundler. The bundle is
+already on (`"targets": "all"` in `crates/app/tauri.conf.json`); there is no
+CI or release workflow yet.
+
+- Windows: an NSIS `.exe` installer and an `.msi`.
+- macOS: a `.dmg` with a universal build (Apple Silicon and Intel).
+- Linux: an `.AppImage`, plus `.deb` and `.rpm`.
+- GitHub Actions: a matrix build on windows-latest, macos-latest and
+  ubuntu-latest (`tauri-apps/tauri-action`), triggered by a version tag. It
+  attaches the installers to a GitHub release, with the CLI binary for each OS
+  next to them.
+- Signing:
+  - macOS needs a Developer ID certificate and notarization, or Gatekeeper
+    blocks the app. That needs an Apple Developer account.
+  - Without a code-signing certificate, Windows SmartScreen warns on first
+    run. Start unsigned and document the "Run anyway" step.
+- Icons: generate the full set (`.icns`, `.ico`, sizes) from `icons/icon.png`
+  with `tauri icon`.
+- Serial access notes in the README: on Linux, add the user to the `dialout`
+  (or `uucp`) group; Windows 10 and later and macOS need no driver for
+  ArduPilot boards.
+- Later: in-app update checks against GitHub releases (Tauri updater, which
+  needs signed update files).
+
 ## Last step: static web app
 
 After the features above, ship ArduTune as a static web app as well (no
