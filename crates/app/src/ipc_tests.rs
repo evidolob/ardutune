@@ -76,6 +76,28 @@ fn analyse_connect_download_write_and_reboot() {
     assert!(report["problems"][0]["title"].as_str().unwrap().contains("spoofed"), "{report}");
     assert_eq!(report["problems"][1]["status"], "warn", "compass failure put down to the GPS");
     assert!(report["gps"][0]["speed"].as_f64().unwrap() > 55.0);
+    // Its fixes: GPS off and failsafes that land, written like any change.
+    let plan = call("prepare_changes", json!({ "source": "prearm:GPS", "label": "turning the GPS off" })).unwrap();
+    let names: Vec<&str> = plan["rows"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["GPS1_TYPE", "FS_THR_ENABLE", "BATT_FS_LOW_ACT"], "{plan}");
+
+    // Or GPS on a switch: the channel the pilot flips is found and checked.
+    let flipper = {
+        let state = mock.shared();
+        std::thread::spawn(move || {
+            for i in 0..12 {
+                state.lock().unwrap().rc[6] = if i % 2 == 0 { 2011 } else { 999 };
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        })
+    };
+    let ch = call("detect_switch", json!({ "listenS": 1.5, "option": 65.0 })).unwrap();
+    flipper.join().unwrap();
+    assert_eq!(ch, json!(7));
+    let plan = call("prepare_changes", json!({ "source": "switch:7:65", "label": "GPS off switch" })).unwrap();
+    assert_eq!((plan["rows"][0]["name"].clone(), plan["rows"][0]["value"].clone()), (json!("RC7_OPTION"), json!(65.0)));
+    assert!(call("prepare_changes", json!({ "source": "switch:5:65", "label": "x" })).unwrap_err().contains("already does"));
+    mock.state().rc[6] = 1000;
     mock.state().gps_motion = (0.02, 50.4501, 30.5234);
     mock.state().prearm_failures.clear();
 

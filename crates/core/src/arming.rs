@@ -6,7 +6,8 @@
 use serde::Serialize;
 
 use crate::diagnose::mode_name;
-use crate::readiness::Status;
+use crate::readiness::{ParamChange, Status};
+use crate::setup::change;
 
 /// What the vehicle reported while its pre-arm checks ran.
 #[derive(Debug, Clone, Default)]
@@ -59,6 +60,9 @@ pub struct Problem {
     /// The vehicle's own messages behind this problem.
     pub messages: Vec<String>,
     pub advice: String,
+    /// Parameter changes that fix (or work around) it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<ParamChange>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +121,7 @@ pub fn assess(s: &Snapshot, param: impl Fn(&str) -> Option<f64>) -> Report {
             title: title_for(area, &msgs),
             advice: advice_for(area, &msgs, &param),
             messages: msgs,
+            changes: Vec::new(),
         });
     }
 
@@ -143,12 +148,13 @@ pub fn assess(s: &Snapshot, param: impl Fn(&str) -> Option<f64>) -> Report {
                 title: format!("Arming in {}, which needs a GPS position", mode_name(mode)),
                 messages: vec![],
                 advice: "Switch to Stabilize or AltHold to arm without a GPS fix.".to_owned(),
+                changes: Vec::new(),
             });
         }
     }
     // A false GPS position also fails the compass check (it compares with
     // the field expected there) and tilts the EKF: explain that first.
-    if let Some(p) = spoofing(s) {
+    if let Some(p) = spoofing(s, &param) {
         for q in problems.iter_mut().filter(|q| q.area == "Compass" || q.area == "Attitude") {
             q.status = Status::Warn;
             q.advice = format!(
@@ -360,7 +366,7 @@ fn baud(code: f64) -> String {
 
 /// A GPS that reports movement while the vehicle stands disarmed: spoofed
 /// (fake satellite signals, which also give a false position) or faulty.
-fn spoofing(s: &Snapshot) -> Option<Problem> {
+fn spoofing(s: &Snapshot, param: &impl Fn(&str) -> Option<f64>) -> Option<Problem> {
     if s.armed {
         return None;
     }
@@ -379,12 +385,34 @@ fn spoofing(s: &Snapshot) -> Option<Problem> {
              fake satellite signals (GPS spoofing); a faulty receiver can do the same. The attitude estimate (EKF) tilts \
              itself to explain the false speed, and ArduPilot stabilises with that estimate in every mode, Stabilize \
              included: don't fly like this, and don't turn arming checks off. Compare with a phone's GPS, or try \
-             outdoors somewhere else. To fly where GPS is spoofed, stop the EKF using it (EK3_SRC1_POSXY = 0, \
-             EK3_SRC1_VELXY = 0 and EK3_SRC1_VELZ = 0, or GPS1_TYPE = 0), reboot and fly Stabilize or AltHold only, \
-             with failsafes that land rather than return home (FS_THR_ENABLE = 3, BATT_FS_LOW_ACT = 1): the home \
-             position would be false too."
+             outdoors somewhere else. To fly here, turn the GPS off with the changes below, reboot, and fly \
+             Stabilize or AltHold only (position modes, return home and missions need GPS). Or put the GPS on a \
+             switch (RCn_OPTION = 65: high turns it off) to choose before each flight: set it before powering up, \
+             because a false position seen at start-up stays until the next reboot."
         ),
+        changes: spoofing_changes(param),
     })
+}
+
+/// Turning the GPS off, and failsafes that land instead of flying to a
+/// home position that would be false.
+fn spoofing_changes(param: &impl Fn(&str) -> Option<f64>) -> Vec<ParamChange> {
+    let p: crate::setup::Param = param;
+    let mut out = Vec::new();
+    // GPS_TYPE before ArduPilot 4.6.
+    let gps = if param("GPS1_TYPE").is_some() { "GPS1_TYPE" } else { "GPS_TYPE" };
+    out.extend(change(p, gps, 0.0, "Turn the GPS off: the EKF stops using its false position and speed (after a reboot)"));
+    // 1 RTL, 4 SmartRTL or RTL, 5 SmartRTL or land, 6 DO_LAND_START or RTL.
+    if param("FS_THR_ENABLE").is_some_and(|v| [1.0, 4.0, 5.0, 6.0].contains(&v)) {
+        out.extend(change(p, "FS_THR_ENABLE", 3.0, "Land when the radio link is lost (return home needs GPS)"));
+    }
+    // 2 RTL, 3 SmartRTL or RTL, 4 SmartRTL or land, 6 DO_LAND_START or RTL.
+    for (name, what) in [("BATT_FS_LOW_ACT", "low"), ("BATT_FS_CRT_ACT", "critical")] {
+        if param(name).is_some_and(|v| [2.0, 3.0, 4.0, 6.0].contains(&v)) {
+            out.extend(change(p, name, 1.0, format!("Land at {what} battery (return home needs GPS)")));
+        }
+    }
+    out
 }
 
 /// GPS problems from its live state and setup. `blocking` is set when the
@@ -393,7 +421,7 @@ fn gps_problem(s: &Snapshot, param: &impl Fn(&str) -> Option<f64>, mode_needs_gp
     let kind = gps_type(param);
     let needed = mode_needs_gps || blocking;
     let status = if needed { Status::Fail } else { Status::Warn };
-    let problem = |status, title: String, advice: String| Some(Problem { status, area: "GPS", title, messages: vec![], advice });
+    let problem = |status, title: String, advice: String| Some(Problem { status, area: "GPS", title, messages: vec![], advice, changes: Vec::new() });
 
     if kind == Some(0.0) {
         return problem(
@@ -483,6 +511,7 @@ fn rc_problems(s: &Snapshot, param: &impl Fn(&str) -> Option<f64>) -> Vec<Proble
             title: format!("Throttle input ({thr:.0} µs) is below the failsafe value"),
             messages: vec![],
             advice: "Recalibrate the radio, or lower FS_THR_VALUE below your transmitter's lowest throttle.".to_owned(),
+            changes: Vec::new(),
         });
     } else if thr > min + 50.0 {
         out.push(Problem {
@@ -491,6 +520,7 @@ fn rc_problems(s: &Snapshot, param: &impl Fn(&str) -> Option<f64>) -> Vec<Proble
             title: format!("The throttle isn't at the bottom ({thr:.0} µs, minimum {min:.0})"),
             messages: vec![],
             advice: "Put the throttle stick all the way down to arm. If it is down, recalibrate the radio.".to_owned(),
+            changes: Vec::new(),
         });
     }
     out
@@ -510,6 +540,7 @@ fn unhealthy(s: &Snapshot) -> Option<Problem> {
         title: format!("Reported unhealthy: {}", bad.join(", ")),
         messages: vec![],
         advice: "These usually match the problems above; fixing those clears them.".to_owned(),
+        changes: Vec::new(),
     })
 }
 
@@ -562,6 +593,8 @@ mod tests {
             ("RCMAP_THROTTLE", 3.0),
             ("RC3_MIN", 988.0),
             ("FS_THR_ENABLE", 1.0),
+            ("BATT_FS_LOW_ACT", 2.0),
+            ("BATT_FS_CRT_ACT", 1.0),
             ("FS_THR_VALUE", 975.0),
             ("COMPASS_ORIENT", 0.0),
         ]
@@ -630,6 +663,8 @@ mod tests {
         assert!(compass.advice.starts_with("Most likely caused by the false GPS"));
         assert!(!compass.advice.contains("  "), "{}", compass.advice);
         assert_eq!(r.gps[0].speed, Some(55.99));
+        let changes: Vec<(&str, f64)> = first.changes.iter().map(|c| (c.name.as_str(), c.value)).collect();
+        assert_eq!(changes, [("GPS1_TYPE", 0.0), ("FS_THR_ENABLE", 3.0), ("BATT_FS_LOW_ACT", 1.0)]);
 
         // Walking with it, or armed and flying, is not spoofing.
         let mut walking = s.clone();

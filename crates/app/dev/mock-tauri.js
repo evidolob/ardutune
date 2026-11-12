@@ -128,6 +128,8 @@
         return { rows: step.changes.map((c) => ({ ...c, current: c.current ?? 0 })), unchanged: [], unknown: [], skipped: [], armed: false };
       }
       if (source === "motors") return { rows: motorVerdict(observations).changes, unchanged: [], unknown: [], skipped: [], armed: false };
+      if (source === "prearm:GPS") return { rows: (await commands.arming_check()).problems[0].changes, unchanged: [], unknown: [], skipped: [], armed: false };
+      if (source.startsWith("switch:")) return { rows: [{ name: `RC${source.split(":")[1]}_OPTION`, current: 0, value: 65, reason: `Channel ${source.split(":")[1]} turns the GPS off when high, on when low` }], unchanged: [], unknown: [], skipped: [], armed: false };
       if (source === "initial_tune") return { rows: tuneChanges, unchanged: [], unknown: [], skipped: [], armed: false };
       if (source === "file")
         return {
@@ -161,15 +163,32 @@
       return { backup: backup ? "/Users/pilot/Documents/ArduTune/backups/backup-sys1-20261110-153000.param" : null, results: [{ name: "INS_GYRO_FILTER", value: 60, error: null }] };
     },
     reboot: async () => (connected = false),
+    detect_switch: async () => {
+      await sleep(2500);
+      return 7;
+    },
     arming_check: async () => {
       await sleep(1500);
       return {
         armed: false,
         ready: false,
         mode: "Stabilize",
-        gps: [{ instance: 0, fix: "3D fix", satellites: 26, hdop: 0.55 }],
+        gps: [{ instance: 0, fix: "3D fix", satellites: 26, hdop: 0.55, speed: 55.99, position: [-12.03831, -77.05871, 985] }],
         problems: [
-          { status: "fail", area: "Compass", title: "The compass reading doesn't match the Earth's field here", messages: ["Check mag field (xy diff:117>100)"], advice: "Move away from metal, cars, laptops and phones and check again. If it still fails, calibrate the compass outdoors with the battery mounted as it flies, then reboot. COMPASS_ORIENT is 0, so the GPS/compass arrow must point forward." },
+          {
+            status: "fail",
+            area: "GPS",
+            title: "The GPS says the vehicle is moving at 56 m/s while it stands still: spoofed or faulty GPS",
+            messages: ["GPS Glitch or Compass error"],
+            advice:
+              "The GPS reports 56.0 m/s towards 7° and puts it at -12.03831, -77.05871, 985 m altitude. If that isn't where the vehicle is, the receiver is getting fake satellite signals (GPS spoofing); a faulty receiver can do the same. The attitude estimate (EKF) tilts itself to explain the false speed, and ArduPilot stabilises with that estimate in every mode, Stabilize included: don't fly like this, and don't turn arming checks off. Compare with a phone's GPS, or try outdoors somewhere else. To fly here, turn the GPS off with the changes below, reboot, and fly Stabilize or AltHold only (position modes, return home and missions need GPS). Or put the GPS on a switch (RCn_OPTION = 65: high turns it off) to choose before each flight: set it before powering up, because a false position seen at start-up stays until the next reboot.",
+            changes: [
+              { name: "GPS1_TYPE", current: 1, value: 0, reason: "Turn the GPS off: the EKF stops using its false position and speed (after a reboot)" },
+              { name: "FS_THR_ENABLE", current: 1, value: 3, reason: "Land when the radio link is lost (return home needs GPS)" },
+              { name: "BATT_FS_LOW_ACT", current: 2, value: 1, reason: "Land at low battery (return home needs GPS)" },
+            ],
+          },
+          { status: "warn", area: "Compass", title: "The compass reading doesn't match the Earth's field here", messages: ["Check mag field (xy diff:117>100)"], advice: "Most likely caused by the false GPS data (see above): don't recalibrate anything for this. Move away from metal, cars, laptops and phones and check again. If it still fails, calibrate the compass outdoors with the battery mounted as it flies, then reboot. COMPASS_ORIENT is 0, so the GPS/compass arrow must point forward." },
           { status: "fail", area: "Attitude", title: "The two attitude estimates disagree", messages: ["AHRS: DCM Roll/Pitch inconsistent 19 deg. Wait or reboot"], advice: "Reboot with the vehicle level and still. A bad compass can also tilt the EKF's attitude, so fix any compass problem first." },
           { status: "fail", area: "Logging", title: "Logging to the SD card failed", messages: ["Logging failed"], advice: "Insert an SD card formatted FAT32 and reboot." },
         ],

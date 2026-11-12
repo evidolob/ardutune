@@ -61,8 +61,11 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   HDOP, serial setup), battery, safety switch; plus how this vehicle arms
   (switch or sticks) and the current stick and switch positions. It also
   catches a spoofed or faulty GPS (moving while the vehicle stands
-  disarmed), which tilts the EKF and fails the compass check, and says not
-  to recalibrate for it.
+  disarmed), which tilts the EKF and fails the compass check, says not to
+  recalibrate for it, and offers the fix: GPS off (`GPS1_TYPE` = 0) with
+  failsafes that land instead of returning home, or a GPS off switch
+  (`RCn_OPTION` = 65, "GPS Disable"): flip the switch and ArduTune finds the
+  channel, refusing sticks, the arm switch and the flight mode channel.
 - `ardutune level [--watch SECONDS]`: why a vehicle standing level reports a
   tilt: EKF and DCM attitude, raw accelerometer and compass, GPS fix,
   speed and position, EKF innovation ratios and status texts.

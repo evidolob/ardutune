@@ -1097,6 +1097,13 @@ fn print_arming(r: &arming::Report) {
         if !p.advice.is_empty() {
             println!("         What to do: {}", p.advice);
         }
+        if !p.changes.is_empty() {
+            println!("         Suggested changes (write them from the app's Pre-arm check):");
+            for c in &p.changes {
+                let now = c.current.map_or("unset".to_owned(), format_value);
+                println!("           {:<16} {now} -> {}   {}", c.name, format_value(c.value), c.reason);
+            }
+        }
     }
     println!("\nHow to arm this vehicle");
     for h in &r.how_to_arm {

@@ -209,6 +209,17 @@ async function confirmDelete() {
   }
 }
 
+async function detectSwitch() {
+  const m = state.modal;
+  set({ modal: { ...m, stage: "switchListening", error: null } });
+  try {
+    const ch = await invoke("detect_switch", { listenS: 6, option: m.option });
+    writeChanges(`switch:${ch}:${m.option}`, `GPS off switch on channel ${ch}`);
+  } catch (e) {
+    set({ modal: { ...m, stage: "switchLearn", error: String(e) } });
+  }
+}
+
 async function armingCheck() {
   const listen = 8;
   const report = await vehicleTask(`Running pre-arm checks and listening for ${listen} s — try arming now (props off) to see why it refuses…`, () =>
@@ -567,6 +578,8 @@ const actions = {
   askNameDrone: (d) =>
     set({ modal: { stage: "nameDrone", title: d.name ? `Rename ${d.name}` : "Name this vehicle", uid: d.uid, name: d.name ?? "", fromLog: d.fromLog === "true", board: d.board ?? null } }),
   refreshHistory,
+  askGpsSwitch: () => set({ modal: { stage: "switchLearn", title: "Put the GPS on a switch", option: 65, error: null } }),
+  detectSwitch,
   importLog,
   openHistoryLog: (d) => openLog(d.path),
   toggleChanges: (d) => {
@@ -1615,6 +1628,15 @@ function prearmView() {
         <h2>${chip(kind(p.status), p.status)} <span class="muted">${esc(p.area)}:</span> ${esc(p.title)}</h2>
         ${p.messages.length ? `<div class="muted" style="margin-bottom:6px">Vehicle says: ${p.messages.map((m) => `<code>${esc(m)}</code>`).join(" ")}</div>` : ""}
         ${p.advice ? `<div class="advice"><b>What to do:</b> ${esc(p.advice)}</div>` : ""}
+        ${
+          p.changes?.length
+            ? `<h2 style="margin-top:14px">Suggested changes</h2>${changesTable(p.changes, true)}
+              <div class="actions">
+                <button class="btn primary" data-action="write" data-source="prearm:${esc(p.area)}" data-title="${p.area === "GPS" ? "GPS off and landing failsafes" : `${esc(p.area.toLowerCase())} fixes`}" ${state.vehicleBusy ? "disabled" : ""}>Write to vehicle…</button>
+                ${p.area === "GPS" ? `<button class="btn" data-action="askGpsSwitch" ${state.vehicleBusy ? "disabled" : ""}>Put GPS on a switch instead…</button>` : ""}
+              </div>`
+            : ""
+        }
       </div>`,
       )
       .join("")}
@@ -1785,6 +1807,24 @@ function modal() {
     case "planning":
       body = busy("Comparing with the vehicle's parameters…");
       break;
+    case "switchLearn":
+    case "switchListening": {
+      const listening = m.stage === "switchListening";
+      body = `<p>A switch on your transmitter will turn the GPS off (switch high) or on (low), so you can choose before each flight. ArduPilot's switch function for this is "GPS Disable" (RCn_OPTION = 65).</p>
+        <ul class="plain">
+          <li>Turn the transmitter on, and connect the battery if the receiver only gets power from it.</li>
+          <li>Pick a free two-position switch: not the arm switch or the flight mode switch.</li>
+          <li>Click Start, then flip that switch from one end to the other a few times within 6 seconds.</li>
+        </ul>
+        <p class="muted">With GPS spoofed, put the switch on GPS off before powering up: a false position seen at start-up stays until the next reboot. With the GPS off, fly Stabilize or AltHold only.</p>
+        ${m.error ? `<div class="banner warn">${esc(m.error)}</div>` : ""}
+        ${listening ? busy("Flip the switch now…") : ""}
+        <div class="actions">
+          <button class="btn primary" data-action="detectSwitch" ${listening ? "disabled" : ""}>${m.error ? "Try again" : "Start"}</button>
+          <button class="btn" data-action="closeModal" ${listening ? "disabled" : ""}>Cancel</button>
+        </div>`;
+      break;
+    }
     case "nameDrone":
       body = `<p class="muted">Backups made on this flight controller are listed under this name.</p>
         <div class="actions" style="margin-top:0">

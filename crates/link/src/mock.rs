@@ -140,6 +140,13 @@ impl MockState {
         for a in ["X", "Y", "Z"] {
             params.insert(format!("COMPASS_OFS_{a}"), (0.0, MAV_PARAM_TYPE_REAL32));
         }
+        // GPS, failsafes returning home, an arm switch on 5 and modes on 6.
+        for (n, v) in [("GPS1_TYPE", 1.0), ("FS_THR_ENABLE", 1.0), ("BATT_FS_LOW_ACT", 2.0), ("FLTMODE_CH", 6.0)] {
+            params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_INT8));
+        }
+        for ch in 5..=16 {
+            params.insert(format!("RC{ch}_OPTION"), (if ch == 5 { 153.0 } else { 0.0 }, MAV_PARAM_TYPE_INT16));
+        }
         for o in 1..=4 {
             params.insert(format!("SERVO{o}_FUNCTION"), (32.0 + o as f32, MAV_PARAM_TYPE_INT16));
         }
@@ -216,6 +223,11 @@ impl MockVehicle {
 
     pub fn client_address(&self) -> &str {
         &self.client_address
+    }
+
+    /// The state, to change from another thread while a call is running.
+    pub fn shared(&self) -> Arc<Mutex<MockState>> {
+        self.state.clone()
     }
 
     pub fn state(&self) -> MutexGuard<'_, MockState> {

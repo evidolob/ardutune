@@ -20,6 +20,8 @@ pub struct Live {
     pub battery_v: Option<f32>,
     /// Status texts the vehicle sent.
     pub messages: Vec<String>,
+    /// RC input channels 1-8 in µs (0 when not received).
+    pub rc: Option<[u16; 8]>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -392,6 +394,15 @@ fn radio(p: Param, live: &Live) -> Step {
         (None, _) => "throttle down and yaw right".to_owned(),
     };
     items.push(item(Status::Info, format!("Arming: {how}"), ""));
+    for ch in (1..=16).filter(|ch| p(&format!("RC{ch}_OPTION")) == Some(crate::switch::GPS_DISABLE)) {
+        let now = live.rc.and_then(|rc| rc.get(ch - 1).copied()).filter(|v| *v > 0);
+        let position = match now {
+            Some(v) if v > 1800 => " It is high now: the GPS is off.",
+            Some(v) if v < 1200 => " It is low now: the GPS is on.",
+            _ => "",
+        };
+        items.push(item(Status::Info, format!("GPS off switch on channel {ch}"), format!("High turns the GPS off (RC{ch}_OPTION = 65).{position}")));
+    }
     step("radio", "Radio", "A calibrated, reliable radio link is the first safety system.", items, changes)
 }
 
@@ -873,7 +884,11 @@ mod tests {
 
     #[test]
     fn kakute_setup() {
-        let live = Live { sensors: Some((1 << 16 | 1 << 24, 1 << 16 | 1 << 24, 1 << 16 | 1 << 24)), battery_v: Some(16.4), messages: vec![] };
+        let live = Live { sensors: Some((1 << 16 | 1 << 24, 1 << 16 | 1 << 24, 1 << 16 | 1 << 24)), battery_v: Some(16.4), messages: vec![], rc: Some([1500, 1500, 988, 1500, 999, 999, 2011, 999]) };
+        let mut p = kakute();
+        p.push(("RC7_OPTION".to_owned(), 65.0));
+        let g = assess(params(&p), &live);
+        assert!(step(&g, "radio").items.iter().any(|i| i.title == "GPS off switch on channel 7" && i.detail.contains("the GPS is off")));
         let g = assess(params(&kakute()), &live);
         assert_eq!(g.steps.len(), 7);
         assert_eq!(step(&g, "frame").status, Status::Pass);

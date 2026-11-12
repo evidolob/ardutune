@@ -772,7 +772,7 @@ impl ArmingStatus {
 
     /// The live state the setup guide uses.
     pub fn setup_live(&self) -> ardutune_core::setup::Live {
-        ardutune_core::setup::Live { sensors: self.sensors, battery_v: self.battery_v, messages: self.messages.clone() }
+        ardutune_core::setup::Live { sensors: self.sensors, battery_v: self.battery_v, messages: self.messages.clone(), rc: self.rc }
     }
 }
 
@@ -852,6 +852,31 @@ impl Mean {
 }
 
 impl Link {
+    /// The lowest and highest value of each RC channel (1-16) over
+    /// `listen`: (channel, min µs, max µs), zeros for channels not received.
+    /// Used to find the switch the pilot flips.
+    pub fn rc_ranges(&mut self, listen: Duration) -> Result<Vec<(u8, u16, u16)>> {
+        self.command(MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL, [RC_CHANNELS_ID, 50_000.0, 0.0, 0.0, 0.0, 0.0, 0.0])?;
+        let mut ranges: Vec<(u8, u16, u16)> = (1..=16).map(|ch| (ch, 0, 0)).collect();
+        let deadline = Instant::now() + listen;
+        while let Some(msg) = self.next(deadline)? {
+            let MavMessage::RC_CHANNELS(rc) = msg else { continue };
+            let values = [
+                rc.chan1_raw, rc.chan2_raw, rc.chan3_raw, rc.chan4_raw, rc.chan5_raw, rc.chan6_raw, rc.chan7_raw, rc.chan8_raw,
+                rc.chan9_raw, rc.chan10_raw, rc.chan11_raw, rc.chan12_raw, rc.chan13_raw, rc.chan14_raw, rc.chan15_raw, rc.chan16_raw,
+            ];
+            for (r, v) in ranges.iter_mut().zip(values).take(rc.chancount as usize) {
+                // 0 and 65535 mean the channel isn't received.
+                if v == 0 || v == u16::MAX {
+                    continue;
+                }
+                r.1 = if r.1 == 0 { v } else { r.1.min(v) };
+                r.2 = r.2.max(v);
+            }
+        }
+        Ok(ranges)
+    }
+
     /// Averages attitude and raw accelerometer readings for `listen`, to
     /// see why a vehicle standing level reports a tilt.
     pub fn level_status(&mut self, listen: Duration) -> Result<LevelStatus> {

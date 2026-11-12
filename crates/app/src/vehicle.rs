@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, motors, paramdoc, params, setup, tune};
+use ardutune_core::{arming, motors, paramdoc, params, setup, switch, tune};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,8 @@ pub struct Connected {
     pub(crate) compass_cal: Option<CompassCal>,
     /// Which vehicle this is, when its flight controller reports a chip ID.
     pub(crate) drone: Option<Drone>,
+    /// The latest pre-arm check, whose fixes can be written.
+    pub(crate) last_arming: Option<arming::Report>,
 }
 
 /// Changes shown to the user and waiting for confirmation. They are planned
@@ -165,7 +167,7 @@ pub async fn connect<R: Runtime>(app: AppHandle<R>, address: String) -> CmdResul
         let mut link = Link::connect(&address, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
         let mut progress = Reporter::new(app, "Reading parameters");
         let params = link.fetch_params(&mut |got, total| progress.update(got, total)).map_err(|e| e.to_string())?;
-        let mut c = Connected { link, params, address, defaults: None, compass_cal: None, drone: None };
+        let mut c = Connected { link, params, address, defaults: None, compass_cal: None, drone: None, last_arming: None };
         c.identify(app);
         let info = c.info();
         *slot = Some(c);
@@ -352,7 +354,7 @@ pub async fn prepare_changes<R: Runtime>(
                 let seen = observations.ok_or("No motor test results given.")?;
                 motor_verdict(&c.params, &seen)?.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect()
             }
-            _ => wanted(app, &c.params, &source, path.clone())?,
+            _ => wanted(app, c, &source, path.clone())?,
         };
         let mut skipped = Vec::new();
         let warning = path.as_deref().filter(|_| source == "file").and_then(|p| backups::other_vehicle(app, p, c));
@@ -386,7 +388,25 @@ pub async fn prepare_changes<R: Runtime>(
 
 type Wanted = (String, f64, Option<String>);
 
-fn wanted<R: Runtime>(app: &AppHandle<R>, live: &Params, source: &str, path: Option<String>) -> CmdResult<Vec<Wanted>> {
+fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Option<String>) -> CmdResult<Vec<Wanted>> {
+    let live = &c.params;
+    // Fixes from the latest pre-arm check, for one area ("prearm:GPS").
+    if let Some(area) = source.strip_prefix("prearm:") {
+        let report = c.last_arming.as_ref().ok_or("Run the pre-arm check first.")?;
+        return Ok(report
+            .problems
+            .iter()
+            .filter(|p| p.area == area)
+            .flat_map(|p| p.changes.iter().map(|ch| (ch.name.clone(), ch.value, Some(ch.reason.clone()))))
+            .collect());
+    }
+    // A function on a switch: "switch:<channel>:<RCn_OPTION>".
+    if let Some(rest) = source.strip_prefix("switch:") {
+        let (ch, option) = rest.split_once(':').ok_or("bad switch source")?;
+        let (ch, option) = (ch.parse::<u8>().map_err(|e| e.to_string())?, option.parse::<f64>().map_err(|e| e.to_string())?);
+        let changes = switch::assign(|n| live.get(n).map(|p| p.value as f64), ch, option)?;
+        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
+    }
     if let Some(step) = source.strip_prefix("setup:") {
         return setup_changes(live, step);
     }
@@ -512,6 +532,22 @@ pub async fn motor_check<R: Runtime>(app: AppHandle<R>, observations: Vec<motors
     .await
 }
 
+/// Watches the radio for `listen_s` seconds and returns the channel of the
+/// switch the pilot flipped, checked to be free for `option` (RCn_OPTION).
+#[tauri::command]
+pub async fn detect_switch<R: Runtime>(app: AppHandle<R>, listen_s: Option<f64>, option: f64) -> CmdResult<u8> {
+    blocking(app, move |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let listen = Duration::from_secs_f64(listen_s.unwrap_or(6.0).clamp(1.0, 30.0));
+        let r = connected(&mut slot)?.link.rc_ranges(listen);
+        let moves = check(&mut slot, r)?;
+        let c = connected(&mut slot)?;
+        switch::flipped(|n| c.params.get(n).map(|p| p.value as f64), &moves, option)
+    })
+    .await
+}
+
 /// Starts calibrating every compass; follow with `compass_cal_poll`.
 #[tauri::command]
 pub async fn compass_cal_start<R: Runtime>(app: AppHandle<R>) -> CmdResult<()> {
@@ -628,7 +664,9 @@ pub async fn arming_check<R: Runtime>(app: AppHandle<R>, listen_s: Option<f64>) 
         let r = connected(&mut slot)?.link.arming_status(listen);
         let status = check(&mut slot, r)?;
         let c = connected(&mut slot)?;
-        Ok(arming::assess(&status.snapshot(), |n| c.params.get(n).map(|p| p.value as f64)))
+        let report = arming::assess(&status.snapshot(), |n| c.params.get(n).map(|p| p.value as f64));
+        c.last_arming = Some(report.clone());
+        Ok(report)
     })
     .await
 }
