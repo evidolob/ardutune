@@ -62,6 +62,8 @@ pub struct MockState {
     pub motor_tests: Vec<(u8, f32, f32)>,
     /// When set, motor tests are refused with this "Motor Test: …" reason.
     pub motor_test_refusal: Option<String>,
+    /// Like ArduCopter, the vehicle reports itself armed while a motor test runs.
+    pub motor_test_until: Option<Instant>,
     /// When the running compass calibration started.
     pub mag_cal_started: Option<Instant>,
     /// How long a compass calibration takes.
@@ -174,6 +176,7 @@ impl MockState {
             uid2: [0x00, 0x3A, 0x00, 0x24, 0x32, 0x33, 0x51, 0x0A, 0x33, 0x35, 0x35, 0x33, 0, 0, 0, 0, 0, 0],
             motor_tests: Vec::new(),
             motor_test_refusal: None,
+            motor_test_until: None,
             mag_cal_started: None,
             mag_cal_duration: Duration::from_millis(1500),
             mag_cal_failure: None,
@@ -255,7 +258,8 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
     while !stop.load(Ordering::Relaxed) {
         if last_heartbeat.elapsed() > Duration::from_millis(200) {
             let st = state.lock().unwrap().clone();
-            send(heartbeat(st.armed, st.mode));
+            let testing = st.motor_test_until.is_some_and(|t| Instant::now() < t);
+            send(heartbeat(st.armed || testing, st.mode));
             if let Some((fix_type, satellites, hdop)) = st.gps {
                 send(MavMessage::GPS_RAW_INT(GPS_RAW_INT_DATA {
                     fix_type,
@@ -525,6 +529,7 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
                 }
                 None => {
                     st.motor_tests.push((c.param1 as u8, c.param3, c.param4));
+                    st.motor_test_until = Some(Instant::now() + Duration::from_secs_f32(c.param4));
                     MavResult::MAV_RESULT_ACCEPTED
                 }
             };

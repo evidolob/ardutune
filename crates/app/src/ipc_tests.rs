@@ -128,12 +128,17 @@ fn analyse_connect_download_write_and_reboot() {
     assert_eq!(layout["positions"][0]["name"], "front right", "{layout}");
     call("motor_test", json!({ "seq": 1, "throttle": 7.0, "seconds": 0.5 })).unwrap();
     assert_eq!(mock.state().motor_tests, vec![(1, 7.0, 0.5)]);
+    std::thread::sleep(std::time::Duration::from_millis(700)); // the spin ends
     let seen = json!([{ "spun": 0, "spin": "ccw" }, { "spun": 1, "spin": "cw" }, { "spun": 2, "spin": "cw" }, { "spun": 3, "spin": "cw" }]);
     let verdict = call("motor_check", json!({ "observations": seen })).unwrap();
     assert_eq!(verdict["ok"], json!(false));
     assert_eq!(verdict["changes"][0]["name"], "SERVO_BLH_RVMASK", "{verdict}");
     let plan = call("prepare_changes", json!({ "source": "motors", "label": "writing motor fixes", "observations": seen })).unwrap();
     assert_eq!(plan["rows"][0]["value"], json!(4.0), "{plan}");
+    // Props out: the reversed layout is one change of frame type.
+    assert_eq!(layout["reversed"][0], json!(19));
+    let plan = call("prepare_changes", json!({ "source": "frame:19", "label": "props out" })).unwrap();
+    assert_eq!((plan["rows"][0]["name"].clone(), plan["rows"][0]["value"].clone()), (json!("FRAME_TYPE"), json!(19.0)));
 
     // Compass calibration: started, followed to the end, saved.
     assert!(call("compass_cal_poll", json!({})).unwrap_err().contains("No compass calibration"));

@@ -59,6 +59,31 @@ pub struct Layout {
     pub known: bool,
     /// Directions can be reversed in software (DShot ESCs).
     pub dshot: bool,
+    pub frame_type: i64,
+    /// The same layout with every motor reversed (props in vs props out),
+    /// when ArduPilot has one: (FRAME_TYPE, name).
+    pub reversed: Option<(i64, &'static str)>,
+}
+
+/// The FRAME_TYPE with every motor turning the other way.
+pub fn reversed_frame(frame_type: i64) -> Option<(i64, &'static str)> {
+    match frame_type {
+        1 => Some((3, "H (X with every motor reversed)")),
+        3 => Some((1, "X")),
+        18 => Some((19, "BetaFlight X reversed (props out)")),
+        19 => Some((18, "BetaFlight X (props in)")),
+        _ => None,
+    }
+}
+
+/// Switching to another FRAME_TYPE of the same class.
+pub fn frame_change(param: impl Fn(&str) -> Option<f64>, frame_type: i64) -> Result<Vec<ParamChange>, String> {
+    let p: Param = &param;
+    let now = int(p, "FRAME_TYPE").ok_or("This vehicle has no FRAME_TYPE.")?;
+    let Some((to, name)) = reversed_frame(now).filter(|(t, _)| *t == frame_type) else {
+        return Err(format!("ArduTune only switches between a layout and its reversed version (FRAME_TYPE {now} has none as {frame_type})."));
+    };
+    Ok(change(p, "FRAME_TYPE", to as f64, format!("{name}: matches motors that turn the other way (takes effect after a reboot)")).into_iter().collect())
 }
 
 /// One quad layout: (motor, degrees from the nose, spin), in test order.
@@ -135,7 +160,8 @@ pub fn layout(param: impl Fn(&str) -> Option<f64>) -> Result<Layout, String> {
             .collect(),
     };
     let class_name = if class == 1 { "Quad" } else { "Multirotor" };
-    Ok(Layout { frame: format!("{class_name} {}", frame_type_name(frame_type)), positions, known: expected.is_some(), dshot })
+    let reversed = if expected.is_some() { reversed_frame(frame_type) } else { None };
+    Ok(Layout { frame: format!("{class_name} {}", frame_type_name(frame_type)), positions, known: expected.is_some(), dshot, frame_type, reversed })
 }
 
 /// What the pilot saw when test letter `index` ran: which position (index
@@ -236,6 +262,26 @@ pub fn check(param: impl Fn(&str) -> Option<f64>, observations: &[Observation]) 
         ));
     }
     let mut needs_reboot = false;
+    // Every motor in its place but all turning the other way: the build is
+    // the reversed layout (props in vs out), not four wiring mistakes. The
+    // frame type decides which way ArduPilot steers yaw, so fix that.
+    let all_reversed = remap.is_empty() && reverse.len() == n;
+    if let (true, Some((to, name))) = (all_reversed, l.reversed) {
+        items.retain(|i| i.status != Status::Fail);
+        items.push(item(
+            Status::Fail,
+            format!("Every motor turns the other way: this build is {name}"),
+            format!(
+                "FRAME_TYPE is {} ({}), so ArduPilot would steer yaw backwards and the vehicle would spin on take-off. \
+                 Set FRAME_TYPE = {to} and reboot. If you meant the other direction, reverse all four motors instead \
+                 and turn the propellers over.",
+                l.frame_type,
+                frame_type_name(l.frame_type)
+            ),
+        ));
+        changes.extend(change(p, "FRAME_TYPE", to as f64, format!("{name}: matches the way the motors turn (takes effect after a reboot)")));
+        return Ok(Verdict { ok: false, items, changes, needs_reboot: true });
+    }
     if !reverse.is_empty() && l.dshot {
         if let Some(mask) = int(p, "SERVO_BLH_RVMASK") {
             let new = reverse.iter().fold(mask, |m, o| m ^ (1 << (o - 1)));
@@ -308,6 +354,21 @@ mod tests {
         // Test A drove output 2 (motor 2) but the back-right motor spun:
         // output 2 must drive motor 1, and output 1 motor 2.
         assert_eq!(changes, vec![("SERVO2_FUNCTION", 33.0), ("SERVO1_FUNCTION", 34.0), ("SERVO_BLH_RVMASK", 4.0)]);
+    }
+
+    #[test]
+    fn all_reversed_means_the_reversed_frame() {
+        // The 15-inch quad: props out, but FRAME_TYPE says BetaFlight X.
+        let m = kakute();
+        let v = check(|n| m.get(n).copied(), &obs(&[(0, Spin::Cw), (1, Spin::Ccw), (2, Spin::Cw), (3, Spin::Ccw)])).unwrap();
+        assert!(!v.ok && v.needs_reboot);
+        let changes: Vec<(&str, f64)> = v.changes.iter().map(|c| (c.name.as_str(), c.value)).collect();
+        assert_eq!(changes, [("FRAME_TYPE", 19.0)], "the frame, not four reversals");
+        assert_eq!(v.items.iter().filter(|i| i.status == Status::Fail).count(), 1, "{:?}", v.items);
+        let l = layout(|n| m.get(n).copied()).unwrap();
+        assert_eq!(l.reversed.map(|r| r.0), Some(19));
+        assert_eq!(frame_change(|n| m.get(n).copied(), 19).unwrap()[0].value, 19.0);
+        assert!(frame_change(|n| m.get(n).copied(), 12).is_err());
     }
 
     #[test]

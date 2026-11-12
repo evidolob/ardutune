@@ -361,7 +361,21 @@ impl Link {
             |m: &MavMessage| matches!(m, MavMessage::HEARTBEAT(hb) if hb.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID);
         self.wait_for(Duration::from_millis(2500), |m| is_autopilot_heartbeat(m).then_some(()))?
             .ok_or(Error::Timeout("waiting for a heartbeat".to_owned()))?;
+        // That one may have waited in the buffer: read what else has
+        // arrived so the newest heartbeat decides.
+        while self.next(Instant::now())?.is_some() {}
         Ok(self.vehicle.armed)
+    }
+
+    /// Waits up to `timeout` for a heartbeat that says disarmed.
+    fn wait_disarmed(&mut self, timeout: Duration) -> Result<bool> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if !self.refresh_armed()? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Downloads every parameter. `progress(received, total)`.
@@ -501,7 +515,10 @@ impl Link {
     /// clockwise) at `throttle_pct` for `seconds`, while disarmed. Returns
     /// once the vehicle accepts; a refusal carries what the vehicle said.
     pub fn motor_test(&mut self, seq: u8, throttle_pct: f32, seconds: f32) -> Result<()> {
-        if self.refresh_armed()? {
+        // ArduCopter reports itself armed while a motor test runs; the last
+        // heartbeat of the previous test can still say so after the motor
+        // stopped. Give a test that is ending a moment to finish.
+        if self.refresh_armed()? && !self.wait_disarmed(Duration::from_secs(4))? {
             return Err(Error::Armed);
         }
         // Throttle type 0 is percent; motor count 0 tests just this one.

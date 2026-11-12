@@ -245,8 +245,13 @@ fn reads_firmware_info_and_reboots_to_bootloader() {
 fn runs_motor_tests_and_explains_refusals() {
     let mock = MockVehicle::start(MockState::quad(Vec::new())).unwrap();
     let mut link = connect(&mock);
-    link.motor_test(2, 7.0, 2.0).unwrap();
-    assert_eq!(mock.state().motor_tests, vec![(2, 7.0, 2.0)]);
+    link.motor_test(2, 7.0, 1.0).unwrap();
+    assert_eq!(mock.state().motor_tests, vec![(2, 7.0, 1.0)]);
+    // The next one right away: the vehicle still says armed for the rest of
+    // the first test, which isn't a reason to refuse.
+    link.motor_test(1, 7.0, 0.5).unwrap();
+    assert_eq!(mock.state().motor_tests.len(), 2);
+    std::thread::sleep(Duration::from_millis(700));
 
     mock.state().motor_test_refusal = Some("RC not calibrated".to_owned());
     let err = link.motor_test(1, 7.0, 2.0).unwrap_err().to_string();
@@ -256,7 +261,7 @@ fn runs_motor_tests_and_explains_refusals() {
     mock.state().armed = true;
     std::thread::sleep(Duration::from_millis(1200));
     assert!(matches!(link.motor_test(1, 7.0, 2.0), Err(Error::Armed)));
-    assert_eq!(mock.state().motor_tests.len(), 1);
+    assert_eq!(mock.state().motor_tests.len(), 2);
 }
 
 #[test]

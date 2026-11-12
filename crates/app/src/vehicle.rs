@@ -400,6 +400,12 @@ fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Opt
             .flat_map(|p| p.changes.iter().map(|ch| (ch.name.clone(), ch.value, Some(ch.reason.clone()))))
             .collect());
     }
+    // The reversed version of the frame layout: "frame:<FRAME_TYPE>".
+    if let Some(t) = source.strip_prefix("frame:") {
+        let t = t.parse::<i64>().map_err(|e| e.to_string())?;
+        let changes = motors::frame_change(|n| live.get(n).map(|p| p.value as f64), t)?;
+        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
+    }
     // A function on a switch: "switch:<channel>:<RCn_OPTION>".
     if let Some(rest) = source.strip_prefix("switch:") {
         let (ch, option) = rest.split_once(':').ok_or("bad switch source")?;
