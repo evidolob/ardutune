@@ -48,6 +48,9 @@ const state = {
   staged: {}, // name -> value waiting to be written
   fw: null, // firmware info from the vehicle
   releases: null, // what firmware.ardupilot.org offers for the board
+  history: null, // flight history: logs grouped by vehicle
+  historyBusy: false,
+  historyOpen: new Set(), // flights whose parameter changes are shown
   vehicleBusy: null, // text while a vehicle task runs
   modal: null,
   toast: null,
@@ -110,6 +113,7 @@ function go(view) {
   if (view === "connection" && !state.ports) refreshPorts();
   if (view === "vlogs" && state.vehicle && !state.vehicleLogs) refreshVehicleLogs();
   if (view === "params") refreshBackups();
+  if (view === "history") refreshHistory();
   if (view === "prearm" && state.vehicle && !state.arming && !state.vehicleBusy) armingCheck();
   if (view === "setup" && state.vehicle && !state.setup && !state.vehicleBusy) setupGuide();
   if (view === "motors" && state.vehicle && !state.motors.layout && !state.vehicleBusy) loadMotors();
@@ -451,6 +455,30 @@ async function pickParamFile() {
   if (path) writeChanges("file", path.split(/[\\/]/).pop(), path);
 }
 
+async function refreshHistory() {
+  if (state.historyBusy) return;
+  set({ historyBusy: true });
+  try {
+    set({ history: await invoke("flight_history") });
+  } catch (e) {
+    toast(e);
+  } finally {
+    set({ historyBusy: false });
+    hideProgress();
+  }
+}
+
+async function importLog() {
+  const path = await invoke("pick_file", { kind: "log" });
+  if (!path) return;
+  try {
+    await invoke("import_log", { path });
+    refreshHistory();
+  } catch (e) {
+    toast(e);
+  }
+}
+
 async function refreshBackups() {
   try {
     set({ backups: await invoke("list_backups") });
@@ -471,9 +499,12 @@ async function backupNow() {
 
 async function nameDrone(uid, name) {
   try {
-    const vehicle = await invoke("name_drone", { uid, name });
+    const fromLog = state.modal?.fromLog ?? false;
+    const board = state.modal?.board ?? null;
+    const vehicle = await invoke("name_drone", { uid, name, board, fromLog });
     set({ modal: null, ...(vehicle && state.vehicle ? { vehicle } : {}) });
     if (state.view === "params") refreshBackups();
+    if (state.view === "history") refreshHistory();
   } catch (e) {
     toast(e);
   }
@@ -533,7 +564,16 @@ const actions = {
   askDeleteBackup: (d) => askDeleteBackup(d.path),
   confirmDeleteBackup,
   assignBackup: (d) => assignBackup(d.path),
-  askNameDrone: (d) => set({ modal: { stage: "nameDrone", title: d.name ? `Rename ${d.name}` : "Name this vehicle", uid: d.uid, name: d.name ?? "" } }),
+  askNameDrone: (d) =>
+    set({ modal: { stage: "nameDrone", title: d.name ? `Rename ${d.name}` : "Name this vehicle", uid: d.uid, name: d.name ?? "", fromLog: d.fromLog === "true", board: d.board ?? null } }),
+  refreshHistory,
+  importLog,
+  openHistoryLog: (d) => openLog(d.path),
+  toggleChanges: (d) => {
+    const open = new Set(state.historyOpen);
+    open.has(d.path) ? open.delete(d.path) : open.add(d.path);
+    set({ historyOpen: open });
+  },
   saveDroneName: (d) => nameDrone(d.uid, document.getElementById(d.uid === state.modal?.uid ? "droneName" : "droneNameInline")?.value ?? ""),
   armingCheck,
   setupGuide,
@@ -672,6 +712,7 @@ function nav() {
     <h3>Vehicle</h3>
     ${VEHICLE_VIEWS.map((v) => item(v, false)).join("")}
     <h3>Flight log</h3>
+    ${item(["history", "Flight history"], false)}
     ${LOG_VIEWS.map((v) => item(v, !state.log)).join("")}`;
 }
 
@@ -713,6 +754,7 @@ function overview() {
     <h1>${esc(l.file_name)}</h1>
     <p class="lead">Log readiness: does this flight have what filter and PID tuning need?</p>
     <div class="stats">
+      ${l.vehicle ? stat("Vehicle", esc(l.vehicle.label), l.vehicle.named ? esc(l.vehicle.board) : "") : ""}
       ${stat("Firmware", esc(r.firmware ?? "unknown").replace(/ \(.*\)$/, ""), esc(r.firmware?.match(/\((.*)\)/)?.[1] ?? ""))}
       ${stat("Flight", `${num(l.flight_s)} s`, `${l.flight_periods} period(s) · log ${num(r.log_duration_s)} s`)}
       ${stat("File", `${num(l.size_mb, 1)} MB`, `${l.messages.toLocaleString()} messages`)}
@@ -944,6 +986,117 @@ function pidView(r, svg) {
 }
 
 const shortId = (uid) => uid.slice(-6);
+
+const minutes = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+
+/** A tiny line of values, oldest first; gaps where a flight had no value. */
+function sparkline(values) {
+  const pts = values.map((v, i) => [i, v]).filter(([, v]) => v !== null && v !== undefined);
+  if (pts.length < 2) return "";
+  const [w, h] = [150, 34];
+  const ys = pts.map(([, v]) => v);
+  const [lo, hi] = [Math.min(...ys), Math.max(...ys)];
+  const x = (i) => 3 + (i / Math.max(1, values.length - 1)) * (w - 6);
+  const y = (v) => (hi === lo ? h / 2 : h - 4 - ((v - lo) / (hi - lo)) * (h - 8));
+  const line = pts.map(([i, v]) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const [li, lv] = pts[pts.length - 1];
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none"><polyline points="${line}" fill="none" stroke="var(--accent)" stroke-width="1.8" vector-effect="non-scaling-stroke"/><circle cx="${x(li)}" cy="${y(lv)}" r="2.5" fill="var(--accent)"/></svg>`;
+}
+
+/** Lower is better for every metric shown: colour a value against the previous flight's. */
+function trend(now, before) {
+  if (now === null || now === undefined || before === null || before === undefined || before === 0) return "";
+  const change = (now - before) / Math.abs(before);
+  return change < -0.1 ? "better" : change > 0.1 ? "worse" : "";
+}
+
+const worstOvershoot = (f) => {
+  const v = f.summary.axes.map((a) => a.overshoot_pct).filter((x) => x !== null && x !== undefined);
+  return v.length ? Math.max(...v) : null;
+};
+
+function historyView() {
+  const head = `<h1>Flight history</h1>
+    <p class="lead">Every log in Documents/ArduTune/logs, filed under the vehicle that flew it: each log records its flight controller's ID. Compare flights to see whether a change helped. For every number here, lower is better; green and red mark a change of more than 10% from the previous flight. Click a flight to open it.</p>
+    <div class="actions" style="margin-top:0">
+      <button class="btn" data-action="refreshHistory" ${state.historyBusy ? "disabled" : ""}>Refresh</button>
+      <button class="btn" data-action="importLog">Add a log file…</button>
+      <span class="hint">Logs downloaded with another ground station or copied off the SD card can be added too.</span>
+    </div>`;
+  const groups = state.history;
+  if (!groups) return head + busy("Reading flight logs…");
+  if (!groups.length) return head + `<div class="card"><div class="muted">No logs yet. Download some from Logs on vehicle, or add log files.</div></div>`;
+  return (
+    head +
+    (state.historyBusy ? busy("Reading new logs…") : "") +
+    groups
+      .map((g) => {
+        const flights = g.flights;
+        const oldest = [...flights].reverse();
+        const metric = (label, unit, get, digits = 0) => {
+          const vals = oldest.map(get);
+          const latest = vals[vals.length - 1];
+          return `<div class="metric"><div class="label">${label}</div><div class="value">${latest === null || latest === undefined ? "–" : `${num(latest, digits)}<span class="unit"> ${unit}</span>`}</div>${sparkline(vals)}</div>`;
+        };
+        const rows = flights
+          .map((f, i) => {
+            const prev = flights[i + 1];
+            const s = f.summary;
+            const cell = (v, pv, digits = 0) => `<span class="${trend(v, pv)}">${v === null || v === undefined ? "–" : num(v, digits)}</span>`;
+            const axes = ["roll", "pitch", "yaw"]
+              .map((ax) => {
+                const a = s.axes.find((x) => x.axis === ax);
+                const pa = prev?.summary.axes.find((x) => x.axis === ax);
+                return cell(a?.overshoot_pct, pa?.overshoot_pct);
+              })
+              .join(" / ");
+            const osc = s.axes.filter((a) => a.oscillation_hz).map((a) => `${a.axis} ${num(a.oscillation_hz)} Hz`);
+            const open = state.historyOpen.has(f.path);
+            const changes = f.changes.length
+              ? `<button class="link" data-action="toggleChanges" data-path="${esc(f.path)}">${f.changes.length} change${f.changes.length === 1 ? "" : "s"}</button>`
+              : prev
+                ? `<span class="muted">none</span>`
+                : `<span class="muted">first</span>`;
+            return `<tr>
+              <td style="white-space:nowrap"><button class="link" data-action="openHistoryLog" data-path="${esc(f.path)}" title="Open ${esc(f.file_name)}">${esc(f.when)}</button>${f.when_from_gps ? "" : ` <span class="muted" title="No GPS time in the log: this is the file's time">(file)</span>`}<div class="muted">${minutes(s.flight_s)} flight${s.autotune ? " · AutoTune" : ""}</div></td>
+              <td class="num">${cell(s.vibration, prev?.summary.vibration)}</td>
+              <td class="num">${cell(s.noise_pre, prev?.summary.noise_pre, 1)} → ${cell(s.noise_post, prev?.summary.noise_post, 1)}</td>
+              <td class="num">${axes}${osc.length ? `<div class="warn-text">oscillation: ${esc(osc.join(", "))}</div>` : ""}</td>
+              <td style="white-space:nowrap">${changes}</td>
+            </tr>
+            ${
+              open
+                ? `<tr class="note"><td colspan="5"><table class="changes"><tr><th>Parameter</th><th class="num">Before</th><th></th><th class="num">This flight</th></tr>${f.changes
+                    .map(([n, b, a]) => `<tr><td class="mono">${esc(n)}</td><td class="num">${fmt(b)}</td><td class="arrow">→</td><td class="num new">${fmt(a)}</td></tr>`)
+                    .join("")}</table></td></tr>`
+                : ""
+            }`;
+          })
+          .join("");
+        const name = g.id
+          ? `<button class="link" data-action="askNameDrone" data-uid="${esc(g.id)}" data-from-log="${g.from_log}" data-board="${esc(g.board ?? "")}" data-name="${esc(g.named ? g.label : "")}">${g.named ? "Rename" : "Name"}</button>`
+          : "";
+        return `<div class="card">
+          <h2>${esc(g.label)} ${g.connected ? chip("pass", "connected") : ""}</h2>
+          <p class="muted">${g.board ? `${esc(g.board)} · ` : ""}${flights.length} flight${flights.length === 1 ? "" : "s"}${name ? ` · ${name}` : ""}${g.id ? "" : " · these logs don't record a flight controller ID"}</p>
+          ${
+            flights.length > 1
+              ? `<div class="metrics">
+                  ${metric("Vibration", "m/s²", (f) => f.summary.vibration)}
+                  ${metric("Gyro noise after filters", "deg/s", (f) => f.summary.noise_post, 1)}
+                  ${metric("Worst overshoot", "%", worstOvershoot)}
+                </div>`
+              : ""
+          }
+          <div class="scroll-x"><table>
+            <tr><th>Flight (UTC)</th><th class="num">Vibration<div class="muted">m/s²</div></th><th class="num">Gyro noise<div class="muted">before → after filters, deg/s</div></th><th class="num">Overshoot<div class="muted">roll / pitch / yaw, %</div></th><th>Tuning changes</th></tr>
+            ${rows}
+          </table></div>
+        </div>`;
+      })
+      .join("")
+  );
+}
 
 /** Asks for a name for a new vehicle; offers renaming a named one. */
 function nameCard(v) {
@@ -1717,6 +1870,8 @@ function content() {
       return setupView();
     case "tune":
       return tuneView();
+    case "history":
+      return historyView();
     case "motors":
       return motorsView();
     case "compass":

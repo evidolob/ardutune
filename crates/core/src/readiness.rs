@@ -345,16 +345,7 @@ fn check_vibration(ctx: &Ctx) -> Check {
             "Enable the IMU bit in LOG_BITMASK. Vibration must be checked before tuning.",
         );
     };
-    let mut worst: Option<(&str, f64)> = None;
-    for axis in ["VibeX", "VibeY", "VibeZ"] {
-        let v = primary_flight_values(ctx, vibe, "IMU", axis);
-        if let Some(p95) = stats::percentile(&v, 95.0) {
-            if worst.is_none_or(|(_, w)| p95 > w) {
-                worst = Some((axis, p95));
-            }
-        }
-    }
-    let Some((axis, level)) = worst else {
+    let Some((axis, level)) = worst_vibration(ctx, vibe) else {
         return check(id, Area::Vibration, Status::Warn, "Vibration data empty", "VIBE has no samples during flight.");
     };
     let (status, detail) = if level < VIBE_OK {
@@ -365,6 +356,28 @@ fn check_vibration(ctx: &Ctx) -> Check {
         (Status::Fail, "Vibration is too high to tune reliably: fix props, motors or mounting first.")
     };
     check(id, Area::Vibration, status, format!("Vibration {level:.0} m/s² ({axis}, 95th percentile)"), detail)
+}
+
+/// The most vibrating axis and its 95th percentile during flight.
+fn worst_vibration(ctx: &Ctx, vibe: &Table) -> Option<(&'static str, f64)> {
+    let mut worst: Option<(&'static str, f64)> = None;
+    for axis in ["VibeX", "VibeY", "VibeZ"] {
+        let v = primary_flight_values(ctx, vibe, "IMU", axis);
+        if let Some(p95) = stats::percentile(&v, 95.0) {
+            if worst.is_none_or(|(_, w)| p95 > w) {
+                worst = Some((axis, p95));
+            }
+        }
+    }
+    worst
+}
+
+/// Vibration during flight: the worst axis' 95th percentile, m/s².
+pub fn vibration_level(log: &Log) -> Option<f64> {
+    let (flight, _) = log.flight();
+    let flight_s = total_duration(&flight);
+    let ctx = Ctx { log, flight, flight_s };
+    worst_vibration(&ctx, log.table("VIBE")?).map(|(_, v)| v)
 }
 
 /// Flight values of `field`, restricted to the lowest sensor instance when

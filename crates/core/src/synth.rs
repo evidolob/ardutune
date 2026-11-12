@@ -217,6 +217,7 @@ pub fn sample_flight(preset: Preset) -> Vec<u8> {
     let rate = w.define("RATE", "Qffffffffffff", "TimeUS,RDes,R,ROut,PDes,P,POut,YDes,Y,YOut,ADes,A,AOut");
 
     w.write(msg, &[us(0.5), V::S("ArduCopter V4.6.2 (a1b2c3d4)")]);
+    w.write(msg, &[us(0.5), V::S("KakuteH7-bdshot 24003A00 0A513332 33353533")]);
     w.write(msg, &[us(0.5), V::S("Frame: QUAD/X")]);
 
     let log_bitmask = if ready { DEFAULT_LOG_BITMASK | 1 | (1 << 12) } else { DEFAULT_LOG_BITMASK };

@@ -152,9 +152,13 @@ UI. Desktop app (Tauri 2) over the steps above. ✅ Open a log or download one
     any `.param` file) written through one review → backup → write and verify
     → reboot flow, with changes re-planned against live values. Commands
     tested end to end through Tauri's IPC against the simulated vehicle.
-    Next: installers, interactive plots, flight history (step 6).
+    Next: installers, interactive plots.
 5. System ID analysis + plant fit + predicted closed-loop response.
-6. Flight-to-flight comparison / history.
+6. Flight-to-flight comparison / history. Done: Flight history screen, logs
+   grouped by vehicle (flight controller ID from the log banner), per-flight
+   vibration, noise, overshoot and oscillation with trends, and tuning
+   parameter changes between flights. Not yet: predicted vs actual after a
+   filter change, a CLI view.
 7. Later: other diagnostics. Incident diagnosis to grow with more causes
    (GPS glitch, failsafes, mechanical failure signatures, AutoTune gain
    sanity) as real logs show them.

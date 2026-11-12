@@ -73,7 +73,7 @@ impl Connected {
             system_id: v.system_id,
             armed: v.armed,
             params: self.params.len(),
-            uid: self.drone.as_ref().map(|d| d.uid.clone()),
+            uid: self.drone.as_ref().and_then(|d| d.uid.clone()),
             board: self.drone.as_ref().and_then(|d| d.board.clone()),
             name: self.drone.as_ref().and_then(|d| d.name.clone()),
             label: self.drone.as_ref().map(Drone::label),
@@ -82,7 +82,7 @@ impl Connected {
 
     /// Re-reads this vehicle's entry (its name may have changed).
     pub(crate) fn refresh_drone<R: Runtime>(&mut self, app: &AppHandle<R>) {
-        if let Some(uid) = self.drone.as_ref().map(|d| d.uid.clone()) {
+        if let Some(uid) = self.drone.as_ref().map(|d| d.key().to_owned()) {
             if let Some(d) = drones::find(app, &uid) {
                 self.drone = Some(d);
             }
@@ -94,7 +94,7 @@ impl Connected {
         // Not every autopilot reports a chip ID; backups then go untagged.
         let Ok(id) = self.link.identity() else { return };
         let Some(uid) = id.uid else { return };
-        self.drone = drones::seen(app, &uid, id.board.as_deref(), &date_time(now())).ok();
+        self.drone = drones::seen(app, &uid, id.serial.as_deref(), id.board.as_deref(), &date_time(now())).ok();
     }
 }
 
@@ -272,10 +272,13 @@ pub async fn download_vehicle_log<R: Runtime>(app: AppHandle<R>, id: u16) -> Cmd
         let mut progress = Reporter::new(app, "Downloading log");
         let r = connected(&mut slot)?.link.download_log(&entry, &mut |done, total| progress.update(done, total));
         let data = check(&mut slot, r)?;
+        // The vehicle's name keeps logs of several vehicles apart (each
+        // numbers its logs from 1); the log itself also records the ID.
+        let who = connected(&mut slot)?.drone.as_ref().map(|d| format!("_{}", backups::slug(&d.label()))).unwrap_or_default();
         let name = if entry.time_utc > 0 {
-            format!("log_{}_{}.bin", entry.id, file_stamp(entry.time_utc as u64))
+            format!("log_{}_{}{who}.bin", entry.id, file_stamp(entry.time_utc as u64))
         } else {
-            format!("log_{}_downloaded-{}.bin", entry.id, file_stamp(now()))
+            format!("log_{}_downloaded-{}{who}.bin", entry.id, file_stamp(now()))
         };
         let path = dir.join(name);
         std::fs::write(&path, data).map_err(|e| format!("writing {}: {e}", path.display()))?;

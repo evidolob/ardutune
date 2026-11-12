@@ -223,6 +223,9 @@ fn reads_firmware_info_and_reboots_to_bootloader() {
     assert_eq!(info.git_hash.as_deref(), Some("d0b31066"));
     assert!(info.description.unwrap().starts_with("ArduCopter V4.7.0-dev"));
     assert_eq!(info.uid.as_deref(), Some("003A00243233510A33353533"));
+    // The banner prints each 4-byte word of the ID most significant byte first.
+    assert_eq!(info.serial.as_deref(), Some("24003A000A51333233353533"));
+    assert_eq!(ardutune_core::history::serial_from_uid(info.uid.as_deref().unwrap()), info.serial);
     let started = std::time::Instant::now();
     let id = link.identity().unwrap();
     assert_eq!((id.uid, id.board), (info.uid.clone(), info.board.clone()));

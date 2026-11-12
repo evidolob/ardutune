@@ -77,6 +77,13 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   vehicle's backup warns first, and older untagged backups that match the
   connected vehicle (identical accelerometer calibration, or nearly all
   values) can be assigned to it.
+- Flight history: every log in the logs folder filed under the vehicle that
+  flew it (the flight controller ID ArduPilot writes into each log's
+  banner, so logs from other ground stations count too), with vibration,
+  gyro noise before and after the filters, step overshoot per axis and
+  oscillations per flight, trends over flights, and the tuning parameters
+  changed since the previous flight. Downloaded logs are named after the
+  vehicle; summaries are cached so each log is read once.
 - Command-line tool with the same analyses and vehicle commands.
 
 ## Layout

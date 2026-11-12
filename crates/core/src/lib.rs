@@ -4,6 +4,7 @@ pub mod arming;
 pub mod dataflash;
 pub mod diagnose;
 pub mod filters;
+pub mod history;
 pub mod log;
 pub mod motors;
 pub mod noise;

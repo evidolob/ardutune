@@ -79,11 +79,11 @@ pub fn save<R: Runtime>(app: &AppHandle<R>, c: &Connected, reason: &str) -> CmdR
 fn vehicle_lines(d: &Drone) -> String {
     let name = d.name.as_deref().unwrap_or("unnamed");
     let board = d.board.as_deref().unwrap_or("unknown board");
-    format!("{VEHICLE}{name}\n{CONTROLLER}{board}, ID {}\n", d.uid)
+    format!("{VEHICLE}{name}\n{CONTROLLER}{board}, ID {}\n", d.key())
 }
 
 /// A file-name-safe version of a vehicle name.
-fn slug(s: &str) -> String {
+pub fn slug(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
         if c.is_ascii_alphanumeric() {
@@ -121,7 +121,7 @@ pub async fn backup_params<R: Runtime>(app: AppHandle<R>, note: Option<String>) 
 pub async fn list_backups<R: Runtime>(app: AppHandle<R>) -> CmdResult<Vec<Backup>> {
     blocking(app, |app| {
         let dir = data_dir(app, "backups")?;
-        let known: HashMap<String, Drone> = drones::load(app)?.into_iter().map(|d| (d.uid.clone(), d)).collect();
+        let known = drones::load(app)?;
         // The connected vehicle's values, to match backups that don't say
         // which vehicle they came from.
         let live: Option<HashMap<String, f32>> = {
@@ -169,16 +169,13 @@ pub fn read_header(text: &str) -> Header {
     }
 }
 
-fn describe(path: &Path, known: &HashMap<String, Drone>, live: Option<&HashMap<String, f32>>) -> Option<Backup> {
+fn describe(path: &Path, known: &[Drone], live: Option<&HashMap<String, f32>>) -> Option<Backup> {
     let text = std::fs::read_to_string(path).ok()?;
     let h = read_header(&text);
     let values = params::parse(&text).unwrap_or_default();
-    let vehicle = h.uid.as_ref().map(|uid| match known.get(uid) {
+    let vehicle = h.uid.as_ref().map(|uid| match known.iter().find(|d| d.is(uid)) {
         Some(d) => d.label(),
-        None => {
-            let d = Drone { uid: uid.clone(), name: h.name.clone(), board: h.board.clone(), last_seen: None };
-            d.label()
-        }
+        None => Drone { name: h.name.clone(), board: h.board.clone(), ..Drone::new(Some(uid.clone()), None) }.label(),
     });
     let likely = match (&h.uid, live) {
         (None, Some(live)) => match_vehicle(&values, live),
@@ -288,10 +285,10 @@ pub fn other_vehicle<R: Runtime>(app: &AppHandle<R>, path: &str, c: &Connected) 
     let text = std::fs::read_to_string(path).ok()?;
     let h = read_header(&text);
     let (theirs, ours) = (h.uid?, c.drone.as_ref()?);
-    if theirs == ours.uid {
+    if ours.is(&theirs) {
         return None;
     }
-    let d = drones::find(app, &theirs).unwrap_or(Drone { uid: theirs, name: h.name, board: h.board, last_seen: None });
+    let d = drones::find(app, &theirs).unwrap_or(Drone { name: h.name, board: h.board, ..Drone::new(Some(theirs), None) });
     Some(format!(
         "This backup was made on {}, not on the connected vehicle ({}). Restoring it copies that vehicle's calibration and setup: untick anything that must stay, such as calibration (INS_ACC*, COMPASS_OFS*) and outputs.",
         d.label(),
@@ -322,7 +319,7 @@ mod tests {
             "{TITLE}, 2026-11-11 10:00:00 UTC, system 1.\n{VEHICLE}Quad (5\")\n{CONTROLLER}KakuteH7-bdshot, ID 003A0024\n{REASON}Before writing Recommended filter settings\nRestore it…"
         );
         std::fs::write(&ours, params::write(&header, [("A_B", 1.0f32), ("C_D", 2.5)])).unwrap();
-        let mut known = HashMap::new();
+        let mut known = Vec::new();
         let b = describe(&ours, &known, None).unwrap();
         assert_eq!(b.saved.as_deref(), Some("2026-11-11 10:00:00"));
         assert_eq!(b.system_id, Some(1));
@@ -331,7 +328,7 @@ mod tests {
         assert_eq!(b.vehicle.as_deref(), Some("Quad (5\")"));
         assert_eq!(b.params, 2);
         // The current name wins over the one in the file.
-        known.insert("003A0024".to_owned(), Drone { uid: "003A0024".into(), name: Some("Kakute".into()), board: None, last_seen: None });
+        known.push(Drone { name: Some("Kakute".into()), ..Drone::new(Some("003A0024".into()), None) });
         assert_eq!(describe(&ours, &known, None).unwrap().vehicle.as_deref(), Some("Kakute"));
 
         let foreign = dir.join("mission-planner.param");

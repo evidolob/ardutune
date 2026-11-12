@@ -472,7 +472,7 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_SEND_BANNER => {
             let mut out = vec![ack(c.command, MavResult::MAV_RESULT_ACCEPTED)];
-            for line in ["ArduCopter V4.7.0-dev (d0b31066)", "ChibiOS: 1fa4b8e0", &format!("{} 003A00243233510A33353533", st.board_name)] {
+            for line in ["ArduCopter V4.7.0-dev (d0b31066)", "ChibiOS: 1fa4b8e0", &format!("{} 24003A00 0A513332 33353533", st.board_name)] {
                 out.extend(status_texts(line));
             }
             out

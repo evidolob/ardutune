@@ -1,9 +1,12 @@
 //! The vehicles this computer has seen, by flight controller chip ID, with
 //! the names the pilot gave them. Kept in Documents/ArduTune/drones.json so
-//! backups can say which vehicle they belong to.
+//! backups and logs can say which vehicle they belong to. A vehicle is known
+//! by its chip ID as AUTOPILOT_VERSION reports it (`uid`), as the start-up
+//! banner and every log show it (`serial`), or both.
 
 use std::path::PathBuf;
 
+use ardutune_core::history::serial_from_uid;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -12,8 +15,12 @@ use crate::{blocking, data_dir, lock, AppState, CmdResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Drone {
-    /// Flight controller chip ID (hex).
-    pub uid: String,
+    /// Flight controller chip ID (hex), from a connection.
+    #[serde(default)]
+    pub uid: Option<String>,
+    /// The same ID as the banner and logs show it.
+    #[serde(default)]
+    pub serial: Option<String>,
     /// Given by the pilot; `None` until named.
     pub name: Option<String>,
     /// Board name, e.g. "KakuteH7-bdshot".
@@ -23,12 +30,28 @@ pub struct Drone {
 }
 
 impl Drone {
+    pub fn new(uid: Option<String>, serial: Option<String>) -> Self {
+        Drone { uid, serial, name: None, board: None, last_seen: None }
+    }
+
+    /// The ID it is filed under: the chip ID, else the banner one.
+    pub fn key(&self) -> &str {
+        self.uid.as_deref().or(self.serial.as_deref()).unwrap_or_default()
+    }
+
+    /// Whether `id` (either form) names this flight controller.
+    pub fn is(&self, id: &str) -> bool {
+        self.uid.as_deref() == Some(id)
+            || self.serial.as_deref() == Some(id)
+            || self.uid.as_deref().and_then(serial_from_uid).as_deref() == Some(id)
+    }
+
     /// What to call it: its name, else its board and the end of its ID.
     pub fn label(&self) -> String {
         match (&self.name, &self.board) {
             (Some(n), _) => n.clone(),
-            (None, Some(b)) => format!("{b} …{}", short(&self.uid)),
-            (None, None) => format!("Flight controller …{}", short(&self.uid)),
+            (None, Some(b)) => format!("{b} …{}", short(self.key())),
+            (None, None) => format!("Flight controller …{}", short(self.key())),
         }
     }
 }
@@ -57,20 +80,27 @@ fn store<R: Runtime>(app: &AppHandle<R>, drones: &[Drone]) -> CmdResult<()> {
     std::fs::write(&path, text).map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
-pub fn find<R: Runtime>(app: &AppHandle<R>, uid: &str) -> Option<Drone> {
-    load(app).ok()?.into_iter().find(|d| d.uid == uid)
+/// The vehicle with this ID (either form).
+pub fn find<R: Runtime>(app: &AppHandle<R>, id: &str) -> Option<Drone> {
+    load(app).ok()?.into_iter().find(|d| d.is(id))
 }
 
-/// Records a connection: adds the vehicle if new, updates board and time.
-pub fn seen<R: Runtime>(app: &AppHandle<R>, uid: &str, board: Option<&str>, now: &str) -> CmdResult<Drone> {
+/// Records a connection: adds the vehicle if new (or completes one known
+/// only from its logs), updates board and time.
+pub fn seen<R: Runtime>(app: &AppHandle<R>, uid: &str, serial: Option<&str>, board: Option<&str>, now: &str) -> CmdResult<Drone> {
     let mut drones = load(app)?;
-    let d = match drones.iter_mut().position(|d| d.uid == uid) {
+    let at = drones.iter().position(|d| d.is(uid) || serial.is_some_and(|s| d.is(s)));
+    let d = match at {
         Some(i) => &mut drones[i],
         None => {
-            drones.push(Drone { uid: uid.to_owned(), name: None, board: None, last_seen: None });
+            drones.push(Drone::new(None, None));
             drones.last_mut().unwrap()
         }
     };
+    d.uid = Some(uid.to_owned());
+    if serial.is_some() {
+        d.serial = serial.map(str::to_owned);
+    }
     if board.is_some() {
         d.board = board.map(str::to_owned);
     }
@@ -80,10 +110,17 @@ pub fn seen<R: Runtime>(app: &AppHandle<R>, uid: &str, board: Option<&str>, now:
     Ok(d)
 }
 
-/// Names a vehicle (any seen before, not only the connected one); returns
-/// the connected vehicle's info so the header can update.
+/// Names a vehicle by either form of its ID (any vehicle seen, also one
+/// known only from logs: `from_log` with its `board`); returns the connected
+/// vehicle's info so the header can update.
 #[tauri::command]
-pub async fn name_drone<R: Runtime>(app: AppHandle<R>, uid: String, name: String) -> CmdResult<Option<VehicleInfo>> {
+pub async fn name_drone<R: Runtime>(
+    app: AppHandle<R>,
+    uid: String,
+    name: String,
+    board: Option<String>,
+    from_log: Option<bool>,
+) -> CmdResult<Option<VehicleInfo>> {
     blocking(app, move |app| {
         let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
         if name.is_empty() {
@@ -93,12 +130,18 @@ pub async fn name_drone<R: Runtime>(app: AppHandle<R>, uid: String, name: String
             return Err("Keep the name under 40 characters.".to_owned());
         }
         let mut drones = load(app)?;
-        if drones.iter().any(|d| d.uid != uid && d.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&name))) {
+        if drones.iter().any(|d| !d.is(&uid) && d.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&name))) {
             return Err(format!("Another vehicle is already called \"{name}\"."));
         }
-        match drones.iter_mut().find(|d| d.uid == uid) {
+        match drones.iter_mut().find(|d| d.is(&uid)) {
             Some(d) => d.name = Some(name),
-            None => drones.push(Drone { uid: uid.clone(), name: Some(name), board: None, last_seen: None }),
+            None => {
+                // Known only from logs or backups: file it under that ID.
+                let mut d = if from_log == Some(true) { Drone::new(None, Some(uid.clone())) } else { Drone::new(Some(uid.clone()), None) };
+                d.name = Some(name);
+                d.board = board;
+                drones.push(d);
+            }
         }
         store(app, &drones)?;
         let state = app.state::<AppState>();

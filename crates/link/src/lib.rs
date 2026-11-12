@@ -1179,7 +1179,7 @@ impl Link {
                 }
                 _ => {}
             }
-            if quick && info.uid.is_some() && info.board.is_some() {
+            if quick && info.uid.is_some() && info.serial.is_some() {
                 break;
             }
         }

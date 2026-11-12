@@ -53,7 +53,13 @@ pub async fn open_sample<R: Runtime>(app: AppHandle<R>) -> CmdResult<Value> {
 
 pub fn load<R: Runtime>(app: &AppHandle<R>, path: PathBuf) -> CmdResult<Value> {
     let bytes = std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-    let (log, readiness, overview) = read(&path, &bytes);
+    let (log, readiness, mut overview) = read(&path, &bytes);
+    // Which vehicle flew it, from the flight controller ID in the banner.
+    if let Some(b) = log.text_messages().into_iter().find_map(ardutune_core::history::parse_board_line) {
+        let drone = crate::drones::find(app, &b.serial);
+        let label = drone.as_ref().map_or_else(|| format!("{} …{}", b.board, crate::drones::short(&b.serial)), |d| d.label());
+        overview["vehicle"] = json!({ "label": label, "board": b.board, "named": drone.is_some_and(|d| d.name.is_some()) });
+    }
     let state = app.state::<AppState>();
     let mut slot = lock(&state.log);
     let id = slot.as_ref().map_or(1, |l| l.id + 1);

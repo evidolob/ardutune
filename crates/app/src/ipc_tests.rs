@@ -155,8 +155,25 @@ fn analyse_connect_download_write_and_reboot() {
     let path = call("download_vehicle_log", json!({ "id": id })).unwrap();
     let path = path.as_str().unwrap();
     assert!(Path::new(path).starts_with(data.join("logs")));
+    assert!(path.ends_with("_kakuteh7-bdshot-353533.bin"), "named after the vehicle: {path}");
     let overview = call("open_log", json!({ "path": path })).unwrap();
     assert_eq!(overview["readiness"]["filter_ready"], json!(false));
+    assert_eq!(overview["vehicle"]["label"], "KakuteH7-bdshot …353533");
+
+    // Flight history: the log is filed under the connected vehicle, from
+    // the flight controller ID in its banner; an imported log joins it.
+    let groups = call("flight_history", json!({})).unwrap();
+    assert_eq!(groups.as_array().unwrap().len(), 1, "{groups}");
+    assert_eq!((groups[0]["connected"].clone(), groups[0]["flights"].as_array().unwrap().len()), (json!(true), 1));
+    assert!(groups[0]["flights"][0]["summary"]["flight_s"].as_f64().unwrap() > 10.0);
+    let sample = std::env::temp_dir().join(format!("ardutune-import-{}.bin", std::process::id()));
+    std::fs::write(&sample, sample_flight(Preset::Ready)).unwrap();
+    let imported = call("import_log", json!({ "path": sample })).unwrap();
+    assert!(Path::new(imported.as_str().unwrap()).starts_with(data.join("logs")));
+    let groups = call("flight_history", json!({})).unwrap();
+    assert_eq!(groups[0]["flights"].as_array().unwrap().len(), 2, "{groups}");
+    assert!(data.join("logs").join(".ardutune-summaries.json").is_file(), "summaries are cached");
+    let _ = std::fs::remove_file(&sample);
     assert_eq!(
         call("prepare_changes", json!({ "source": "pid" })).unwrap_err(),
         "Run the PID analysis first.",
@@ -225,6 +242,14 @@ fn analyse_connect_download_write_and_reboot() {
     assert!(call("name_drone", json!({ "uid": "OTHER", "name": "kakute 5IN" })).unwrap_err().contains("already called"));
     let listed = call("list_backups", json!({})).unwrap();
     assert!(listed.as_array().unwrap().iter().all(|b| b["vehicle"] == "Kakute 5in"), "{listed}");
+    assert_eq!(call("flight_history", json!({})).unwrap()[0]["label"], "Kakute 5in");
+    // A vehicle known only from its logs is named by the ID the logs show.
+    call("name_drone", json!({ "uid": "0035003D4B564E0C20204232", "name": "7in", "board": "MatekH7A3", "fromLog": true })).unwrap();
+    let drones = call("list_drones", json!({})).unwrap();
+    let matek = drones.as_array().unwrap().iter().find(|d| d["name"] == "7in").unwrap();
+    assert_eq!((matek["serial"].clone(), matek["uid"].clone()), (json!("0035003D4B564E0C20204232"), Value::Null));
+    let kakute = drones.as_array().unwrap().iter().find(|d| d["name"] == "Kakute 5in").unwrap();
+    assert_eq!(kakute["serial"], "24003A000A51333233353533", "the banner ID is recorded on connect");
     call("backup_params", json!({ "note": "named" })).unwrap();
     let newest = &call("list_backups", json!({})).unwrap()[0];
     assert!(newest["file_name"].as_str().unwrap().starts_with("backup-kakute-5in-"), "{newest}");

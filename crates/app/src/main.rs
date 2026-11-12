@@ -7,6 +7,7 @@ mod analysis;
 mod backups;
 mod drones;
 mod firmware;
+mod history;
 #[cfg(test)]
 mod ipc_tests;
 mod vehicle;
@@ -139,6 +140,8 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         backups::assign_backup,
         drones::name_drone,
         drones::list_drones,
+        history::flight_history,
+        history::import_log,
     ])
 }
 

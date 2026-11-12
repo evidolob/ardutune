@@ -97,6 +97,8 @@ pub struct FirmwareInfo {
     /// The flight controller's unique chip ID in hex, which tells one
     /// vehicle from another (it survives reflashing).
     pub uid: Option<String>,
+    /// The chip ID as the banner (and every log) shows it, without spaces.
+    pub serial: Option<String>,
 }
 
 /// The chip ID from AUTOPILOT_VERSION: `uid2` (ArduPilot fills in the MCU's
@@ -129,11 +131,9 @@ impl FirmwareInfo {
         }
         // ChibiOS boards report "<board name> <chip ID in hex>", the ID in one
         // block or in groups ("KakuteH7-bdshot 004D002D 33335101 38333837").
-        let words: Vec<&str> = text.split_whitespace().collect();
-        let id = &words.get(1..).unwrap_or_default();
-        let hex_digits: usize = id.iter().map(|w| w.len()).sum();
-        if !id.is_empty() && hex_digits >= 16 && id.iter().all(|w| w.chars().all(|c| c.is_ascii_hexdigit())) {
-            self.board = Some(words[0].to_owned());
+        if let Some(id) = ardutune_core::history::parse_board_line(text) {
+            self.board = Some(id.board);
+            self.serial = Some(id.serial);
         }
     }
 }
