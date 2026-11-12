@@ -288,6 +288,12 @@ apart, what each function does per switch position, two functions on one
 transmitter tuning (`TUNE`, `TUNE_MIN/MAX`) and mount axes, channels that
 haven't moved hidden. Not yet: a CLI view.
 
+Revisit: the page works but is still too complicated. Simplify it: fewer
+buttons and dialogs (one "set up a control" flow that starts from flipping or
+turning the control and offers switch, 3-position or knob uses from what it
+saw), less text, and the advanced parts (reversing, calibration, transmitter
+tuning) out of the main view.
+
 ### Basic vehicle configuration
 
 Frame and the few settings every build needs, on one page; it could join
