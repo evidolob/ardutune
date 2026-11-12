@@ -46,6 +46,8 @@ pub struct MockState {
     pub prearm_failures: Vec<String>,
     /// GPS fix type, satellites and HDOP; `None` sends no GPS messages.
     pub gps: Option<(GpsFixType, u8, f32)>,
+    /// What the GPS reports: ground speed (m/s), latitude, longitude.
+    pub gps_motion: (f32, f64, f64),
     pub mode: u32,
     pub rc: [u16; 8],
     /// Default values; parameters not listed default to their starting value.
@@ -155,6 +157,7 @@ impl MockState {
             deleted: BTreeSet::new(),
             prearm_failures: Vec::new(),
             gps: Some((GpsFixType::GPS_FIX_TYPE_3D_FIX, 14, 0.8)),
+            gps_motion: (0.02, 50.4501, 30.5234),
             mode: 0,
             rc: [1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000],
             defaults: BTreeMap::new(),
@@ -247,6 +250,11 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
                     satellites_visible: satellites,
                     eph: (hdop * 100.0) as u16,
                     epv: u16::MAX,
+                    vel: (st.gps_motion.0 * 100.0) as u16,
+                    cog: 700,
+                    lat: (st.gps_motion.1 * 1e7) as i32,
+                    lon: (st.gps_motion.2 * 1e7) as i32,
+                    alt: 186_000,
                     ..Default::default()
                 }));
             }

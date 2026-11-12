@@ -166,6 +166,17 @@ enum Cmd {
         #[arg(long, value_name = "CHANNEL")]
         install: Option<String>,
     },
+    /// Why a vehicle standing level reports a tilt: attitude estimates,
+    /// raw accelerometer tilt and the parameters that define level
+    Level {
+        /// Seconds to average over
+        #[arg(long, default_value_t = 4.0)]
+        listen: f64,
+        /// Instead, print attitude, GPS and EKF health every second for this
+        /// many seconds (to see when the estimate goes wrong)
+        #[arg(long, value_name = "SECONDS")]
+        watch: Option<u32>,
+    },
     /// Reboot the flight controller (only while disarmed)
     Reboot,
     /// List serial ports and which look like flight controllers
@@ -444,6 +455,65 @@ fn main() -> Result<()> {
         Cmd::Compass => compass_cal(&cli.conn)?,
         Cmd::Motors { throttle, apply_opts } => motor_test(&cli.conn, throttle, &(&apply_opts).into())?,
         Cmd::Firmware { check, flash, install } => firmware(&cli.conn, check, flash.as_deref(), install.as_deref())?,
+        Cmd::Level { watch: Some(secs), .. } => {
+            let mut link = vehicle::connect(&cli.conn)?;
+            println!("  t   EKF roll/pitch   DCM roll/pitch   GPS fix/sats/speed   EKF vel/pos/mag ratio");
+            for t in 0..secs {
+                let l = link.level_status(std::time::Duration::from_secs(1))?;
+                let rp = |a: Option<(f32, f32)>| a.map_or("      –      ".to_owned(), |(r, p)| format!("{r:+6.1} {p:+6.1}"));
+                let gps = l.gps.map_or("–".to_owned(), |(f, n, v)| format!("{f}/{n}/{v:.2} m/s"));
+                let ekf = l.ekf.map_or("–".to_owned(), |[v, p, m]| format!("{v:.2}/{p:.2}/{m:.2}"));
+                println!("{t:>3}   {}    {}    {gps:<18}   {ekf}", rp(l.attitude), rp(l.ahrs2));
+                for m in &l.messages {
+                    println!("      vehicle: {m}");
+                }
+            }
+        }
+        Cmd::Level { listen, .. } => {
+            let mut link = vehicle::connect(&cli.conn)?;
+            let params = vehicle::fetch_params(&mut link)?;
+            let l = link.level_status(std::time::Duration::from_secs_f64(listen))?;
+            // Right side down is positive roll, nose up positive pitch.
+            if let Some((r, p)) = l.attitude {
+                println!("Attitude (EKF):  roll {r:+.1}°  pitch {p:+.1}°");
+            }
+            if let Some((r, p)) = l.ahrs2 {
+                println!("Attitude (DCM):  roll {r:+.1}°  pitch {p:+.1}°");
+            }
+            for (i, [x, y, z]) in &l.accels {
+                // At rest the accelerometer reads -1 g along body down.
+                let roll = (-y).atan2(-z).to_degrees();
+                let pitch = x.atan2((y * y + z * z).sqrt()).to_degrees();
+                let g = (x * x + y * y + z * z).sqrt() / 1000.0;
+                println!("Accelerometer {}: x {x:+.0} y {y:+.0} z {z:+.0} mG ({g:.3} g) -> roll {roll:+.1}°  pitch {pitch:+.1}°", i + 1);
+            }
+            if let (Some((fix, sats, speed)), Some((lat, lon, alt, cog))) = (l.gps, l.gps_position) {
+                println!("GPS: fix {fix}, {sats} satellites, speed {speed:.2} m/s, course {cog:.0}°, position {lat:.5}, {lon:.5}, altitude {alt:.0} m");
+            }
+            for (i, [x, y, z]) in &l.mags {
+                let total = (x * x + y * y + z * z).sqrt();
+                let heading = (-y).atan2(*x).to_degrees().rem_euclid(360.0);
+                println!("Compass {}: x {x:+.0} y {y:+.0} z {z:+.0} mGauss, strength {total:.0}, heading if level {heading:.0}°", i + 1);
+            }
+            let mut names: Vec<&String> = params
+                .keys()
+                .filter(|n| {
+                    n.starts_with("AHRS_TRIM")
+                        || n.starts_with("AHRS_ORIENT")
+                        || n.starts_with("INS_ACCOFFS")
+                        || n.starts_with("INS_ACCSCAL")
+                        || n.as_str() == "AHRS_EKF_TYPE"
+                        || n.starts_with("COMPASS_")
+                        || n.starts_with("EK3_SRC1_YAW")
+                        || n.starts_with("EK3_MAG")
+                })
+                .collect();
+            names.sort();
+            println!();
+            for n in names {
+                println!("  {n:<16} {}", format_value(params[n].value as f64));
+            }
+        }
         Cmd::Reboot => {
             vehicle::connect(&cli.conn)?.reboot()?;
             println!("Rebooting. Reconnect in a few seconds.");
@@ -996,6 +1066,9 @@ fn print_arming(r: &arming::Report) {
             }
             if let (Some(h), true) = (g.hdop, g.fix != "no GPS") {
                 t += &format!(", HDOP {h:.2}");
+            }
+            if let Some(v) = g.speed.filter(|v| *v > 0.5) {
+                t += &format!(", moving {v:.1} m/s");
             }
             t
         })

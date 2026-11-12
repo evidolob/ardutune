@@ -733,6 +733,11 @@ pub struct GpsStatus {
     pub fix_type: u8,
     pub satellites: Option<u8>,
     pub hdop: Option<f32>,
+    /// Ground speed in m/s and course over ground in degrees.
+    pub speed: Option<f32>,
+    pub course: Option<f32>,
+    /// Latitude, longitude (degrees) and altitude (m), with a fix.
+    pub position: Option<(f64, f64, f32)>,
 }
 
 const GPS_RAW_INT_ID: f32 = 24.0;
@@ -748,7 +753,15 @@ impl ArmingStatus {
             gps: self
                 .gps
                 .iter()
-                .map(|g| ardutune_core::arming::Gps { instance: g.instance, fix_type: g.fix_type, satellites: g.satellites, hdop: g.hdop })
+                .map(|g| ardutune_core::arming::Gps {
+                    instance: g.instance,
+                    fix_type: g.fix_type,
+                    satellites: g.satellites,
+                    hdop: g.hdop,
+                    speed: g.speed,
+                    course: g.course,
+                    position: g.position,
+                })
                 .collect(),
             sensors: self.sensors,
             mode: self.custom_mode,
@@ -763,16 +776,130 @@ impl ArmingStatus {
     }
 }
 
-fn gps_status(instance: u8, fix: GpsFixType, satellites: u8, eph: u16) -> GpsStatus {
+/// Fields of GPS_RAW_INT / GPS2_RAW, which share their layout.
+struct RawGps {
+    fix: GpsFixType,
+    satellites: u8,
+    eph: u16,
+    vel: u16,
+    cog: u16,
+    lat: i32,
+    lon: i32,
+    alt: i32,
+}
+
+fn gps_status(instance: u8, g: RawGps) -> GpsStatus {
+    let fix = g.fix as u8;
     GpsStatus {
         instance,
-        fix_type: fix as u8,
-        satellites: (satellites != u8::MAX).then_some(satellites),
-        hdop: (eph != u16::MAX).then_some(eph as f32 / 100.0),
+        fix_type: fix,
+        satellites: (g.satellites != u8::MAX).then_some(g.satellites),
+        hdop: (g.eph != u16::MAX).then_some(g.eph as f32 / 100.0),
+        speed: (fix >= 2 && g.vel != u16::MAX).then_some(g.vel as f32 / 100.0),
+        course: (fix >= 2 && g.cog != u16::MAX).then_some(g.cog as f32 / 100.0),
+        position: (fix >= 2).then_some((g.lat as f64 / 1e7, g.lon as f64 / 1e7, g.alt as f32 / 1000.0)),
+    }
+}
+
+const ATTITUDE_ID: f32 = 30.0;
+const AHRS2_ID: f32 = 178.0;
+const RAW_IMU_ID: f32 = 27.0;
+const SCALED_IMU2_ID: f32 = 116.0;
+const SCALED_IMU3_ID: f32 = 129.0;
+const EKF_STATUS_REPORT_ID: f32 = 193.0;
+
+/// What the vehicle thinks "level" is while it sits still: its attitude
+/// estimates and each accelerometer's raw reading, averaged.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct LevelStatus {
+    /// Roll and pitch (degrees) of the main attitude estimate (EKF).
+    pub attitude: Option<(f32, f32)>,
+    /// Roll and pitch of the secondary estimate (DCM).
+    pub ahrs2: Option<(f32, f32)>,
+    /// Per accelerometer (0 = first): x, y, z in milli-g.
+    pub accels: Vec<(u8, [f32; 3])>,
+    /// Per compass (0 = first): x, y, z in milligauss, calibrated.
+    pub mags: Vec<(u8, [f32; 3])>,
+    /// GPS fix type, satellites and ground speed (m/s), last reported.
+    pub gps: Option<(u8, u8, f32)>,
+    /// GPS latitude, longitude (degrees), altitude (m) and course (degrees).
+    pub gps_position: Option<(f64, f64, f32, f32)>,
+    /// EKF velocity, horizontal position and compass innovation ratios
+    /// (above 1 the EKF rejects that sensor), last reported.
+    pub ekf: Option<[f32; 3]>,
+    /// Status texts sent meanwhile.
+    pub messages: Vec<String>,
+}
+
+#[derive(Default)]
+struct Mean {
+    sum: Vec<f64>,
+    n: usize,
+}
+
+impl Mean {
+    fn add(&mut self, v: &[f64]) {
+        if self.sum.is_empty() {
+            self.sum = vec![0.0; v.len()];
+        }
+        self.sum.iter_mut().zip(v).for_each(|(s, x)| *s += x);
+        self.n += 1;
+    }
+
+    fn get(&self) -> Option<Vec<f32>> {
+        (self.n > 0).then(|| self.sum.iter().map(|s| (s / self.n as f64) as f32).collect())
     }
 }
 
 impl Link {
+    /// Averages attitude and raw accelerometer readings for `listen`, to
+    /// see why a vehicle standing level reports a tilt.
+    pub fn level_status(&mut self, listen: Duration) -> Result<LevelStatus> {
+        for id in [ATTITUDE_ID, AHRS2_ID, RAW_IMU_ID, SCALED_IMU2_ID, SCALED_IMU3_ID, EKF_STATUS_REPORT_ID, GPS_RAW_INT_ID] {
+            self.command(MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL, [id, 100_000.0, 0.0, 0.0, 0.0, 0.0, 0.0])?;
+        }
+        let mut status = LevelStatus::default();
+        let (mut att, mut ahrs2) = (Mean::default(), Mean::default());
+        let mut imu: [Mean; 3] = Default::default();
+        let mut mag: [Mean; 3] = Default::default();
+        let deadline = Instant::now() + listen;
+        while let Some(msg) = self.next(deadline)? {
+            match msg {
+                MavMessage::ATTITUDE(a) => att.add(&[f64::from(a.roll).to_degrees(), f64::from(a.pitch).to_degrees()]),
+                MavMessage::AHRS2(a) => ahrs2.add(&[f64::from(a.roll).to_degrees(), f64::from(a.pitch).to_degrees()]),
+                MavMessage::RAW_IMU(r) => {
+                    imu[0].add(&[r.xacc as f64, r.yacc as f64, r.zacc as f64]);
+                    mag[0].add(&[r.xmag as f64, r.ymag as f64, r.zmag as f64]);
+                }
+                MavMessage::SCALED_IMU2(r) => {
+                    imu[1].add(&[r.xacc as f64, r.yacc as f64, r.zacc as f64]);
+                    mag[1].add(&[r.xmag as f64, r.ymag as f64, r.zmag as f64]);
+                }
+                MavMessage::SCALED_IMU3(r) => {
+                    imu[2].add(&[r.xacc as f64, r.yacc as f64, r.zacc as f64]);
+                    mag[2].add(&[r.xmag as f64, r.ymag as f64, r.zmag as f64]);
+                }
+                MavMessage::GPS_RAW_INT(g) => {
+                    status.gps = Some((g.fix_type as u8, g.satellites_visible, g.vel as f32 / 100.0));
+                    status.gps_position = Some((g.lat as f64 / 1e7, g.lon as f64 / 1e7, g.alt as f32 / 1000.0, g.cog as f32 / 100.0));
+                }
+                MavMessage::EKF_STATUS_REPORT(e) => status.ekf = Some([e.velocity_variance, e.pos_horiz_variance, e.compass_variance]),
+                MavMessage::STATUSTEXT(t) => push_text(&mut status.messages, t.text.to_str().unwrap_or_default().to_owned()),
+                _ => {}
+            }
+        }
+        let pair = |m: &Mean| m.get().map(|v| (v[0], v[1]));
+        let triples = |ms: &[Mean]| -> Vec<(u8, [f32; 3])> {
+            ms.iter()
+                .enumerate()
+                .filter_map(|(i, m)| m.get().map(|v| (i as u8, [v[0], v[1], v[2]])))
+                // An absent sensor reports zeros.
+                .filter(|(_, v)| v.iter().any(|x| *x != 0.0))
+                .collect()
+        };
+        Ok(LevelStatus { attitude: pair(&att), ahrs2: pair(&ahrs2), accels: triples(&imu), mags: triples(&mag), ..status })
+    }
+
     /// Asks the vehicle to run its pre-arm checks and listens for `listen`
     /// to the reasons it gives, the GPS state and sensor health.
     pub fn arming_status(&mut self, listen: Duration) -> Result<ArmingStatus> {
@@ -799,8 +926,14 @@ impl Link {
                         push_text(&mut status.messages, text);
                     }
                 }
-                MavMessage::GPS_RAW_INT(g) => upsert(&mut status.gps, gps_status(0, g.fix_type, g.satellites_visible, g.eph)),
-                MavMessage::GPS2_RAW(g) => upsert(&mut status.gps, gps_status(1, g.fix_type, g.satellites_visible, g.eph)),
+                MavMessage::GPS_RAW_INT(g) => upsert(
+                    &mut status.gps,
+                    gps_status(0, RawGps { fix: g.fix_type, satellites: g.satellites_visible, eph: g.eph, vel: g.vel, cog: g.cog, lat: g.lat, lon: g.lon, alt: g.alt }),
+                ),
+                MavMessage::GPS2_RAW(g) => upsert(
+                    &mut status.gps,
+                    gps_status(1, RawGps { fix: g.fix_type, satellites: g.satellites_visible, eph: g.eph, vel: g.vel, cog: g.cog, lat: g.lat, lon: g.lon, alt: g.alt }),
+                ),
                 MavMessage::SYS_STATUS(s) => {
                     status.sensors = Some((
                         s.onboard_control_sensors_present.bits(),

@@ -29,6 +29,11 @@ pub struct Gps {
     pub fix_type: u8,
     pub satellites: Option<u8>,
     pub hdop: Option<f32>,
+    /// Ground speed (m/s) and course over ground (degrees).
+    pub speed: Option<f32>,
+    pub course: Option<f32>,
+    /// Latitude, longitude (degrees) and altitude (m).
+    pub position: Option<(f64, f64, f32)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,7 +67,15 @@ pub struct GpsView {
     pub fix: &'static str,
     pub satellites: Option<u8>,
     pub hdop: Option<f32>,
+    pub speed: Option<f32>,
+    /// Latitude, longitude (degrees) and altitude (m), for the pilot to
+    /// check against where the vehicle really is.
+    pub position: Option<(f64, f64, f32)>,
 }
+
+/// A disarmed vehicle on the ground doesn't move faster than someone
+/// walking with it; a GPS that says so is being spoofed or is faulty.
+const STILL_MAX_SPEED: f32 = 3.0;
 
 /// Copter modes that need a position estimate (GPS) to arm in.
 const POSITION_MODES: [u32; 14] = [3, 4, 5, 6, 7, 11, 16, 17, 18, 19, 21, 23, 24, 27];
@@ -107,7 +120,11 @@ pub fn assess(s: &Snapshot, param: impl Fn(&str) -> Option<f64>) -> Report {
         });
     }
 
-    let gps = s.gps.iter().map(|g| GpsView { instance: g.instance, fix: fix_name(g.fix_type), satellites: g.satellites, hdop: g.hdop }).collect();
+    let gps = s
+        .gps
+        .iter()
+        .map(|g| GpsView { instance: g.instance, fix: fix_name(g.fix_type), satellites: g.satellites, hdop: g.hdop, speed: g.speed, position: g.position })
+        .collect();
     let mode_needs_gps = s.mode.is_some_and(|m| POSITION_MODES.contains(&m));
     if let Some(p) = gps_problem(s, &param, mode_needs_gps, problems.iter().any(|p| p.area == "GPS")) {
         match problems.iter_mut().find(|q| q.area == "GPS") {
@@ -128,6 +145,18 @@ pub fn assess(s: &Snapshot, param: impl Fn(&str) -> Option<f64>) -> Report {
                 advice: "Switch to Stabilize or AltHold to arm without a GPS fix.".to_owned(),
             });
         }
+    }
+    // A false GPS position also fails the compass check (it compares with
+    // the field expected there) and tilts the EKF: explain that first.
+    if let Some(p) = spoofing(s) {
+        for q in problems.iter_mut().filter(|q| q.area == "Compass" || q.area == "Attitude") {
+            q.status = Status::Warn;
+            q.advice = format!(
+                "Most likely caused by the false GPS data (see above): don't recalibrate anything for this. Once the GPS is right (or turned off) and the vehicle rebooted, check again. {}",
+                q.advice
+            );
+        }
+        problems.insert(0, p);
     }
     problems.extend(rc_problems(s, &param));
     if let Some(p) = unhealthy(s) {
@@ -329,6 +358,35 @@ fn baud(code: f64) -> String {
     }
 }
 
+/// A GPS that reports movement while the vehicle stands disarmed: spoofed
+/// (fake satellite signals, which also give a false position) or faulty.
+fn spoofing(s: &Snapshot) -> Option<Problem> {
+    if s.armed {
+        return None;
+    }
+    let g = s.gps.iter().filter(|g| g.fix_type >= 3).find(|g| g.speed.is_some_and(|v| v > STILL_MAX_SPEED))?;
+    let speed = g.speed.unwrap_or(0.0);
+    let heading = g.course.map_or(String::new(), |c| format!(" towards {c:.0}°"));
+    let at = g.position.map_or(String::new(), |(lat, lon, alt)| format!(" and puts it at {lat:.5}, {lon:.5}, {alt:.0} m altitude"));
+    let glitch: Vec<String> = s.messages.iter().filter(|m| m.contains("GPS Glitch") || m.contains("EKF variance")).cloned().collect();
+    Some(Problem {
+        status: Status::Fail,
+        area: "GPS",
+        title: format!("The GPS says the vehicle is moving at {speed:.0} m/s while it stands still: spoofed or faulty GPS"),
+        messages: glitch,
+        advice: format!(
+            "The GPS reports {speed:.1} m/s{heading}{at}. If that isn't where the vehicle is, the receiver is getting \
+             fake satellite signals (GPS spoofing); a faulty receiver can do the same. The attitude estimate (EKF) tilts \
+             itself to explain the false speed, and ArduPilot stabilises with that estimate in every mode, Stabilize \
+             included: don't fly like this, and don't turn arming checks off. Compare with a phone's GPS, or try \
+             outdoors somewhere else. To fly where GPS is spoofed, stop the EKF using it (EK3_SRC1_POSXY = 0, \
+             EK3_SRC1_VELXY = 0 and EK3_SRC1_VELZ = 0, or GPS1_TYPE = 0), reboot and fly Stabilize or AltHold only, \
+             with failsafes that land rather than return home (FS_THR_ENABLE = 3, BATT_FS_LOW_ACT = 1): the home \
+             position would be false too."
+        ),
+    })
+}
+
 /// GPS problems from its live state and setup. `blocking` is set when the
 /// vehicle's own messages complain about GPS or position.
 fn gps_problem(s: &Snapshot, param: &impl Fn(&str) -> Option<f64>, mode_needs_gps: bool, blocking: bool) -> Option<Problem> {
@@ -521,7 +579,7 @@ mod tests {
             ]
             .map(str::to_owned)
             .to_vec(),
-            gps: vec![Gps { instance: 0, fix_type: 3, satellites: Some(26), hdop: Some(0.55) }],
+            gps: vec![Gps { instance: 0, fix_type: 3, satellites: Some(26), hdop: Some(0.55), ..Default::default() }],
             mode: Some(0),
             rc: Some([1501, 1500, 988, 1499, 999, 999, 999, 999]),
             ..Default::default()
@@ -538,9 +596,53 @@ mod tests {
     }
 
     #[test]
+    fn spoofed_gps_explains_compass_and_attitude_failures() {
+        // The KakuteH7 on 2026-11-12: 56 m/s while on the floor, "in" Lima.
+        let s = Snapshot {
+            messages: [
+                "PreArm: Check mag field (xy diff:176>100)",
+                "PreArm: AHRS: DCM Roll/Pitch inconsistent 19 deg. Wait or reboot",
+                "GPS Glitch or Compass error",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            gps: vec![Gps {
+                instance: 0,
+                fix_type: 3,
+                satellites: Some(26),
+                hdop: Some(0.59),
+                speed: Some(55.99),
+                course: Some(7.0),
+                position: Some((-12.03831, -77.05871, 985.0)),
+            }],
+            mode: Some(0),
+            ..Default::default()
+        };
+        let r = assess(&s, params(&kakute()));
+        assert!(!r.ready);
+        let first = &r.problems[0];
+        assert_eq!(first.area, "GPS");
+        assert!(first.title.contains("56 m/s"), "{}", first.title);
+        assert!(first.advice.contains("-12.03831, -77.05871"));
+        assert_eq!(first.messages, ["GPS Glitch or Compass error"]);
+        let compass = r.problems.iter().find(|p| p.area == "Compass").unwrap();
+        assert_eq!(compass.status, Status::Warn);
+        assert!(compass.advice.starts_with("Most likely caused by the false GPS"));
+        assert!(!compass.advice.contains("  "), "{}", compass.advice);
+        assert_eq!(r.gps[0].speed, Some(55.99));
+
+        // Walking with it, or armed and flying, is not spoofing.
+        let mut walking = s.clone();
+        walking.gps[0].speed = Some(1.4);
+        assert!(assess(&walking, params(&kakute())).problems[0].area != "GPS");
+        let flying = Snapshot { armed: true, ..s.clone() };
+        assert!(!assess(&flying, params(&kakute())).problems.iter().any(|p| p.title.contains("spoofed")));
+    }
+
+    #[test]
     fn explains_a_gps_without_satellites() {
         let s = Snapshot {
-            gps: vec![Gps { instance: 0, fix_type: 1, satellites: Some(0), hdop: Some(99.99) }],
+            gps: vec![Gps { instance: 0, fix_type: 1, satellites: Some(0), hdop: Some(99.99), ..Default::default() }],
             mode: Some(5),
             ..Default::default()
         };
@@ -574,7 +676,7 @@ mod tests {
     #[test]
     fn ready_with_a_good_fix_and_no_messages() {
         let s = Snapshot {
-            gps: vec![Gps { instance: 0, fix_type: 3, satellites: Some(29), hdop: Some(0.57) }],
+            gps: vec![Gps { instance: 0, fix_type: 3, satellites: Some(29), hdop: Some(0.57), ..Default::default() }],
             mode: Some(0),
             rc: Some([1500, 1500, 988, 1500, 1900, 999, 999, 999]),
             ..Default::default()

@@ -68,6 +68,15 @@ fn analyse_connect_download_write_and_reboot() {
     let report = call("arming_check", json!({ "listen_s": 1.0 })).unwrap();
     assert_eq!(report["ready"], json!(false));
     assert_eq!(report["problems"][0]["area"], "Compass");
+    // A GPS that says the vehicle moves while it stands still: spoofing,
+    // which also explains the compass failure.
+    mock.state().gps_motion = (55.99, -12.03831, -77.05871);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let report = call("arming_check", json!({ "listen_s": 1.0 })).unwrap();
+    assert!(report["problems"][0]["title"].as_str().unwrap().contains("spoofed"), "{report}");
+    assert_eq!(report["problems"][1]["status"], "warn", "compass failure put down to the GPS");
+    assert!(report["gps"][0]["speed"].as_f64().unwrap() > 55.0);
+    mock.state().gps_motion = (0.02, 50.4501, 30.5234);
     mock.state().prearm_failures.clear();
 
     // The setup guide covers every step and proposes logging changes for the

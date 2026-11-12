@@ -1588,7 +1588,12 @@ function prearmView() {
   const run = `${props}<div class="actions"><button class="btn primary" data-action="armingCheck" ${state.vehicleBusy ? "disabled" : ""}>${r ? "Check again" : "Run the check"}</button></div>`;
   if (!r) return head + (state.vehicleBusy ? busy(state.vehicleBusy) : run);
   const gps = r.gps.length
-    ? r.gps.map((g) => `${esc(g.fix)}${g.satellites !== null ? `, ${g.satellites} sats` : ""}${g.hdop !== null && g.fix !== "no GPS" ? `, HDOP ${num(g.hdop, 2)}` : ""}`).join("; ")
+    ? r.gps
+        .map(
+          (g) =>
+            `${esc(g.fix)}${g.satellites !== null ? `, ${g.satellites} sats` : ""}${g.hdop !== null && g.fix !== "no GPS" ? `, HDOP ${num(g.hdop, 2)}` : ""}${g.speed > 0.5 ? `, moving ${num(g.speed, 1)} m/s` : ""}`,
+        )
+        .join("; ")
     : "no data";
   const banner = r.armed
     ? `<div class="banner info">The vehicle is armed.</div>`
