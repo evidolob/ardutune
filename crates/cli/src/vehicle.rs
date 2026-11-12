@@ -72,14 +72,20 @@ pub fn fetch_params(link: &mut Link) -> Result<Params> {
 }
 
 /// Saves all parameters so a change can be undone with `ardutune apply`.
-pub fn save_params(link: &Link, params: &Params, path: Option<&Path>) -> Result<PathBuf> {
+pub fn save_params(link: &mut Link, params: &Params, path: Option<&Path>) -> Result<PathBuf> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let path = path.map_or_else(
         || PathBuf::from(format!("ardutune-backup-sys{}-{}.param", link.vehicle().system_id, file_stamp(now))),
         Path::to_path_buf,
     );
+    // Same vehicle line as the desktop app's backups, so they can tell
+    // which flight controller a file came from.
+    let id = link.identity().ok().filter(|i| i.uid.is_some());
+    let controller = id.map_or(String::new(), |i| {
+        format!("Flight controller: {}, ID {}\n", i.board.as_deref().unwrap_or("unknown board"), i.uid.unwrap_or_default())
+    });
     let header = format!(
-        "ArduTune parameter backup, {} UTC, system {}.\nRestore with: ardutune apply {}",
+        "ArduTune parameter backup, {} UTC, system {}.\n{controller}Restore with: ardutune apply {}",
         date_time(now),
         link.vehicle().system_id,
         path.display()

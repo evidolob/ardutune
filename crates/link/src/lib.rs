@@ -1141,6 +1141,16 @@ impl Link {
     /// The firmware version, board and banner, from AUTOPILOT_VERSION and
     /// the startup banner (which the vehicle repeats on request).
     pub fn firmware_info(&mut self) -> Result<firmware::FirmwareInfo> {
+        self.read_firmware_info(false)
+    }
+
+    /// Which flight controller this is: chip ID and board name. Like
+    /// [`Link::firmware_info`] but returns as soon as both are known.
+    pub fn identity(&mut self) -> Result<firmware::FirmwareInfo> {
+        self.read_firmware_info(true)
+    }
+
+    fn read_firmware_info(&mut self, quick: bool) -> Result<firmware::FirmwareInfo> {
         self.command(MavCmd::MAV_CMD_REQUEST_MESSAGE, [AUTOPILOT_VERSION_ID, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])?;
         self.command(MavCmd::MAV_CMD_DO_SEND_BANNER, [0.0; 7])?;
         let mut info = firmware::FirmwareInfo::default();
@@ -1156,6 +1166,7 @@ impl Link {
                     if !hash.is_empty() {
                         info.git_hash = Some(hash);
                     }
+                    info.uid = firmware::chip_uid(v.uid, &v.uid2);
                 }
                 MavMessage::STATUSTEXT(t) => {
                     let raw = t.text.to_str().unwrap_or_default().to_owned();
@@ -1167,6 +1178,9 @@ impl Link {
                     }
                 }
                 _ => {}
+            }
+            if quick && info.uid.is_some() && info.board.is_some() {
+                break;
             }
         }
         Ok(info)

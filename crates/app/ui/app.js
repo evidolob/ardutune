@@ -469,6 +469,25 @@ async function backupNow() {
   }
 }
 
+async function nameDrone(uid, name) {
+  try {
+    const vehicle = await invoke("name_drone", { uid, name });
+    set({ modal: null, ...(vehicle && state.vehicle ? { vehicle } : {}) });
+    if (state.view === "params") refreshBackups();
+  } catch (e) {
+    toast(e);
+  }
+}
+
+async function assignBackup(path) {
+  try {
+    await invoke("assign_backup", { path });
+    refreshBackups();
+  } catch (e) {
+    toast(e);
+  }
+}
+
 function backupLabel(b) {
   return b.saved ? `the backup from ${b.saved} UTC` : b.file_name;
 }
@@ -513,6 +532,9 @@ const actions = {
   restoreBackup: (d) => restoreBackup(d.path),
   askDeleteBackup: (d) => askDeleteBackup(d.path),
   confirmDeleteBackup,
+  assignBackup: (d) => assignBackup(d.path),
+  askNameDrone: (d) => set({ modal: { stage: "nameDrone", title: d.name ? `Rename ${d.name}` : "Name this vehicle", uid: d.uid, name: d.name ?? "" } }),
+  saveDroneName: (d) => nameDrone(d.uid, document.getElementById(d.uid === state.modal?.uid ? "droneName" : "droneNameInline")?.value ?? ""),
   armingCheck,
   setupGuide,
   calculateTune,
@@ -603,6 +625,8 @@ document.addEventListener("change", (e) => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.id === "tprop") calculateTune();
+  if (e.key === "Enter" && e.target.id === "droneNameInline") nameDrone(state.vehicle?.uid, e.target.value);
+  if (e.key === "Enter" && e.target.id === "droneName") nameDrone(state.modal?.uid, e.target.value);
   if (e.key === "Enter" && e.target.id === "pval" && state.popen) stageParam(state.popen, editorValue());
 });
 
@@ -632,7 +656,7 @@ function hideProgress() {
 function header() {
   const v = state.vehicle;
   const pill = v
-    ? `<span class="dot ${v.armed ? "armed" : "on"}"></span>${esc(v.kind)} · sys ${v.system_id} · ${v.armed ? "ARMED" : "disarmed"}`
+    ? `<span class="dot ${v.armed ? "armed" : "on"}"></span>${esc(v.label ?? `${v.kind} · sys ${v.system_id}`)} · ${v.armed ? "ARMED" : "disarmed"}`
     : `<span class="dot"></span>No vehicle`;
   return `
     <div class="brand">Ardu<span>Tune</span></div>
@@ -919,15 +943,33 @@ function pidView(r, svg) {
     <div class="banner info">Fix the filters before tuning PIDs, and change gains in small steps.</div>`;
 }
 
+const shortId = (uid) => uid.slice(-6);
+
+/** Asks for a name for a new vehicle; offers renaming a named one. */
+function nameCard(v) {
+  if (!v.uid)
+    return `<div class="banner info">This flight controller doesn't report a chip ID, so its backups can't be told apart from other vehicles'. They are labelled by system ID (${v.system_id}).</div>`;
+  if (v.name)
+    return `<div class="actions" style="margin-top:-6px"><button class="link" data-action="askNameDrone" data-uid="${esc(v.uid)}" data-name="${esc(v.name)}">Rename this vehicle</button></div>`;
+  return `<div class="card"><h2>Name this vehicle</h2>
+      <p class="muted">ArduTune recognises each flight controller by its chip ID. A name makes this vehicle's backups easy to find when you have several.</p>
+      <div class="actions" style="margin-top:0">
+        <input type="text" id="droneNameInline" spellcheck="false" maxlength="40" placeholder="e.g. 5-inch freestyle, 7-inch long range">
+        <button class="btn primary" data-action="saveDroneName" data-uid="${esc(v.uid)}">Save</button>
+      </div></div>`;
+}
+
 function connectionView() {
   const v = state.vehicle;
   if (v)
     return `
-      <h1>Vehicle</h1>
+      <h1>${esc(v.name ?? "Vehicle")}</h1>
       <p class="lead">Connected over <code>${esc(v.address)}</code>.</p>
+      ${nameCard(v)}
       <div class="stats">
         ${stat("Type", esc(v.kind), v.ardupilot ? "ArduPilot" : "not ArduPilot")}
-        ${stat("System ID", v.system_id)}
+        ${v.uid ? stat("Flight controller", esc(v.board ?? "unknown board"), `ID …${esc(shortId(v.uid))}`) : ""}
+        ${v.uid ? "" : stat("System ID", v.system_id)}
         ${stat("State", v.armed ? chip("fail", "armed") : chip("pass", "disarmed"))}
         ${stat("Parameters", v.params)}
       </div>
@@ -1422,44 +1464,81 @@ function prearmView() {
     ${run}`;
 }
 
+/** Backups grouped by vehicle: the connected one first, then the others by their latest backup, untagged files last. */
+function backupGroups(backups) {
+  const groups = new Map();
+  const here = state.vehicle?.uid;
+  if (here && backups.some((b) => b.uid === here)) groups.set(here, []);
+  for (const b of backups.filter((b) => b.uid)) {
+    if (!groups.has(b.uid)) groups.set(b.uid, []);
+    groups.get(b.uid).push(b);
+  }
+  const untagged = backups.filter((b) => !b.uid);
+  return [...groups.entries()].map(([uid, list]) => ({ uid, list })).concat(untagged.length ? [{ uid: null, list: untagged }] : []);
+}
+
+function backupTable(list, untagged) {
+  const v = state.vehicle;
+  const busyNow = !!state.vehicleBusy;
+  return `<table><tr><th>Saved (UTC)</th><th>Note</th><th class="num">Values</th><th></th></tr>
+    ${list
+      .map((b) => {
+        const match = untagged && b.match ? `${chip(b.match.level === "same" ? "pass" : "info", b.match.level === "same" ? "this vehicle" : "probably this vehicle")} <span class="muted">${esc(b.match.why)}</span>` : "";
+        return `<tr>
+          <td style="white-space:nowrap">${b.saved ? esc(b.saved) : `<code>${esc(b.file_name)}</code>`}${untagged && b.system_id !== null && b.system_id !== undefined ? `<div class="muted">system ${b.system_id}</div>` : ""}</td>
+          <td>${esc(b.reason ?? "")}</td>
+          <td class="num">${b.params}</td>
+          <td class="num" style="white-space:nowrap">
+            ${match ? `<button class="btn" data-action="assignBackup" data-path="${esc(b.path)}" title="Mark it as a backup of ${esc(v?.label ?? "")}">Assign</button>` : ""}
+            <button class="btn" data-action="restoreBackup" data-path="${esc(b.path)}" ${!v || busyNow ? "disabled" : ""}>Restore…</button>
+            <button class="btn danger" data-action="askDeleteBackup" data-path="${esc(b.path)}">Delete</button></td></tr>
+          ${match ? `<tr class="note"><td colspan="4">${match}</td></tr>` : ""}`;
+      })
+      .join("")}</table>`;
+}
+
 function paramsView() {
   const v = state.vehicle;
   const busyNow = !!state.vehicleBusy;
   const backups = state.backups;
-  const rows = backups?.length
-    ? `<table><tr><th>Saved (UTC)</th><th>Note</th><th class="num">Values</th><th></th></tr>
-      ${backups
-        .map(
-          (b) => `<tr>
-            <td style="white-space:nowrap">${b.saved ? esc(b.saved) : `<code>${esc(b.file_name)}</code>`}${b.system_id !== null && b.system_id !== undefined ? `<div class="muted">system ${b.system_id}</div>` : ""}</td>
-            <td>${esc(b.reason ?? "")}</td>
-            <td class="num">${b.params}</td>
-            <td class="num" style="white-space:nowrap"><button class="btn" data-action="restoreBackup" data-path="${esc(b.path)}" ${!v || busyNow ? "disabled" : ""}>Restore…</button>
-              <button class="btn danger" data-action="askDeleteBackup" data-path="${esc(b.path)}">Delete</button></td></tr>`,
-        )
-        .join("")}</table>`
+  const groups = backups?.length
+    ? backupGroups(backups)
+        .map(({ uid, list }) => {
+          if (!uid)
+            return `<div class="card"><h2>Not tagged with a vehicle</h2>
+              <p class="muted">Made before ArduTune recorded which vehicle a backup is from, or by another program.${v?.uid ? " Ones that look like the connected vehicle are marked; Assign files them under it." : " Connect a vehicle to see which of these look like it."}</p>
+              ${backupTable(list, true)}</div>`;
+          const b = list[0];
+          const here = uid === v?.uid;
+          const name = here ? v.label : b.vehicle;
+          return `<div class="card"><h2>${esc(name)} ${here ? chip("pass", "connected") : ""}</h2>
+            <p class="muted">${esc(b.board ?? "unknown board")} · ID …${esc(shortId(uid))} · ${list.length} backup${list.length === 1 ? "" : "s"}
+              · <button class="link" data-action="askNameDrone" data-uid="${esc(uid)}" data-name="${esc(here ? (v.name ?? "") : b.vehicle)}">${here && !v.name ? "Name" : "Rename"}</button></p>
+            ${here || !v ? "" : `<p class="muted">Not the connected vehicle: restoring one of these copies that vehicle's setup.</p>`}
+            ${backupTable(list, false)}</div>`;
+        })
+        .join("")
     : backups
-      ? `<div class="muted">No backups yet.</div>`
+      ? `<div class="card"><h2>Backups</h2><div class="muted">No backups yet.</div></div>`
       : busy("Reading backups…");
   return `
-    <h1>Parameters</h1>
-    <p class="lead">Back up all of the vehicle's parameters before you experiment, and put any of them back later. When writing changes you can also choose "Back up and write". Backups are kept in Documents/ArduTune/backups.</p>
+    <h1>Backups</h1>
+    <p class="lead">Back up all of a vehicle's parameters before you experiment, and put any of them back later. Each backup records which vehicle it came from, by its flight controller's chip ID. When writing changes you can also choose "Back up and write". Backups are kept in Documents/ArduTune/backups.</p>
     ${
       v
-        ? `<div class="card"><h2>Back up now</h2>
+        ? `<div class="card"><h2>Back up ${esc(v.label ?? "now")}</h2>
           <div class="actions" style="margin-top:0">
             <input type="text" id="note" spellcheck="false" placeholder="Note (optional), e.g. before changing filters">
             <button class="btn primary" data-action="backupNow" ${busyNow ? "disabled" : ""}>Back up</button>
           </div>
           <div class="actions"><span class="hint">Reads every parameter from the vehicle again, so the backup matches it exactly.</span></div>
         </div>`
-        : `<div class="banner info">Connect to the vehicle to back up or restore parameters. <button class="link" data-action="go" data-view="connection">Connect…</button></div>`
+        : `<div class="banner info">Connect to a vehicle to back up or restore parameters. <button class="link" data-action="go" data-view="connection">Connect…</button></div>`
     }
     ${state.vehicleBusy ? busy(state.vehicleBusy) : ""}
-    <div class="card"><h2>Backups</h2>${rows}
-      <div class="actions"><button class="btn" data-action="pickParamFile" ${!v || busyNow ? "disabled" : ""}>Restore from another file…</button>
-      <span class="hint">Restoring shows every difference first, and you choose which values to write.</span></div>
-    </div>`;
+    ${groups}
+    <div class="actions"><button class="btn" data-action="pickParamFile" ${!v || busyNow ? "disabled" : ""}>Restore from another file…</button>
+      <span class="hint">Restoring shows every difference first, and you choose which values to write.</span></div>`;
 }
 
 /** When a backup before writing is worth it, and how to make one. */
@@ -1547,6 +1626,14 @@ function modal() {
     case "planning":
       body = busy("Comparing with the vehicle's parameters…");
       break;
+    case "nameDrone":
+      body = `<p class="muted">Backups made on this flight controller are listed under this name.</p>
+        <div class="actions" style="margin-top:0">
+          <input type="text" id="droneName" value="${esc(m.name)}" spellcheck="false" maxlength="40" autofocus>
+          <button class="btn primary" data-action="saveDroneName" data-uid="${esc(m.uid)}">Save</button>
+          <button class="btn" data-action="closeModal">Cancel</button>
+        </div>`;
+      break;
     case "confirm": {
       const p = m.plan;
       const why = p.rows.some((r) => r.reason);
@@ -1554,6 +1641,7 @@ function modal() {
       const all = n === p.rows.length;
       body = `
         ${p.armed ? `<div class="banner fail">The vehicle is armed. Disarm it to write parameters.</div>` : ""}
+        ${p.warning ? `<div class="banner warn"><b>Another vehicle's backup.</b> ${esc(p.warning)}</div>` : ""}
         ${
           p.rows.length
             ? `<div class="scroll"><table><tr><th><input type="checkbox" id="selectAll" ${all ? "checked" : ""} title="Select all"></th><th>Parameter</th><th class="num">On vehicle</th><th></th><th class="num">Proposed</th>${why ? "<th>Why</th>" : ""}</tr>

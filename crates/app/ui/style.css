@@ -865,3 +865,11 @@ table.ptable tr.editor td {
 .coverage span.on {
   background: var(--pass);
 }
+
+tr:has(+ tr.note) td {
+  border-bottom: 0;
+}
+
+tr.note td {
+  padding-top: 0;
+}

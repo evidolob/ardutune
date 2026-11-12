@@ -67,10 +67,16 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
 - Desktop app (Tauri 2): open a log or download one from the vehicle, then
   readiness, crash diagnosis, noise, filters and PIDs with plots; every
   recommendation can be written to the vehicle after a review of the changes
-  (pick which ones), with an automatic backup, verification and an optional
-  reboot. Parameters screen: back up on demand with a note, list backups and
-  restore any of them (or another `.param` file) value by value; values the
-  firmware owns (statistics, sensor IDs) are left out of restores.
+  (pick which ones), with an optional backup, verification and an optional
+  reboot. Backups screen: back up on demand with a note, and restore any
+  backup (or another `.param` file) value by value; values the firmware owns
+  (statistics, sensor IDs) are left out of restores.
+- Several vehicles: each flight controller is recognised by its chip ID
+  (AUTOPILOT_VERSION `uid2`) and can be given a name. Backups record the
+  vehicle they came from and are grouped by vehicle, restoring another
+  vehicle's backup warns first, and older untagged backups that match the
+  connected vehicle (identical accelerometer calibration, or nearly all
+  values) can be assigned to it.
 - Command-line tool with the same analyses and vehicle commands.
 
 ## Layout
@@ -94,7 +100,7 @@ cargo run --release -p ardutune-app
 ```
 
 Downloaded logs go to `Documents/ArduTune/logs`, parameter backups to
-`Documents/ArduTune/backups`. Building an installer (`.app`/`.dmg`, `.msi`,
+`Documents/ArduTune/backups`, vehicle names to `Documents/ArduTune/drones.json`. Building an installer (`.app`/`.dmg`, `.msi`,
 `.deb`) needs the Tauri CLI: `cargo install tauri-cli`, then
 `cargo tauri build` in `crates/app`.
 

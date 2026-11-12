@@ -11,13 +11,37 @@
     if (!res.ok) throw `No fixture ${name}.json: run the export_fixtures test first.`;
     return res.json();
   };
-  const vehicle = { address: "serial:/dev/cu.usbmodem14301:115200", kind: "quadrotor", ardupilot: true, system_id: 1, armed: false, params: 1233 };
+  const KAKUTE = "003A00243233510A33353533";
+  const MATEK = "0041002B3138510D37393833";
+  const names = { [MATEK]: "7-inch long range" };
+  const vehicle = {
+    address: "serial:/dev/cu.usbmodem14301:115200",
+    kind: "quadrotor",
+    ardupilot: true,
+    system_id: 1,
+    armed: false,
+    params: 1233,
+    uid: KAKUTE,
+    board: "KakuteH7-bdshot",
+    name: null,
+    label: "KakuteH7-bdshot …353533",
+  };
+  const label = (uid, board) => names[uid] ?? `${board} …${uid.slice(-6)}`;
   let connected = false;
+  const tagged = (path, saved, uid, board, reason, params = 1233) => ({ path, file_name: path.slice(3), saved, system_id: 1, reason, params, uid, board, vehicle: label(uid, board), match: null });
   let backups = [
-    { path: "/b/2.param", file_name: "backup-sys1-20261110-153000.param", saved: "2026-11-10 15:30:00", system_id: 1, reason: "Before writing recommended filter settings", params: 1233 },
-    { path: "/b/1.param", file_name: "backup-sys1-20261109-090000.param", saved: "2026-11-09 09:00:00", system_id: 1, reason: "Before maiden flight", params: 1231 },
-    { path: "/b/mp.param", file_name: "matekh7a3_params.param", saved: null, system_id: null, reason: null, params: 1233 },
+    tagged("/b/k2.param", "2026-11-12 09:10:00", KAKUTE, "KakuteH7-bdshot", "Before writing initial tune for 5\" props"),
+    tagged("/b/m1.param", "2026-11-11 18:00:00", MATEK, "MatekH7A3", "Before maiden flight", 1241),
+    tagged("/b/k1.param", "2026-11-11 12:15:51", KAKUTE, "KakuteH7-bdshot", "Before flashing ArduCopter 4.7.2"),
+    { path: "/b/2.param", file_name: "backup-sys1-20261110-153000.param", saved: "2026-11-10 15:30:00", system_id: 1, reason: "Before writing recommended filter settings", params: 1233, uid: null, match: { level: "same", why: "Its accelerometer calibration is identical to the connected vehicle's." } },
+    { path: "/b/1.param", file_name: "backup-sys1-20261109-090000.param", saved: "2026-11-09 09:00:00", system_id: 1, reason: "Before maiden flight", params: 1231, uid: null, match: null },
+    { path: "/b/mp.param", file_name: "matekh7a3_params.param", saved: null, system_id: null, reason: null, params: 1233, uid: null, match: null },
   ];
+  const relabel = () => {
+    backups = backups.map((b) => (b.uid ? { ...b, vehicle: label(b.uid, b.board) } : b));
+    vehicle.name = names[KAKUTE] ?? null;
+    vehicle.label = label(KAKUTE, vehicle.board);
+  };
   let logs = [
     { id: 1, size_mb: 12.4, date: null },
     { id: 2, size_mb: 89.6, date: "2026-05-17 14:02:11" },
@@ -97,7 +121,7 @@
       await progress("Downloading log", 89_600_000);
       return `/Users/pilot/Documents/ArduTune/logs/log_${id}.bin`;
     },
-    prepare_changes: async ({ source, values, observations }) => {
+    prepare_changes: async ({ source, path, values, observations }) => {
       if (source === "edits") return { rows: values.map(([name, value]) => ({ name, current: 0, value, reason: null })), unchanged: [], unknown: [], skipped: [], armed: false };
       if (source.startsWith("setup:")) {
         const step = (await fixture("setup")).steps.find((x) => x.id === source.slice(6));
@@ -115,6 +139,9 @@
           unchanged: Array(1220).fill("X"),
           unknown: [],
           skipped: ["STAT_BOOTCNT", "STAT_RUNTIME", "STAT_FLTTIME", "INS_GYR_ID"],
+          warning: backups.find((b) => b.path === path && b.uid && b.uid !== KAKUTE)
+            ? `This backup was made on ${label(MATEK, "MatekH7A3")}, not on the connected vehicle (${vehicle.label}). Restoring it copies that vehicle's calibration and setup: untick anything that must stay, such as calibration (INS_ACC*, COMPASS_OFS*) and outputs.`
+            : null,
           armed: false,
         };
       const kind = source.startsWith("filters") ? "filters" : source.startsWith("pid") ? "pid" : null;
@@ -223,8 +250,16 @@
     list_backups: async () => backups,
     backup_params: async ({ note }) => {
       await progress("Reading parameters", 1233);
-      backups.unshift({ path: `/b/${Date.now()}.param`, file_name: "backup.param", saved: "2026-11-11 12:00:00", system_id: 1, reason: note || "Manual backup", params: 1233 });
+      backups.unshift(tagged(`/b/${Date.now()}.param`, "2026-11-12 12:00:00", KAKUTE, "KakuteH7-bdshot", note || "Manual backup"));
       return vehicle;
+    },
+    name_drone: async ({ uid, name }) => {
+      names[uid] = name.trim();
+      relabel();
+      return connected ? { ...vehicle } : null;
+    },
+    assign_backup: async ({ path }) => {
+      backups = backups.map((b) => (b.path === path ? { ...b, uid: KAKUTE, board: vehicle.board, vehicle: vehicle.label, match: null } : b));
     },
     delete_backup: async ({ path }) => {
       backups = backups.filter((b) => b.path !== path);

@@ -472,7 +472,7 @@ fn main() -> Result<()> {
         Cmd::Params { out, .. } => {
             let mut link = vehicle::connect(&cli.conn)?;
             let params = vehicle::fetch_params(&mut link)?;
-            let path = vehicle::save_params(&link, &params, out.as_deref())?;
+            let path = vehicle::save_params(&mut link, &params, out.as_deref())?;
             println!("Saved {} parameters to {}", params.len(), path.display());
         }
         Cmd::Apply { file, apply_opts } => vehicle::apply_file(&cli.conn, &file, &(&apply_opts).into())?,

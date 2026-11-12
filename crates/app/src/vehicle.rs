@@ -10,6 +10,7 @@ use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::drones::{self, Drone};
 use crate::{backups, blocking, data_dir, lock, AppState, CmdResult, Reporter};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -25,6 +26,8 @@ pub struct Connected {
     pub(crate) defaults: Option<HashMap<String, f32>>,
     /// The compass calibration being followed, if any.
     pub(crate) compass_cal: Option<CompassCal>,
+    /// Which vehicle this is, when its flight controller reports a chip ID.
+    pub(crate) drone: Option<Drone>,
 }
 
 /// Changes shown to the user and waiting for confirmation. They are planned
@@ -44,6 +47,12 @@ pub struct VehicleInfo {
     system_id: u8,
     armed: bool,
     params: usize,
+    /// Flight controller chip ID, board and the pilot's name for it.
+    uid: Option<String>,
+    board: Option<String>,
+    name: Option<String>,
+    /// The name, or board and ID while unnamed.
+    label: Option<String>,
 }
 
 impl Connected {
@@ -64,7 +73,28 @@ impl Connected {
             system_id: v.system_id,
             armed: v.armed,
             params: self.params.len(),
+            uid: self.drone.as_ref().map(|d| d.uid.clone()),
+            board: self.drone.as_ref().and_then(|d| d.board.clone()),
+            name: self.drone.as_ref().and_then(|d| d.name.clone()),
+            label: self.drone.as_ref().map(Drone::label),
         }
+    }
+
+    /// Re-reads this vehicle's entry (its name may have changed).
+    pub(crate) fn refresh_drone<R: Runtime>(&mut self, app: &AppHandle<R>) {
+        if let Some(uid) = self.drone.as_ref().map(|d| d.uid.clone()) {
+            if let Some(d) = drones::find(app, &uid) {
+                self.drone = Some(d);
+            }
+        }
+    }
+
+    /// Asks the flight controller which one it is and records the visit.
+    pub(crate) fn identify<R: Runtime>(&mut self, app: &AppHandle<R>) {
+        // Not every autopilot reports a chip ID; backups then go untagged.
+        let Ok(id) = self.link.identity() else { return };
+        let Some(uid) = id.uid else { return };
+        self.drone = drones::seen(app, &uid, id.board.as_deref(), &date_time(now())).ok();
     }
 }
 
@@ -135,7 +165,8 @@ pub async fn connect<R: Runtime>(app: AppHandle<R>, address: String) -> CmdResul
         let mut link = Link::connect(&address, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
         let mut progress = Reporter::new(app, "Reading parameters");
         let params = link.fetch_params(&mut |got, total| progress.update(got, total)).map_err(|e| e.to_string())?;
-        let c = Connected { link, params, address, defaults: None, compass_cal: None };
+        let mut c = Connected { link, params, address, defaults: None, compass_cal: None, drone: None };
+        c.identify(app);
         let info = c.info();
         *slot = Some(c);
         Ok(info)
@@ -269,6 +300,8 @@ pub struct PlanView {
     /// Left out of a file restore because the firmware owns them.
     skipped: Vec<String>,
     armed: bool,
+    /// Set when a restored file was made on another vehicle.
+    warning: Option<String>,
 }
 
 /// Works out what writing a set of recommendations would change on the
@@ -306,9 +339,10 @@ pub async fn prepare_changes<R: Runtime>(
                 let seen = observations.ok_or("No motor test results given.")?;
                 motor_verdict(&c.params, &seen)?.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect()
             }
-            _ => wanted(app, &c.params, &source, path)?,
+            _ => wanted(app, &c.params, &source, path.clone())?,
         };
         let mut skipped = Vec::new();
+        let warning = path.as_deref().filter(|_| source == "file").and_then(|p| backups::other_vehicle(app, p, c));
         if source == "file" {
             wanted.retain(|(n, ..)| {
                 let owned = vehicle_owned(n);
@@ -332,7 +366,7 @@ pub async fn prepare_changes<R: Runtime>(
             .collect();
         let label = label.unwrap_or_else(|| format!("writing {source}"));
         *lock(&state.pending) = Some(Pending { wanted: pairs, label });
-        Ok(PlanView { rows, unchanged: p.unchanged, unknown: p.unknown, skipped, armed: c.link.vehicle().armed })
+        Ok(PlanView { rows, unchanged: p.unchanged, unknown: p.unknown, skipped, armed: c.link.vehicle().armed, warning })
     })
     .await
 }
@@ -541,7 +575,7 @@ pub async fn apply_changes<R: Runtime>(app: AppHandle<R>, names: Option<Vec<Stri
             return Ok(ApplyView { backup: None, results: vec![] });
         }
         let backup = match backup {
-            Some(true) => Some(backups::save(app, c.system_id(), &c.params, &format!("Before {}", pending.label))?),
+            Some(true) => Some(backups::save(app, c, &format!("Before {}", pending.label))?),
             _ => None,
         };
 

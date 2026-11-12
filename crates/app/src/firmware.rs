@@ -180,10 +180,11 @@ pub async fn firmware_flash<R: Runtime>(app: AppHandle<R>, backup: Option<bool>)
         let c = slot.take().ok_or("Not connected to a vehicle.")?;
         let before = c.params.clone();
         let backup = match backup {
-            Some(true) => Some(backups::save(app, c.system_id(), &c.params, &format!("Before flashing {}", pending.label))?.display().to_string()),
+            Some(true) => Some(backups::save(app, &c, &format!("Before flashing {}", pending.label))?.display().to_string()),
             _ => None,
         };
         let address = c.address.clone();
+        let drone = c.drone.clone();
         let emit = |task: &str, done: usize, total: usize| {
             let _ = app.emit("progress", crate::Progress { task, done, total });
         };
@@ -203,7 +204,7 @@ pub async fn firmware_flash<R: Runtime>(app: AppHandle<R>, backup: Option<bool>)
         let mut progress = crate::Reporter::new(app, "Reading parameters");
         let after = link.fetch_params(&mut |got, total| progress.update(got, total)).map_err(|e| e.to_string())?;
         let changed = diff(&before, &after);
-        let c = Connected { link, params: after, address, defaults: None, compass_cal: None };
+        let c = Connected { link, params: after, address, defaults: None, compass_cal: None, drone };
         let vehicle = Some(c.info());
         *slot = Some(c);
         Ok(Flashed { backup, version, reconnected: true, changed, vehicle })

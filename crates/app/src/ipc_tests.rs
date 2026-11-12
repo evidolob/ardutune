@@ -213,6 +213,44 @@ fn analyse_connect_download_write_and_reboot() {
     let newest = &call("list_backups", json!({})).unwrap()[0];
     assert_eq!(newest["reason"], "Before restoring a backup");
 
+    // Backups know their vehicle: tagged with the chip ID, named once the
+    // pilot names the vehicle, and a backup from another vehicle warns.
+    let vehicle = call("vehicle_status", json!({})).unwrap();
+    let uid = vehicle["uid"].as_str().unwrap().to_owned();
+    assert_eq!((uid.as_str(), vehicle["name"].clone()), ("003A00243233510A33353533", Value::Null));
+    assert_eq!(manual["uid"], json!(uid));
+    assert_eq!(manual["board"], "KakuteH7-bdshot");
+    let named = call("name_drone", json!({ "uid": uid, "name": "  Kakute   5in " })).unwrap();
+    assert_eq!(named["name"], "Kakute 5in");
+    assert!(call("name_drone", json!({ "uid": "OTHER", "name": "kakute 5IN" })).unwrap_err().contains("already called"));
+    let listed = call("list_backups", json!({})).unwrap();
+    assert!(listed.as_array().unwrap().iter().all(|b| b["vehicle"] == "Kakute 5in"), "{listed}");
+    call("backup_params", json!({ "note": "named" })).unwrap();
+    let newest = &call("list_backups", json!({})).unwrap()[0];
+    assert!(newest["file_name"].as_str().unwrap().starts_with("backup-kakute-5in-"), "{newest}");
+
+    let backups_dir = data.join("backups");
+    let text = std::fs::read_to_string(manual["path"].as_str().unwrap()).unwrap();
+    let foreign = backups_dir.join("other-quad.param");
+    std::fs::write(&foreign, text.replace(&uid, "FFFF0000FFFF")).unwrap();
+    let plan = call("prepare_changes", json!({ "source": "file", "path": foreign, "label": "restoring" })).unwrap();
+    assert!(plan["warning"].as_str().unwrap().contains("not on the connected vehicle (Kakute 5in)"), "{plan}");
+    assert_eq!(call("prepare_changes", json!({ "source": "file", "path": manual["path"], "label": "x" })).unwrap()["warning"], Value::Null);
+
+    // An untagged backup of this vehicle is recognised and can be assigned.
+    let untagged = backups_dir.join("old.param");
+    let body: String = text.lines().filter(|l| !l.starts_with('#')).map(|l| format!("{l}\n")).collect();
+    std::fs::write(&untagged, body).unwrap();
+    let listed = call("list_backups", json!({})).unwrap();
+    let old = listed.as_array().unwrap().iter().find(|b| b["file_name"] == "old.param").unwrap();
+    assert_eq!(old["uid"], Value::Null);
+    assert!(old["match"]["level"].is_string(), "{old}");
+    call("assign_backup", json!({ "path": untagged })).unwrap();
+    let listed = call("list_backups", json!({})).unwrap();
+    let old = listed.as_array().unwrap().iter().find(|b| b["file_name"] == "old.param").unwrap();
+    assert_eq!((old["uid"].clone(), old["vehicle"].clone()), (json!(uid), json!("Kakute 5in")));
+    assert!(call("assign_backup", json!({ "path": untagged })).unwrap_err().contains("already belongs"));
+
     call("delete_backup", json!({ "path": manual["path"] })).unwrap();
     assert!(!Path::new(manual["path"].as_str().unwrap()).exists());
     assert!(call("delete_backup", json!({ "path": path })).is_err(), "only backups can be deleted");

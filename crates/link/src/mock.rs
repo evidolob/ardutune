@@ -54,6 +54,8 @@ pub struct MockState {
     pub board_name: String,
     /// Reboots that asked to stay in the bootloader.
     pub bootloader_reboots: usize,
+    /// The chip ID sent in AUTOPILOT_VERSION.
+    pub uid2: [u8; 18],
     /// Motor tests run: (test letter number, throttle %, seconds).
     pub motor_tests: Vec<(u8, f32, f32)>,
     /// When set, motor tests are refused with this "Motor Test: …" reason.
@@ -159,6 +161,7 @@ impl MockState {
             board_id: 1048,
             board_name: "KakuteH7-bdshot".to_owned(),
             bootloader_reboots: 0,
+            uid2: [0x00, 0x3A, 0x00, 0x24, 0x32, 0x33, 0x51, 0x0A, 0x33, 0x35, 0x35, 0x33, 0, 0, 0, 0, 0, 0],
             motor_tests: Vec::new(),
             motor_test_refusal: None,
             mag_cal_started: None,
@@ -339,6 +342,10 @@ fn mag_cal(st: &mut MockState) -> Vec<MavMessage> {
     })]
 }
 
+fn ack(command: MavCmd, result: MavResult) -> MavMessage {
+    MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command, result, ..Default::default() })
+}
+
 fn heartbeat(armed: bool, custom_mode: u32) -> MavMessage {
     let mut mode = MavModeFlag::MAV_MODE_FLAG_CUSTOM_MODE_ENABLED;
     if armed {
@@ -443,7 +450,7 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
             Vec::new()
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_RUN_PREARM_CHECKS => {
-            let mut out = vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })];
+            let mut out = vec![ack(c.command, MavResult::MAV_RESULT_ACCEPTED)];
             for reason in &st.prearm_failures {
                 out.extend(status_texts(&format!("PreArm: {reason}")));
             }
@@ -453,24 +460,25 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
             let mut hash = [0u8; 8];
             hash.copy_from_slice(b"d0b31066");
             vec![
-                MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED }),
+                ack(c.command, MavResult::MAV_RESULT_ACCEPTED),
                 MavMessage::AUTOPILOT_VERSION(AUTOPILOT_VERSION_DATA {
                     flight_sw_version: 0x0407_0000,
                     board_version: st.board_id << 16,
+                    uid2: st.uid2,
                     flight_custom_version: hash,
                     ..Default::default()
                 }),
             ]
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_SEND_BANNER => {
-            let mut out = vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })];
+            let mut out = vec![ack(c.command, MavResult::MAV_RESULT_ACCEPTED)];
             for line in ["ArduCopter V4.7.0-dev (d0b31066)", "ChibiOS: 1fa4b8e0", &format!("{} 003A00243233510A33353533", st.board_name)] {
                 out.extend(status_texts(line));
             }
             out
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL => {
-            vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })]
+            vec![ack(c.command, MavResult::MAV_RESULT_ACCEPTED)]
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_START_MAG_CAL => {
             let result = if st.armed {
@@ -479,12 +487,12 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
                 st.mag_cal_started = Some(Instant::now());
                 MavResult::MAV_RESULT_ACCEPTED
             };
-            vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result })]
+            vec![ack(c.command, result)]
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_CANCEL_MAG_CAL => {
             st.mag_cal_started = None;
             st.mag_cal_cancels += 1;
-            vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result: MavResult::MAV_RESULT_ACCEPTED })]
+            vec![ack(c.command, MavResult::MAV_RESULT_ACCEPTED)]
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_DO_MOTOR_TEST => {
             // Like ArduCopter, explain a refusal before acknowledging it.
@@ -500,7 +508,7 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
                     MavResult::MAV_RESULT_ACCEPTED
                 }
             };
-            out.push(MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result }));
+            out.push(ack(c.command, result));
             out
         }
         MavMessage::COMMAND_LONG(c) if c.command == MavCmd::MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN => {
@@ -514,7 +522,7 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
                 }
                 MavResult::MAV_RESULT_ACCEPTED
             };
-            vec![MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command: c.command, result })]
+            vec![ack(c.command, result)]
         }
         _ => Vec::new(),
     }
@@ -547,6 +555,7 @@ fn status_texts(text: &str) -> Vec<MavMessage> {
             MavMessage::STATUSTEXT(STATUSTEXT_DATA {
                 severity: MavSeverity::MAV_SEVERITY_CRITICAL,
                 text: String::from_utf8_lossy(chunk).as_ref().into(),
+                ..Default::default()
             })
         })
         .collect()

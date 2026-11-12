@@ -94,6 +94,20 @@ pub struct FirmwareInfo {
     pub board_id: Option<u32>,
     /// The banner lines (firmware, OS, board, outputs, IMUs).
     pub banner: Vec<String>,
+    /// The flight controller's unique chip ID in hex, which tells one
+    /// vehicle from another (it survives reflashing).
+    pub uid: Option<String>,
+}
+
+/// The chip ID from AUTOPILOT_VERSION: `uid2` (ArduPilot fills in the MCU's
+/// unique ID), else the 64-bit `uid`; `None` when both are zero.
+pub fn chip_uid(uid: u64, uid2: &[u8]) -> Option<String> {
+    let used = uid2.iter().rposition(|b| *b != 0).map_or(0, |i| i + 1);
+    if used > 0 {
+        Some(uid2[..used].iter().map(|b| format!("{b:02X}")).collect())
+    } else {
+        (uid != 0).then(|| format!("{uid:016X}"))
+    }
 }
 
 impl FirmwareInfo {
@@ -693,6 +707,15 @@ pub fn make_apj(board_id: u32, image: &[u8], summary: &str) -> Vec<u8> {
 mod tests {
     use super::sim::SimBootloader;
     use super::*;
+
+    #[test]
+    fn chip_ids() {
+        let mut uid2 = [0u8; 18];
+        uid2[..4].copy_from_slice(&[0x00, 0x3A, 0x00, 0x24]);
+        assert_eq!(chip_uid(0, &uid2).as_deref(), Some("003A0024"));
+        assert_eq!(chip_uid(0x1234, &[0; 18]).as_deref(), Some("0000000000001234"));
+        assert_eq!(chip_uid(0, &[0; 18]), None);
+    }
 
     #[test]
     fn versions_parse_and_order() {

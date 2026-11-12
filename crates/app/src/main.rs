@@ -5,6 +5,7 @@
 
 mod analysis;
 mod backups;
+mod drones;
 mod firmware;
 #[cfg(test)]
 mod ipc_tests;
@@ -135,6 +136,9 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         backups::backup_params,
         backups::list_backups,
         backups::delete_backup,
+        backups::assign_backup,
+        drones::name_drone,
+        drones::list_drones,
     ])
 }
 

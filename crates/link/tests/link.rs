@@ -222,6 +222,11 @@ fn reads_firmware_info_and_reboots_to_bootloader() {
     assert_eq!(info.board.as_deref(), Some("KakuteH7-bdshot"));
     assert_eq!(info.git_hash.as_deref(), Some("d0b31066"));
     assert!(info.description.unwrap().starts_with("ArduCopter V4.7.0-dev"));
+    assert_eq!(info.uid.as_deref(), Some("003A00243233510A33353533"));
+    let started = std::time::Instant::now();
+    let id = link.identity().unwrap();
+    assert_eq!((id.uid, id.board), (info.uid.clone(), info.board.clone()));
+    assert!(started.elapsed() < Duration::from_secs(1), "identity returns early");
 
     mock.state().armed = true;
     let link = match link.reboot_to_bootloader() {
