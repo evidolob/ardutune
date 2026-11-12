@@ -338,7 +338,11 @@ CI or release workflow yet.
 
 - Windows: an NSIS `.exe` installer and an `.msi`.
 - macOS: a `.dmg` with a universal build (Apple Silicon and Intel).
-- Linux: an `.AppImage`, plus `.deb` and `.rpm`.
+- Linux: an `.AppImage` (Tauri's bundler) and a Flatpak only, no `.deb` or
+  `.rpm`. Tauri doesn't build Flatpaks itself, so the Flatpak needs a
+  `flatpak-builder` manifest that packages the release binary. It needs
+  `--device=all` in finish-args to reach serial ports, and could go on
+  Flathub later.
 - GitHub Actions: a matrix build on windows-latest, macos-latest and
   ubuntu-latest (`tauri-apps/tauri-action`), triggered by a version tag. It
   attaches the installers to a GitHub release, with the CLI binary for each OS
