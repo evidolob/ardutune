@@ -330,6 +330,44 @@ setup.
 - Checks: no GPS detected on the configured port, wrong baud, no fix after
   a few minutes outdoors, constellations that leave too few satellites.
 
+## Last step: static web app
+
+After the features above, ship ArduTune as a static web app as well (no
+backend), hosted on GitHub Pages, working fully offline and installable from
+the browser (a PWA, like Betaflight's app). It's for distribution: nothing to
+download or sign.
+
+Feasible with limits (checked November 2026):
+- Web Serial (USB) works in Chrome, Edge and Opera on the desktop, and in
+  Firefox 151 and later; Android Chrome is rolling it out (148). No Safari or
+  iOS.
+- A web page can't open UDP or TCP sockets, so there are no Wi-Fi telemetry
+  or SITL links without a WebSocket bridge.
+- firmware.ardupilot.org sends no CORS headers, so the page can't fetch the
+  firmware manifest or images.
+
+The web version drops what the browser can't do rather than working around
+it: no firmware update and no network links. It is USB only and points to
+the desktop app for those. The desktop app and the CLI stay.
+
+Steps:
+1. Log analysis on the web: `core` compiled to WebAssembly (it only needs
+   serde, rustfft and flate2), logs opened by file picker or drag and drop,
+   analysis in a Web Worker, a service worker for offline use. The UI is
+   unchanged: it already talks to the backend through named commands (as
+   `dev/mock-tauri.js` shows), so a web build answers them from WebAssembly
+   instead of Tauri.
+2. The vehicle over Web Serial: the `link` crate's blocking serial loop
+   becomes async over a byte transport, with MAVLink parsing kept. This
+   covers parameters, setup, RC, motors, compass, pre-arm, logs from the
+   vehicle and MAVFTP. The app-side commands move too (vehicle, backups,
+   history, drones).
+3. Storage in the browser: backups, drone names and flight history in
+   IndexedDB or OPFS, or a folder the user picks once (File System Access, in
+   Chrome) such as `Documents/ArduTune`.
+4. Hide the unsupported features in the web build: firmware update and
+   network connections.
+
 ## Risks
 
 - Bad advice from poor logs → readiness check + confidence on every finding.
