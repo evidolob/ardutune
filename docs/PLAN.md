@@ -245,6 +245,57 @@ Flashed on real hardware: KakuteH7-bdshot from 4.6.3 to 4.7.2, parameters
 converted by the firmware and compared. Not yet: external flash, DFU, heli/other
 vehicle types.
 
+### Serial ports
+
+A page that shows what each of the flight controller's serial ports does
+and lets it be changed safely, instead of editing `SERIALn_*` by hand.
+
+- One row per port: SERIALn, the board's pad or connector name where known
+  (UART mapping per board), protocol (`SERIALn_PROTOCOL` by name: GPS, RC
+  input, MAVLink, ESC telemetry, MSP/DisplayPort, CRSF/ELRS…), baud rate and
+  options (`SERIALn_OPTIONS`: inverted, half duplex, swap TX/RX), and what
+  is live on it (GPS detected, receiver signal, telemetry).
+- Common setups as one action: GPS, CRSF/ELRS receiver (with RC_OPTIONS and
+  RSSI_TYPE), ESC telemetry, DJI/HDZero OSD, a telemetry radio; each sets
+  protocol, baud and options together.
+- Checks: two ports with the same single-use protocol, a protocol on a port
+  that can't do it (e.g. the USB port), RC input set on a port and on the
+  RC pad, settings that need a reboot.
+- Same review / backup / verify / reboot path as other writes.
+
+### RC channels and switches
+
+A page with every RC channel live and what it does, and a way to put
+functions on switches.
+
+- Live bars for channels 1-16 with their range (`RCn_MIN/MAX/TRIM`), what
+  each does: sticks (`RCMAP_*`), flight mode channel and the current mode
+  per position (`FLTMODE_CH`, `FLTMODE1-6`), and switch functions
+  (`RCn_OPTION` by name: arm/disarm, GPS disable, RTL, AutoTune, motor
+  emergency stop, camera…) with the switch position now.
+- Assign a function: pick it from a searchable list, flip the switch you
+  want, ArduTune finds the channel (as the GPS off switch already does),
+  refuses sticks, the mode channel and channels in use, and explains
+  two- vs three-position behaviour. Flight modes per switch position too.
+- Radio calibration (min, max, trim per channel) and reversing, with the
+  failsafe value checked against the lowest throttle.
+
+### Basic vehicle configuration
+
+Frame and the few settings every build needs, on one page; it could join
+the Initial tune page ("New build"), which already asks for prop size and
+battery.
+
+- Frame class and type (`FRAME_CLASS`, `FRAME_TYPE`) with a diagram of the
+  motor order and directions for each choice, props in vs props out (the
+  reversed layouts), then a motor test to confirm.
+- ESC protocol (`MOT_PWM_TYPE`), bidirectional DShot (`SERVO_BLH_BDMASK`),
+  motor poles, spin arm/min, board orientation (`AHRS_ORIENTATION`).
+- Battery: monitor type, cell count and chemistry, capacity; then the
+  initial tune values and failsafes from the same inputs.
+- Shows which changes need a reboot, and links to the setup guide steps it
+  satisfies.
+
 ## Risks
 
 - Bad advice from poor logs → readiness check + confidence on every finding.
