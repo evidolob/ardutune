@@ -825,6 +825,17 @@ const SCALED_IMU2_ID: f32 = 116.0;
 const SCALED_IMU3_ID: f32 = 129.0;
 const EKF_STATUS_REPORT_ID: f32 = 193.0;
 
+/// RC input over a short time.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RcSample {
+    /// (channel, min µs, max µs) for channels 1-16, zeros when not received.
+    pub ranges: Vec<(u8, u16, u16)>,
+    /// The last value of channels 1-16 (0 when not received).
+    pub last: Vec<u16>,
+    /// Signal strength, 0-254 (ArduPilot scales RSSI to this range).
+    pub rssi: Option<u8>,
+}
+
 /// What the vehicle thinks "level" is while it sits still: its attitude
 /// estimates and each accelerometer's raw reading, averaged.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -873,8 +884,16 @@ impl Link {
     /// `listen`: (channel, min µs, max µs), zeros for channels not received.
     /// Used to find the switch the pilot flips.
     pub fn rc_ranges(&mut self, listen: Duration) -> Result<Vec<(u8, u16, u16)>> {
+        Ok(self.rc_sample(listen)?.ranges)
+    }
+
+    /// RC channels 1-16 over `listen`: each one's range and its last value
+    /// (0 when not received).
+    pub fn rc_sample(&mut self, listen: Duration) -> Result<RcSample> {
         self.command(MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL, [RC_CHANNELS_ID, 50_000.0, 0.0, 0.0, 0.0, 0.0, 0.0])?;
         let mut ranges: Vec<(u8, u16, u16)> = (1..=16).map(|ch| (ch, 0, 0)).collect();
+        let mut last = vec![0u16; 16];
+        let mut rssi = None;
         let deadline = Instant::now() + listen;
         while let Some(msg) = self.next(deadline)? {
             let MavMessage::RC_CHANNELS(rc) = msg else { continue };
@@ -882,16 +901,18 @@ impl Link {
                 rc.chan1_raw, rc.chan2_raw, rc.chan3_raw, rc.chan4_raw, rc.chan5_raw, rc.chan6_raw, rc.chan7_raw, rc.chan8_raw,
                 rc.chan9_raw, rc.chan10_raw, rc.chan11_raw, rc.chan12_raw, rc.chan13_raw, rc.chan14_raw, rc.chan15_raw, rc.chan16_raw,
             ];
-            for (r, v) in ranges.iter_mut().zip(values).take(rc.chancount as usize) {
+            rssi = (rc.rssi != u8::MAX).then_some(rc.rssi);
+            for (i, (r, v)) in ranges.iter_mut().zip(values).enumerate().take(rc.chancount as usize) {
                 // 0 and 65535 mean the channel isn't received.
                 if v == 0 || v == u16::MAX {
                     continue;
                 }
                 r.1 = if r.1 == 0 { v } else { r.1.min(v) };
                 r.2 = r.2.max(v);
+                last[i] = v;
             }
         }
-        Ok(ranges)
+        Ok(RcSample { ranges, last, rssi })
     }
 
     /// Averages attitude and raw accelerometer readings for `listen`, to

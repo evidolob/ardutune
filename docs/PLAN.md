@@ -280,6 +280,11 @@ functions on switches.
 - Radio calibration (min, max, trim per channel) and reversing, with the
   failsafe value checked against the lowest throttle.
 
+Done: RC channels screen (live bars, roles, switch positions, flight modes
+per position, assign by flipping or picking a channel, remove, reverse,
+radio calibration). Not yet: three-position switch behaviour per function,
+a CLI view.
+
 ### Basic vehicle configuration
 
 Frame and the few settings every build needs, on one page; it could join

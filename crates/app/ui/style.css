@@ -973,3 +973,114 @@ tr.note td {
 .scroll-x {
   overflow-x: auto;
 }
+
+.rcrows {
+  display: grid;
+  gap: 2px;
+}
+
+.rcrow {
+  display: grid;
+  grid-template-columns: 48px minmax(120px, 1fr) 70px 220px 150px;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+}
+
+.modal .rcrow {
+  grid-template-columns: 48px 1fr 90px;
+}
+
+.rcrow.nosignal {
+  opacity: 0.55;
+}
+
+.rcch {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.rcval {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.rcact {
+  font-size: 12px;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.rcbar {
+  position: relative;
+  height: 14px;
+  background: var(--code-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.rcbar .range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.rcbar .trim {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--muted);
+}
+
+.rcbar .needle {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 3px;
+  margin-left: -1px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+table.modes tr.activerow td {
+  background: color-mix(in srgb, var(--pass) 10%, transparent);
+}
+
+.optlist {
+  display: grid;
+  gap: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.opt {
+  text-align: left;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+}
+
+.opt:hover {
+  background: var(--code-bg);
+}
+
+@media (max-width: 760px) {
+  .rcrow {
+    grid-template-columns: 48px 1fr 70px;
+  }
+
+  .rcrole,
+  .rcact {
+    grid-column: 2 / -1;
+  }
+}

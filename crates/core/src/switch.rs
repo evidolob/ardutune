@@ -69,9 +69,14 @@ pub fn flipped(param: impl Fn(&str) -> Option<f64>, moves: &[(u8, u16, u16)], op
     }
 }
 
-/// Putting `option` on channel `ch`.
+/// Putting `option` on channel `ch`; option 0 removes the channel's function.
 pub fn assign(param: impl Fn(&str) -> Option<f64>, ch: u8, option: f64) -> Result<Vec<ParamChange>, String> {
     let p: Param = &param;
+    if option == 0.0 {
+        let now = p(&format!("RC{ch}_OPTION")).ok_or(format!("This vehicle has no RC{ch}_OPTION."))?;
+        let reason = format!("Channel {ch} no longer does \"{}\"", option_name(now));
+        return Ok(change(p, &format!("RC{ch}_OPTION"), 0.0, reason).into_iter().collect());
+    }
     if let Some(why) = taken(p, ch, option) {
         return Err(why);
     }
@@ -122,5 +127,8 @@ mod tests {
         let mut m = kakute();
         m.insert("RC7_OPTION".into(), 65.0);
         assert_eq!(assign(|n: &str| m.get(n).copied(), 7, GPS_DISABLE), Ok(vec![]));
+        // Removing a function.
+        let off = assign(|n: &str| m.get(n).copied(), 7, 0.0).unwrap();
+        assert_eq!((off[0].value, off[0].reason.as_str()), (0.0, "Channel 7 no longer does \"GPS Disable\""));
     }
 }

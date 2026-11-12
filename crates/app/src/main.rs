@@ -127,6 +127,8 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         vehicle::motor_test,
         vehicle::motor_check,
         vehicle::detect_switch,
+        vehicle::rc_status,
+        vehicle::rc_choices,
         vehicle::compass_cal_start,
         vehicle::compass_cal_poll,
         vehicle::compass_cal_finish,

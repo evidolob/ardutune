@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, motors, paramdoc, params, setup, switch, tune};
+use ardutune_core::{arming, motors, paramdoc, params, rc, setup, switch, tune};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
@@ -319,6 +319,16 @@ pub struct PlanView {
     warning: Option<String>,
 }
 
+/// What some sources need besides their name: prop size and battery for the
+/// initial tune, motor test results, captured radio ranges.
+#[derive(Deserialize, Default)]
+pub struct Inputs {
+    tune: Option<TuneInput>,
+    observations: Option<Vec<motors::Observation>>,
+    /// (channel, min, max, centre) µs.
+    captured: Option<Vec<(u8, u16, u16, u16)>>,
+}
+
 /// Works out what writing a set of recommendations would change on the
 /// vehicle and keeps it for `apply_changes`. `source` names the
 /// recommendations: `readiness`, `filters`, `filters_quieter`, `pid`,
@@ -330,9 +340,9 @@ pub async fn prepare_changes<R: Runtime>(
     path: Option<String>,
     label: Option<String>,
     values: Option<Vec<(String, f64)>>,
-    tune: Option<TuneInput>,
-    observations: Option<Vec<motors::Observation>>,
+    inputs: Option<Inputs>,
 ) -> CmdResult<PlanView> {
+    let Inputs { tune, observations, captured } = inputs.unwrap_or_default();
     blocking(app, move |app| {
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
@@ -349,6 +359,13 @@ pub async fn prepare_changes<R: Runtime>(
             _ if source == "initial_tune" => {
                 let t = tune.ok_or("No prop size given.")?;
                 initial(&c.params, &t)?.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect()
+            }
+            _ if source == "rc_calibration" => {
+                let captured = captured.ok_or("No radio calibration captured.")?;
+                rc::calibration(|n| c.params.get(n).map(|p| p.value as f64), &captured)?
+                    .into_iter()
+                    .map(|c| (c.name, c.value, Some(c.reason)))
+                    .collect()
             }
             _ if source == "motors" => {
                 let seen = observations.ok_or("No motor test results given.")?;
@@ -536,6 +553,44 @@ pub async fn motor_check<R: Runtime>(app: AppHandle<R>, observations: Vec<motors
         motor_verdict(&connected(&mut slot)?.params, &observations)
     })
     .await
+}
+
+#[derive(Serialize)]
+pub struct RcStatus {
+    view: rc::RcView,
+    /// (channel, min, max) seen while listening, for radio calibration.
+    ranges: Vec<(u8, u16, u16)>,
+    /// Signal strength in percent, when the receiver reports it.
+    rssi_pct: Option<u8>,
+}
+
+/// The RC channels now: values, what each does, switch positions, modes.
+#[tauri::command]
+pub async fn rc_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<RcStatus> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let r = connected(&mut slot)?.link.rc_sample(Duration::from_millis(250));
+        let sample = check(&mut slot, r)?;
+        let c = connected(&mut slot)?;
+        let view = rc::view(|n| c.params.get(n).map(|p| p.value as f64), &sample.last);
+        let rssi_pct = sample.rssi.map(|r| ((u32::from(r) * 100 + 127) / 254) as u8);
+        Ok(RcStatus { view, ranges: sample.ranges, rssi_pct })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+pub struct RcChoices {
+    modes: Vec<(f64, String)>,
+    options: Vec<(f64, String)>,
+}
+
+/// Flight modes and switch functions to choose from.
+#[tauri::command]
+pub fn rc_choices() -> RcChoices {
+    let (modes, options) = rc::choices();
+    RcChoices { modes, options }
 }
 
 /// Watches the radio for `listen_s` seconds and returns the channel of the

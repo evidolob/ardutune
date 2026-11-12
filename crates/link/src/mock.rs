@@ -146,6 +146,12 @@ impl MockState {
         for (n, v) in [("GPS1_TYPE", 1.0), ("FS_THR_ENABLE", 1.0), ("BATT_FS_LOW_ACT", 2.0), ("FLTMODE_CH", 6.0)] {
             params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_INT8));
         }
+        // An uncalibrated radio: ArduPilot's default ranges.
+        for ch in 1..=8 {
+            for (what, v) in [("MIN", 1100.0), ("MAX", 1900.0), ("TRIM", 1500.0)] {
+                params.insert(format!("RC{ch}_{what}"), (v, MAV_PARAM_TYPE_INT16));
+            }
+        }
         for ch in 5..=16 {
             params.insert(format!("RC{ch}_OPTION"), (if ch == 5 { 153.0 } else { 0.0 }, MAV_PARAM_TYPE_INT16));
         }

@@ -98,6 +98,25 @@ fn analyse_connect_download_write_and_reboot() {
     assert_eq!((plan["rows"][0]["name"].clone(), plan["rows"][0]["value"].clone()), (json!("RC7_OPTION"), json!(65.0)));
     assert!(call("prepare_changes", json!({ "source": "switch:5:65", "label": "x" })).unwrap_err().contains("already does"));
     mock.state().rc[6] = 1000;
+
+    // RC channels: live values and what each does; a function removed;
+    // radio calibration from captured ranges.
+    let rc = call("rc_status", json!({})).unwrap();
+    let chans = rc["view"]["channels"].as_array().unwrap();
+    assert_eq!((chans[2]["role"].clone(), chans[2]["value"].clone()), (json!("Throttle"), json!(1000)), "{rc}");
+    assert_eq!(chans[4]["kind"], "switch");
+    assert_eq!(chans[5]["kind"], "mode");
+    assert_eq!(chans[8]["value"], Value::Null, "channel 9 isn't received");
+    let choices = call("rc_choices", json!({})).unwrap();
+    assert!(choices["options"].as_array().unwrap().iter().any(|o| o[1] == "GPS Disable"));
+    let plan = call("prepare_changes", json!({ "source": "switch:5:0", "label": "remove arm switch" })).unwrap();
+    assert_eq!((plan["rows"][0]["name"].clone(), plan["rows"][0]["value"].clone()), (json!("RC5_OPTION"), json!(0.0)));
+    let captured = json!([[1, 990, 2010, 1500], [2, 990, 2010, 1500], [3, 990, 2010, 990], [4, 990, 2010, 1500]]);
+    let plan = call("prepare_changes", json!({ "source": "rc_calibration", "label": "radio calibration", "inputs": { "captured": captured } })).unwrap();
+    let rows = plan["rows"].as_array().unwrap();
+    assert!(rows.iter().any(|r| r["name"] == "RC1_MIN" && r["value"] == json!(990.0)), "{plan}");
+    assert!(rows.iter().any(|r| r["name"] == "RC3_TRIM" && r["value"] == json!(990.0)), "throttle trim at the bottom");
+    assert!(rc["view"]["notes"].as_array().unwrap().iter().any(|n| n["title"] == "The radio isn't calibrated"));
     mock.state().gps_motion = (0.02, 50.4501, 30.5234);
     mock.state().prearm_failures.clear();
 
@@ -118,7 +137,7 @@ fn analyse_connect_download_write_and_reboot() {
     let result = call("initial_tune", json!({ "tune": tune })).unwrap();
     let gyro = result["changes"].as_array().unwrap().iter().find(|c| c["name"] == "INS_GYRO_FILTER").map(|c| c["value"].clone());
     assert!(gyro.is_none() || gyro == Some(json!(46.0)), "{result}");
-    let plan = call("prepare_changes", json!({ "source": "initial_tune", "label": "writing initial tune", "tune": tune })).unwrap();
+    let plan = call("prepare_changes", json!({ "source": "initial_tune", "label": "writing initial tune", "inputs": { "tune": tune } })).unwrap();
     assert_eq!(plan["rows"].as_array().unwrap().len(), result["changes"].as_array().unwrap().len());
     assert!(call("initial_tune", json!({ "tune": { "prop_in": 0.0 } })).unwrap_err().contains("Prop size"));
 
@@ -133,7 +152,7 @@ fn analyse_connect_download_write_and_reboot() {
     let verdict = call("motor_check", json!({ "observations": seen })).unwrap();
     assert_eq!(verdict["ok"], json!(false));
     assert_eq!(verdict["changes"][0]["name"], "SERVO_BLH_RVMASK", "{verdict}");
-    let plan = call("prepare_changes", json!({ "source": "motors", "label": "writing motor fixes", "observations": seen })).unwrap();
+    let plan = call("prepare_changes", json!({ "source": "motors", "label": "writing motor fixes", "inputs": { "observations": seen } })).unwrap();
     assert_eq!(plan["rows"][0]["value"], json!(4.0), "{plan}");
     // Props out: the reversed layout is one change of frame type.
     assert_eq!(layout["reversed"][0], json!(19));

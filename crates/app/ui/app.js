@@ -15,7 +15,7 @@ const LOG_VIEWS = [
 /** The sidebar, in the order a build goes: set it up, configure it, tune it from flight logs, and find out what's wrong. */
 const NAV = [
   ["Initial setup", [["setup", "Setup guide"], ["firmware", "Firmware"], ["motors", "Motor test"], ["compass", "Compass calibration"], ["tune", "Initial tune"]]],
-  ["Configuration", [["allparams", "Parameters"], ["params", "Backups"]]],
+  ["Configuration", [["rc", "RC channels"], ["allparams", "Parameters"], ["params", "Backups"]]],
   ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], "log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
   ["Troubleshoot", [["prearm", "Pre-arm check"], ["diagnose", "Crash diagnosis"]]],
 ];
@@ -36,6 +36,7 @@ const state = {
   arming: null, // latest pre-arm check report
   setup: null, // latest setup guide
   compass: { cal: null, running: false }, // compass calibration progress
+  rc: { status: null, choices: null, polling: false, showAll: false, modes: {} }, // RC channels page; modes: staged FLTMODEn changes
   motors: { layout: null, propsOff: false, throttle: 7, seen: [], verdict: null, spinning: null }, // motor test
   tune: { prop: "", cells: null, chemistry: null, pack: null, result: null }, // initial tune inputs and result
   ptable: null, // full parameter list from the vehicle
@@ -114,6 +115,7 @@ function go(view) {
   if (view === "setup" && state.vehicle && !state.setup && !state.vehicleBusy) setupGuide();
   if (view === "motors" && state.vehicle && !state.motors.layout && !state.vehicleBusy) loadMotors();
   if (view === "tune" && state.vehicle && !state.tune.pack && !state.vehicleBusy) loadPack();
+  if (view === "rc" && state.vehicle) pollRc();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
   if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
 }
@@ -399,16 +401,70 @@ async function reboot() {
 
 /** Reviews and writes the staged parameter edits. */
 async function writeEdits() {
-  const values = Object.entries(state.staged);
+  writeValues("parameter edits", Object.entries(state.staged));
+}
+
+/** Reviews and writes chosen values, as edits from the parameter list are. */
+async function writeValues(title, values) {
   if (!values.length) return;
-  set({ modal: { stage: "planning", title: "parameter edits", source: "edits" } });
+  set({ modal: { stage: "planning", title, source: "edits" } });
   try {
-    const plan = await invoke("prepare_changes", { source: "edits", label: "writing parameter edits", values });
-    set({ modal: { stage: "confirm", title: "parameter edits", source: "edits", plan, selected: new Set(plan.rows.map((r) => r.name)) } });
+    const plan = await invoke("prepare_changes", { source: "edits", label: `writing ${title}`, values });
+    set({ modal: { stage: "confirm", title, source: "edits", plan, selected: new Set(plan.rows.map((r) => r.name)) } });
   } catch (e) {
     set({ modal: null });
     toast(e);
   }
+}
+
+/** Keeps the RC channels page live while it is open. */
+async function pollRc() {
+  if (state.rc.polling) return;
+  state.rc.polling = true;
+  if (!state.rc.choices) invoke("rc_choices").then((choices) => set({ rc: { ...state.rc, choices } }));
+  try {
+    while (state.view === "rc" && state.vehicle) {
+      const m = state.modal;
+      // Leave the link to a write or a switch search.
+      if (state.vehicleBusy || ["planning", "writing", "switchListening", "rcListening"].includes(m?.stage)) {
+        await new Promise((r) => setTimeout(r, 300));
+        continue;
+      }
+      const status = await invoke("rc_status");
+      if (m?.stage === "rcCalMove" && state.modal === m) {
+        const cap = { ...m.captured };
+        for (const [ch, lo, hi] of status.ranges) {
+          if (!lo) continue;
+          const [a, b] = cap[ch] ?? [lo, hi];
+          cap[ch] = [Math.min(a, lo), Math.max(b, hi)];
+        }
+        state.modal = { ...m, captured: cap };
+      }
+      set({ rc: { ...state.rc, status } });
+    }
+  } catch (e) {
+    toast(e);
+  } finally {
+    state.rc.polling = false;
+  }
+}
+
+async function detectRcSwitch() {
+  const m = state.modal;
+  set({ modal: { ...m, stage: "rcListening", error: null } });
+  try {
+    const ch = await invoke("detect_switch", { listenS: 6, option: m.option[0] });
+    writeChanges(`switch:${ch}:${m.option[0]}`, `"${m.option[1]}" on channel ${ch}`);
+  } catch (e) {
+    set({ modal: { ...m, stage: "rcAssign", error: String(e) } });
+  }
+}
+
+function finishRcCalibration() {
+  const m = state.modal;
+  const chans = state.rc.status?.view.channels ?? [];
+  const captured = Object.entries(m.captured).map(([ch, [lo, hi]]) => [Number(ch), lo, hi, chans[Number(ch) - 1]?.value ?? lo]);
+  writeChanges("rc_calibration", "radio calibration", null, { captured });
 }
 
 /** Shows what writing a set of recommendations would change, then writes on confirmation. */
@@ -420,7 +476,7 @@ async function writeChanges(source, title, path = null, extra = {}) {
   set({ modal: { stage: "planning", title, source } });
   try {
     const verb = source === "file" ? "restoring" : "writing";
-    const plan = await invoke("prepare_changes", { source, path, label: `${verb} ${title}`, ...extra });
+    const plan = await invoke("prepare_changes", { source, path, label: `${verb} ${title}`, inputs: extra });
     set({ modal: { stage: "confirm", title, source, plan, selected: new Set(plan.rows.map((r) => r.name)) } });
   } catch (e) {
     set({ modal: null });
@@ -574,6 +630,26 @@ const actions = {
   askNameDrone: (d) =>
     set({ modal: { stage: "nameDrone", title: d.name ? `Rename ${d.name}` : "Name this vehicle", uid: d.uid, name: d.name ?? "", fromLog: d.fromLog === "true", board: d.board ?? null } }),
   refreshHistory,
+  rcAssign: (d) => set({ modal: { stage: "rcAssign", title: "Put a function on a switch", ch: d.ch ? Number(d.ch) : null, option: null, query: "", error: null } }),
+  rcPick: (d) => set({ modal: { ...state.modal, option: [Number(d.value), d.name], error: null } }),
+  rcUnpick: () => set({ modal: { ...state.modal, option: null } }),
+  rcAssignChannel: (d) => {
+    const m = state.modal;
+    const ch = Number(d.ch ?? document.getElementById("rcch")?.value);
+    if (ch) writeChanges(`switch:${ch}:${m.option[0]}`, `"${m.option[1]}" on channel ${ch}`);
+  },
+  detectRcSwitch,
+  rcRemove: (d) => writeChanges(`switch:${d.ch}:0`, `removing "${d.role}" from channel ${d.ch}`),
+  rcReverse: (d) => writeValues(`channel ${d.ch} ${d.rev === "true" ? "normal" : "reversed"}`, [[`RC${d.ch}_REVERSED`, d.rev === "true" ? 0 : 1]]),
+  rcShowAll: () => set({ rc: { ...state.rc, showAll: !state.rc.showAll } }),
+  rcWriteModes: () => {
+    writeValues("flight modes", Object.entries(state.rc.modes).map(([n, v]) => [n, Number(v)]));
+    set({ rc: { ...state.rc, modes: {} } });
+  },
+  rcCal: () => set({ modal: { stage: "rcCalStart", title: "Calibrate the radio" } }),
+  rcCalMove: () => set({ modal: { ...state.modal, stage: "rcCalMove", captured: {} } }),
+  rcCalCentre: () => set({ modal: { ...state.modal, stage: "rcCalCentre" } }),
+  finishRcCalibration,
   askGpsSwitch: () => set({ modal: { stage: "switchLearn", title: "Put the GPS on a switch", option: 65, error: null } }),
   detectSwitch,
   importLog,
@@ -643,6 +719,7 @@ document.addEventListener("change", (e) => {
   const t = e.target;
   if (t.id === "fwbackup" && state.modal) state.modal.backup = t.checked;
   if (t.name === "port") set({ address: t.value });
+  if (t.dataset.fltmode) set({ rc: { ...state.rc, modes: { ...state.rc.modes, [t.dataset.fltmode]: t.value } } });
   if (t.id === "propsOff") set({ motors: { ...state.motors, propsOff: t.checked } });
   if (t.id === "mthrottle") set({ motors: { ...state.motors, throttle: Number(t.value) } });
   if (t.dataset.mspun !== undefined) setSeen(Number(t.dataset.mspun), { spun: t.value === "" ? null : t.value === "none" ? "none" : Number(t.value) });
@@ -662,6 +739,7 @@ document.addEventListener("change", (e) => {
 
 document.addEventListener("input", (e) => {
   if (e.target.id === "address") state.address = e.target.value;
+  if (e.target.id === "rcq" && state.modal) set({ modal: { ...state.modal, query: e.target.value } });
   if (e.target.id === "tprop") set({ tune: { ...state.tune, prop: e.target.value, result: null } });
   if (e.target.id === "psearch") set({ pfilter: { ...state.pfilter, text: e.target.value }, popen: null });
 });
@@ -1399,6 +1477,79 @@ function setupView() {
     ${again}`;
 }
 
+/** A channel's value on a 800-2200 µs scale, with its calibrated range and trim. */
+function rcBar(c, captured = null) {
+  const pct = (v) => Math.max(0, Math.min(100, ((v - 800) / 1400) * 100));
+  const [lo, hi] = captured ?? [c.min, c.max];
+  const range = lo && hi ? `<div class="range" style="left:${pct(lo)}%;width:${pct(hi) - pct(lo)}%"></div>` : "";
+  const trim = c.trim && !captured ? `<div class="trim" style="left:${pct(c.trim)}%"></div>` : "";
+  const needle = c.value ? `<div class="needle" style="left:${pct(c.value)}%"></div>` : "";
+  return `<div class="rcbar">${range}${trim}${needle}</div>`;
+}
+
+function rcView() {
+  const head = `<h1>RC channels</h1><p class="lead">Every radio channel live, and what it does: sticks, the flight mode switch and switch functions. Put a new function on a switch by flipping it, set the flight mode for each switch position, and calibrate the radio.</p>`;
+  if (!state.vehicle) return head + notConnected("see its radio channels");
+  const st = state.rc.status;
+  if (!st) return head + busy("Reading the radio…");
+  const v = st.view;
+  const choices = state.rc.choices;
+  const shown = v.channels.filter((c) => state.rc.showAll || c.value || c.kind !== "free");
+  const kindChip = { stick: chip("info", "stick"), mode: chip("info", "modes"), switch: chip("pass", "switch"), free: "" };
+  const rows = shown
+    .map((c) => {
+      const actions =
+        c.kind === "switch"
+          ? `<button class="link" data-action="rcAssign" data-ch="${c.ch}">Change</button> · <button class="link" data-action="rcRemove" data-ch="${c.ch}" data-role="${esc(c.role)}">Remove</button>`
+          : c.kind === "free" && c.value
+            ? `<button class="link" data-action="rcAssign" data-ch="${c.ch}">Assign…</button>`
+            : "";
+      return `<div class="rcrow ${c.value ? "" : "nosignal"}">
+        <div class="rcch">CH ${c.ch}</div>
+        ${rcBar(c)}
+        <div class="rcval">${c.value ? `${c.value} µs` : "–"}</div>
+        <div class="rcrole">${kindChip[c.kind]} ${esc(c.role || (c.value ? "free" : "not received"))}${c.position ? ` <span class="muted">· ${c.position}</span>` : ""}${c.reversed ? ` <span class="muted">· reversed</span>` : ""}</div>
+        <div class="rcact">${actions}${actions ? " · " : ""}<button class="link" data-action="rcReverse" data-ch="${c.ch}" data-rev="${c.reversed}">${c.reversed ? "Un-reverse" : "Reverse"}</button></div>
+      </div>`;
+    })
+    .join("");
+  const active = v.modes.find((m) => m.active);
+  const modeRows = v.modes
+    .map((m) => {
+      const name = `FLTMODE${m.position}`;
+      const staged = state.rc.modes[name];
+      const value = staged !== undefined ? Number(staged) : m.mode;
+      const options = (choices?.modes ?? [[m.mode, m.name]]).map(([val, label]) => `<option value="${val}" ${val === value ? "selected" : ""}>${esc(label)}</option>`).join("");
+      return `<tr class="${m.active ? "activerow" : ""}"><td>${m.position}</td><td class="muted">${m.band[0] === 0 ? `up to ${m.band[1]}` : m.band[1] >= 2200 ? `${m.band[0]} and up` : `${m.band[0]}–${m.band[1]}`} µs</td><td><select data-fltmode="${name}">${options}</select></td><td>${m.active ? chip("pass", "now") : ""}</td></tr>`;
+    })
+    .join("");
+  const staged = Object.keys(state.rc.modes).length;
+  return `${head}
+    <div class="stats">
+      ${stat("Receiver", v.signal ? chip("pass", "signal") : chip("fail", "no signal"), st.rssi_pct !== null ? `RSSI ${st.rssi_pct}%` : "")}
+      ${stat("Flight mode", esc(active?.name ?? "–"), v.mode_channel ? `switch on channel ${v.mode_channel}` : "no mode switch")}
+    </div>
+    ${v.signal ? "" : `<div class="banner warn">No radio input. Turn the transmitter on, and connect the battery if the receiver only gets power from it.</div>`}
+    ${v.notes.map((n) => `<div class="banner ${n.status === "fail" ? "fail" : "warn"}"><b>${esc(n.title)}</b> ${esc(n.detail)}</div>`).join("")}
+    <div class="card">
+      <h2>Channels</h2>
+      <div class="rcrows">${rows}</div>
+      <div class="actions">
+        <button class="btn primary" data-action="rcAssign" ${v.signal ? "" : "disabled"}>Put a function on a switch…</button>
+        <button class="btn" data-action="rcCal" ${v.signal ? "" : "disabled"}>Calibrate the radio…</button>
+        <button class="link" data-action="rcShowAll">${state.rc.showAll ? "Hide unused channels" : "Show all 16 channels"}</button>
+      </div>
+    </div>
+    ${
+      v.mode_channel
+        ? `<div class="card"><h2>Flight modes on channel ${v.mode_channel}</h2>
+            <p class="muted" style="margin-top:-4px">A two-position switch uses positions 1 and 6; a three-position switch 1, 4 and 6 (with ArduPilot's default end points). Keep a mode that flies without GPS (Stabilize, AltHold) on one position.</p>
+            <table class="modes"><tr><th>Position</th><th>Channel</th><th>Mode</th><th></th></tr>${modeRows}</table>
+            <div class="actions"><button class="btn primary" data-action="rcWriteModes" ${staged ? "" : "disabled"}>Write ${staged || ""} mode change${staged === 1 ? "" : "s"}…</button></div></div>`
+        : ""
+    }`;
+}
+
 const CAL_STATUS = {
   waiting: ["info", "starting"],
   running: ["info", "turn the vehicle"],
@@ -1834,6 +1985,56 @@ function modal() {
         </div>`;
       break;
     }
+    case "rcAssign":
+    case "rcListening": {
+      const listening = m.stage === "rcListening";
+      const opts = state.rc.choices?.options ?? [];
+      const q = (m.query ?? "").toLowerCase();
+      const common = [153, 65, 31, 4, 17, 41];
+      const list = (q ? opts.filter(([v, n]) => n.toLowerCase().includes(q) || String(v) === q) : opts.filter(([v]) => common.includes(v))).slice(0, 30);
+      const free = (state.rc.status?.view.channels ?? []).filter((c) => c.kind === "free" && c.ch > 4);
+      body = !m.option
+        ? `<p>Which function?</p>
+          <input type="text" id="rcq" value="${esc(m.query ?? "")}" placeholder="Search, e.g. RTL, AutoTune, camera, arm" spellcheck="false" autocomplete="off" autofocus style="width:100%">
+          <p class="muted">${q ? `${list.length} match${list.length === 1 ? "" : "es"}` : "Common functions; search for any of ArduPilot's switch functions."}</p>
+          <div class="optlist">${list.map(([val, name]) => `<button class="opt" data-action="rcPick" data-value="${val}" data-name="${esc(name)}">${esc(name)} <span class="muted">${val}</span></button>`).join("")}</div>
+          <div class="actions"><button class="btn" data-action="closeModal">Cancel</button></div>`
+        : `<p><b>${esc(m.option[1])}</b> (RCn_OPTION = ${m.option[0]}) <button class="link" data-action="rcUnpick">change</button></p>
+          ${
+            m.ch
+              ? `<p>On channel ${m.ch}.</p><div class="actions"><button class="btn primary" data-action="rcAssignChannel" data-ch="${m.ch}">Continue…</button><button class="btn" data-action="closeModal">Cancel</button></div>`
+              : `<p>Flip the switch you want to use from one end to the other a few times within 6 seconds after clicking Start. ArduTune finds its channel, and refuses sticks, the flight mode channel and channels that already do something.</p>
+                ${m.error ? `<div class="banner warn">${esc(m.error)}</div>` : ""}
+                ${listening ? busy("Flip the switch now…") : ""}
+                <div class="actions">
+                  <button class="btn primary" data-action="detectRcSwitch" ${listening ? "disabled" : ""}>${m.error ? "Try again" : "Start"}</button>
+                  ${free.length ? `<span class="muted">or pick</span> <select id="rcch">${free.map((c) => `<option value="${c.ch}">channel ${c.ch}${c.value ? "" : " (no signal)"}</option>`).join("")}</select> <button class="btn" data-action="rcAssignChannel" ${listening ? "disabled" : ""}>Use it</button>` : ""}
+                  <button class="btn" data-action="closeModal" ${listening ? "disabled" : ""}>Cancel</button>
+                </div>`
+          }
+          <p class="muted">Most functions act when the switch goes high (above 1800 µs); some use three positions. Check the function in ArduPilot's documentation before flying.</p>`;
+      break;
+    }
+    case "rcCalStart":
+      body = `<p>ArduTune records the lowest and highest value of every channel while you move the sticks and switches, then the centre of each stick.</p>
+        <ul class="plain"><li>Remove the propellers or disconnect the motors' battery: nothing arms, but be safe.</li><li>Turn the transmitter on and set its trims to centre.</li></ul>
+        <div class="actions"><button class="btn primary" data-action="rcCalMove">Start</button><button class="btn" data-action="closeModal">Cancel</button></div>`;
+      break;
+    case "rcCalMove": {
+      const chans = state.rc.status?.view.channels ?? [];
+      const rows = chans
+        .filter((c) => c.value || m.captured[c.ch])
+        .map((c) => `<div class="rcrow"><div class="rcch">CH ${c.ch}</div>${rcBar(c, m.captured[c.ch])}<div class="rcval">${m.captured[c.ch] ? `${m.captured[c.ch][0]}–${m.captured[c.ch][1]}` : "–"}</div></div>`)
+        .join("");
+      body = `<p>Move <b>every stick to all its ends</b> (full circles) and flip every switch to both ends, a few times. The shaded bar is the range recorded so far.</p>
+        <div class="rcrows">${rows}</div>
+        <div class="actions"><button class="btn primary" data-action="rcCalCentre">Next: centre the sticks</button><button class="btn" data-action="closeModal">Cancel</button></div>`;
+      break;
+    }
+    case "rcCalCentre":
+      body = `<p>Now <b>centre the roll, pitch and yaw sticks and put the throttle all the way down</b>, then click Done. ArduTune shows the new end points and centres for review before writing them.</p>
+        <div class="actions"><button class="btn primary" data-action="finishRcCalibration">Done</button><button class="btn" data-action="closeModal">Cancel</button></div>`;
+      break;
     case "nameDrone":
       body = `<p class="muted">Backups made on this flight controller are listed under this name.</p>
         <div class="actions" style="margin-top:0">
@@ -1925,6 +2126,8 @@ function content() {
       return setupView();
     case "tune":
       return tuneView();
+    case "rc":
+      return rcView();
     case "history":
       return historyView();
     case "motors":

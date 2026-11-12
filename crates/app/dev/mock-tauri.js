@@ -121,7 +121,8 @@
       await progress("Downloading log", 89_600_000);
       return `/Users/pilot/Documents/ArduTune/logs/log_${id}.bin`;
     },
-    prepare_changes: async ({ source, path, values, observations }) => {
+    prepare_changes: async ({ source, path, values, inputs }) => {
+      const observations = inputs?.observations;
       if (source === "edits") return { rows: values.map(([name, value]) => ({ name, current: 0, value, reason: null })), unchanged: [], unknown: [], skipped: [], armed: false };
       if (source.startsWith("setup:")) {
         const step = (await fixture("setup")).steps.find((x) => x.id === source.slice(6));
@@ -129,7 +130,12 @@
       }
       if (source === "motors") return { rows: motorVerdict(observations).changes, unchanged: [], unknown: [], skipped: [], armed: false };
       if (source === "prearm:GPS") return { rows: (await commands.arming_check()).problems[0].changes, unchanged: [], unknown: [], skipped: [], armed: false };
-      if (source.startsWith("switch:")) return { rows: [{ name: `RC${source.split(":")[1]}_OPTION`, current: 0, value: 65, reason: `Channel ${source.split(":")[1]} turns the GPS off when high, on when low` }], unchanged: [], unknown: [], skipped: [], armed: false };
+      if (source.startsWith("switch:")) {
+        const [, ch, opt] = source.split(":");
+        return { rows: [{ name: `RC${ch}_OPTION`, current: 0, value: Number(opt), reason: `Channel ${ch}` }], unchanged: [], unknown: [], skipped: [], armed: false };
+      }
+      if (source === "rc_calibration")
+        return { rows: inputs.captured.flatMap(([ch, lo, hi, c]) => [{ name: `RC${ch}_MIN`, current: 988, value: lo, reason: `Channel ${ch} lowest` }, { name: `RC${ch}_MAX`, current: 2011, value: hi, reason: `Channel ${ch} highest` }]), unchanged: [], unknown: [], skipped: [], armed: false };
       if (source === "initial_tune") return { rows: tuneChanges, unchanged: [], unknown: [], skipped: [], armed: false };
       if (source === "file")
         return {
@@ -163,6 +169,31 @@
       return { backup: backup ? "/Users/pilot/Documents/ArduTune/backups/backup-sys1-20261110-153000.param" : null, results: [{ name: "INS_GYRO_FILTER", value: 60, error: null }] };
     },
     reboot: async () => (connected = false),
+    rc_choices: async () => ({
+      modes: [[0, "Stabilize"], [1, "Acro"], [2, "AltHold"], [3, "Auto"], [5, "Loiter"], [6, "RTL"], [9, "Land"], [16, "PosHold"]],
+      options: [[4, "RTL"], [17, "AutoTune Mode"], [31, "Motor Emergency Stop"], [41, "ArmDisarm (4.1 and lower)"], [65, "GPS Disable"], [9, "Camera Trigger"], [153, "ArmDisarm (4.2 and higher)"], [90, "EKF Source Set"]],
+    }),
+    rc_status: async () => {
+      await sleep(250);
+      const t = Date.now() / 1000;
+      const wave = (f, a = 450) => Math.round(1500 + a * Math.sin(t * f));
+      const values = [wave(0.9), wave(0.7), Math.round(1250 + 250 * Math.sin(t * 0.5)), wave(1.1, 200), 999, 1550, Math.sin(t * 0.3) > 0 ? 2011 : 999, 1500];
+      const roles = [["stick", "Roll"], ["stick", "Pitch"], ["stick", "Throttle"], ["stick", "Yaw"], ["switch", "ArmDisarm (4.2 and higher)", 153], ["mode", "Flight mode"], ["free", ""], ["free", ""]];
+      const channels = Array.from({ length: 16 }, (_, i) => {
+        const [kind, role, option] = roles[i] ?? ["free", ""];
+        const value = values[i] ?? null;
+        const position = kind === "switch" && value ? (value < 1200 ? "low" : value > 1800 ? "high" : "middle") : null;
+        return { ch: i + 1, value, min: i < 8 ? 988 : null, max: i < 8 ? 2011 : null, trim: i < 8 ? (i === 2 ? 988 : 1500) : null, reversed: false, kind, role, option: option ?? null, position };
+      });
+      const modes = [[0, "Stabilize"], [0, "Stabilize"], [2, "AltHold"], [2, "AltHold"], [5, "Loiter"], [5, "Loiter"]].map(([mode, name], i) => ({
+        position: i + 1,
+        band: [[0, 1230], [1231, 1360], [1361, 1490], [1491, 1620], [1621, 1749], [1750, 2200]][i],
+        mode,
+        name,
+        active: i === 3,
+      }));
+      return { view: { channels, mode_channel: 6, modes, notes: [], signal: true }, ranges: channels.map((c) => [c.ch, c.value ?? 0, c.value ?? 0]), rssi_pct: 87 };
+    },
     detect_switch: async () => {
       await sleep(2500);
       return 7;
