@@ -296,6 +296,26 @@ battery.
 - Shows which changes need a reboot, and links to the setup guide steps it
   satisfies.
 
+### GPS configuration and status
+
+A page for the GPS: what it sees now, whether it can be trusted, and its
+setup.
+
+- Live status per GPS: fix type, satellites, HDOP/accuracy, position,
+  altitude, speed and course, and how long since power-up the fix took;
+  the EKF's view next to it (using GPS or not, innovation ratios, "GPS
+  Glitch" messages), so a bad GPS shows before arming.
+- Trust: the spoofing check from the pre-arm page (moving while still), a
+  position far from the last known one, jumps in position or altitude,
+  and jamming/spoofing state where the receiver reports it (u-blox M10).
+  With the fixes already offered there: GPS off, or a GPS off switch.
+- Setup: `GPS1_TYPE` (and a second GPS), the serial port and baud it is on,
+  constellations (`GPS_GNSS_MODE`: GPS, Galileo, GLONASS, BeiDou), update
+  rate, `GPS_HDOP_GOOD`, antenna offset (`GPS1_POS_*`), GPS for yaw where
+  supported, and the compass in the GPS module (orientation, external).
+- Checks: no GPS detected on the configured port, wrong baud, no fix after
+  a few minutes outdoors, constellations that leave too few satellites.
+
 ## Risks
 
 - Bad advice from poor logs → readiness check + confidence on every finding.
