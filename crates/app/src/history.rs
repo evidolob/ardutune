@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+
 use ardutune_core::history::{self, FlightSummary};
 use ardutune_core::log::Log;
 use ardutune_core::utc::date_time;
@@ -19,7 +20,7 @@ use crate::{blocking, data_dir, lock, AppState, CmdResult, Reporter};
 
 const CACHE: &str = ".ardutune-summaries.json";
 /// Bump when [`FlightSummary`] changes, so old summaries are recomputed.
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Default)]
 struct Cache {
@@ -40,14 +41,26 @@ pub struct Flight {
     path: String,
     file_name: String,
     size_mb: f64,
-    /// "YYYY-MM-DD HH:MM:SS" UTC: from GPS time, else the file's time.
-    when: String,
-    when_from_gps: bool,
+    /// 1 for the vehicle's first flight here, in flight order.
+    number: usize,
+    /// "YYYY-MM-DD HH:MM:SS" UTC from GPS time; `None` when the log never
+    /// had a fix (the clock isn't trustworthy then).
+    when: Option<String>,
     summary: FlightSummary,
     /// Tuning parameters changed since this vehicle's previous flight.
     changes: Vec<(String, Option<f64>, Option<f64>)>,
     #[serde(skip)]
-    order: i64,
+    order: (u8, u32, i64, i64),
+}
+
+/// Flight order without trusting clocks: power-up count, then time since
+/// power-up (several logs per power-up). Logs without a boot count (other
+/// autopilots) go by GPS time, else the file's time, after the others.
+fn order(s: &FlightSummary, modified: u64) -> (u8, u32, i64, i64) {
+    match s.boot_count {
+        Some(boot) => (0, boot, (s.after_boot_s * 1000.0) as i64, 0),
+        None => (1, 0, s.started.unwrap_or(modified as i64), 0),
+    }
 }
 
 #[derive(Serialize)]
@@ -147,19 +160,15 @@ pub async fn flight_history<R: Runtime>(app: AppHandle<R>) -> CmdResult<Vec<Vehi
                 }
                 (None, None) => (None, false, "Unknown flight controller".to_owned(), false, None),
             };
-            let (when, when_from_gps, order) = match summary.started {
-                Some(t) => (date_time(t as u64), true, t),
-                None => (date_time(modified), false, modified as i64),
-            };
             let flight = Flight {
                 path: path.display().to_string(),
                 file_name: path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
                 size_mb: size as f64 / 1e6,
-                when,
-                when_from_gps,
+                number: 0,
+                when: summary.started.map(|t| date_time(t as u64)),
+                order: order(&summary, modified),
                 summary,
                 changes: Vec::new(),
-                order,
             };
             match groups.iter_mut().find(|g| g.id == id) {
                 Some(g) => g.flights.push(flight),
@@ -171,14 +180,17 @@ pub async fn flight_history<R: Runtime>(app: AppHandle<R>) -> CmdResult<Vec<Vehi
         }
         for g in &mut groups {
             g.flights.sort_by_key(|f| f.order);
+            for (i, f) in g.flights.iter_mut().enumerate() {
+                f.number = i + 1;
+            }
             for i in 1..g.flights.len() {
                 let changes = history::changes(&g.flights[i - 1].summary, &g.flights[i].summary);
                 g.flights[i].changes = changes;
             }
             g.flights.reverse();
         }
-        // The connected vehicle first, then by latest flight; unknown last.
-        groups.sort_by_key(|g| (!g.connected, g.id.is_none(), -g.flights.first().map_or(0, |f| f.order)));
+        // The connected vehicle first, then by name; unknown last.
+        groups.sort_by_key(|g| (!g.connected, g.id.is_none(), g.label.to_lowercase()));
         Ok(groups)
     })
     .await

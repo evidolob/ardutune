@@ -155,7 +155,7 @@ fn analyse_connect_download_write_and_reboot() {
     let path = call("download_vehicle_log", json!({ "id": id })).unwrap();
     let path = path.as_str().unwrap();
     assert!(Path::new(path).starts_with(data.join("logs")));
-    assert!(path.ends_with("_kakuteh7-bdshot-353533.bin"), "named after the vehicle: {path}");
+    assert!(path.ends_with("_boot11_kakuteh7-bdshot-353533.bin"), "named by power-up and vehicle: {path}");
     let overview = call("open_log", json!({ "path": path })).unwrap();
     assert_eq!(overview["readiness"]["filter_ready"], json!(false));
     assert_eq!(overview["vehicle"]["label"], "KakuteH7-bdshot …353533");
@@ -171,7 +171,12 @@ fn analyse_connect_download_write_and_reboot() {
     let imported = call("import_log", json!({ "path": sample })).unwrap();
     assert!(Path::new(imported.as_str().unwrap()).starts_with(data.join("logs")));
     let groups = call("flight_history", json!({})).unwrap();
-    assert_eq!(groups[0]["flights"].as_array().unwrap().len(), 2, "{groups}");
+    let flights = groups[0]["flights"].as_array().unwrap();
+    assert_eq!(flights.len(), 2, "{groups}");
+    // Ordered by power-up count, not by clock or file time: the imported
+    // (later boot) flight is newest, numbered 2.
+    assert_eq!((flights[0]["number"].clone(), flights[0]["summary"]["boot_count"].clone()), (json!(2), json!(12)));
+    assert_eq!(flights[0]["when"], Value::Null, "no GPS fix, no date");
     assert!(data.join("logs").join(".ardutune-summaries.json").is_file(), "summaries are cached");
     let _ = std::fs::remove_file(&sample);
     assert_eq!(

@@ -1017,7 +1017,7 @@ const worstOvershoot = (f) => {
 
 function historyView() {
   const head = `<h1>Flight history</h1>
-    <p class="lead">Every log in Documents/ArduTune/logs, filed under the vehicle that flew it: each log records its flight controller's ID. Compare flights to see whether a change helped. For every number here, lower is better; green and red mark a change of more than 10% from the previous flight. Click a flight to open it.</p>
+    <p class="lead">Every log in Documents/ArduTune/logs, filed under the vehicle that flew it (each log records its flight controller's ID). Flights are numbered in the order flown, from the flight controller's power-up count, so the order is right even without GPS; a date is shown only when the log had a GPS fix. Lower is better for every number; green and red mark a change of more than 10% from the previous flight.</p>
     <div class="actions" style="margin-top:0">
       <button class="btn" data-action="refreshHistory" ${state.historyBusy ? "disabled" : ""}>Refresh</button>
       <button class="btn" data-action="importLog">Add a log file…</button>
@@ -1058,7 +1058,8 @@ function historyView() {
                 ? `<span class="muted">none</span>`
                 : `<span class="muted">first</span>`;
             return `<tr>
-              <td style="white-space:nowrap"><button class="link" data-action="openHistoryLog" data-path="${esc(f.path)}" title="Open ${esc(f.file_name)}">${esc(f.when)}</button>${f.when_from_gps ? "" : ` <span class="muted" title="No GPS time in the log: this is the file's time">(file)</span>`}<div class="muted">${minutes(s.flight_s)} flight${s.autotune ? " · AutoTune" : ""}</div></td>
+              <td style="min-width:190px"><button class="link" style="white-space:nowrap" data-action="openHistoryLog" data-path="${esc(f.path)}" title="Open ${esc(f.file_name)}">#${f.number} · ${f.when ? `${esc(f.when)} UTC` : "no GPS time"}</button>
+                <div class="muted">${s.boot_count ? `boot ${s.boot_count}, ${minutes(s.after_boot_s)} after power-on · ` : ""}${minutes(s.flight_s)} flight${s.autotune ? " · AutoTune" : ""}</div></td>
               <td class="num">${cell(s.vibration, prev?.summary.vibration)}</td>
               <td class="num">${cell(s.noise_pre, prev?.summary.noise_pre, 1)} → ${cell(s.noise_post, prev?.summary.noise_post, 1)}</td>
               <td class="num">${axes}${osc.length ? `<div class="warn-text">oscillation: ${esc(osc.join(", "))}</div>` : ""}</td>
@@ -1089,7 +1090,7 @@ function historyView() {
               : ""
           }
           <div class="scroll-x"><table>
-            <tr><th>Flight (UTC)</th><th class="num">Vibration<div class="muted">m/s²</div></th><th class="num">Gyro noise<div class="muted">before → after filters, deg/s</div></th><th class="num">Overshoot<div class="muted">roll / pitch / yaw, %</div></th><th>Tuning changes</th></tr>
+            <tr><th>Flight</th><th class="num">Vibration<div class="muted">m/s²</div></th><th class="num">Gyro noise<div class="muted">before → after filters, deg/s</div></th><th class="num">Overshoot<div class="muted">roll / pitch / yaw, %</div></th><th>Tuning changes</th></tr>
             ${rows}
           </table></div>
         </div>`;

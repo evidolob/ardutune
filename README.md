@@ -82,8 +82,12 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   banner, so logs from other ground stations count too), with vibration,
   gyro noise before and after the filters, step overshoot per axis and
   oscillations per flight, trends over flights, and the tuning parameters
-  changed since the previous flight. Downloaded logs are named after the
-  vehicle; summaries are cached so each log is read once.
+  changed since the previous flight. Flights are ordered by the flight
+  controller's power-up count (`STAT_BOOTCNT`) and time since power-up, not
+  by clock: its clock is only right after a GPS fix, so dates come from GPS
+  time in the log when it had a fix. Downloaded logs are named after the log
+  number, power-up and vehicle; summaries are cached so each log is read
+  once.
 - Command-line tool with the same analyses and vehicle commands.
 
 ## Layout

@@ -40,8 +40,14 @@ pub fn serial_from_uid(uid: &str) -> Option<String> {
 pub struct FlightSummary {
     pub board: Option<BoardId>,
     pub firmware: Option<String>,
-    /// Unix time the log started, from GPS time; `None` without a GPS fix.
+    /// Unix time the log started, from GPS time; `None` when the log never
+    /// had a fix (the flight controller's clock is unreliable without one).
     pub started: Option<i64>,
+    /// Power-ups so far (STAT_BOOTCNT as logged): orders flights without
+    /// relying on GPS. Several logs of one power-up share it.
+    pub boot_count: Option<u32>,
+    /// Seconds after power-up the log started.
+    pub after_boot_s: f64,
     pub flight_s: f64,
     /// Worst axis' 95th percentile during flight, m/s².
     pub vibration: Option<f64>,
@@ -74,6 +80,13 @@ fn tuning_param(name: &str) -> bool {
 
 const GPS_EPOCH: i64 = 315_964_800; // 1980-01-06
 const LEAP_SECONDS: i64 = 18;
+/// GPS times before 2015 come from a receiver without a real fix.
+const PLAUSIBLE_FROM: i64 = 1_420_070_400;
+
+/// Whether a clock reading can be a real date (not 1980, not the future).
+pub fn plausible_time(t: i64, now: i64) -> bool {
+    (PLAUSIBLE_FROM..=now + 86_400).contains(&t)
+}
 
 /// When the log started: GPS week and milliseconds at the first good fix,
 /// moved back to the start of the log.
@@ -81,10 +94,13 @@ fn started(log: &Log) -> Option<i64> {
     let gps = log.table("GPS")?;
     let (t, week, ms) = (gps.time_s()?, gps.num("GWk")?, gps.num("GMS")?);
     let status = gps.num("Status");
+    // A 3D fix: before it, receivers can report a week but a wrong time.
     let i = (0..t.len()).find(|&i| week[i] > 0.0 && status.is_none_or(|s| s[i] >= 3.0))?;
     let at_fix = GPS_EPOCH + week[i] as i64 * 604_800 + (ms[i] / 1000.0) as i64 - LEAP_SECONDS;
     let start = log.time_span().map_or(t[i], |s| s.start);
-    Some(at_fix - (t[i] - start).round() as i64)
+    let started = at_fix - (t[i] - start).round() as i64;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(i64::MAX, |d| d.as_secs() as i64);
+    plausible_time(started, now).then_some(started)
 }
 
 pub fn summarize(log: &Log) -> FlightSummary {
@@ -95,6 +111,8 @@ pub fn summarize(log: &Log) -> FlightSummary {
         board: log.text_messages().into_iter().find_map(parse_board_line),
         firmware: log.firmware().map(|f| f.text),
         started: started(log),
+        boot_count: log.param("STAT_BOOTCNT").filter(|v| *v > 0.0).map(|v| v as u32),
+        after_boot_s: log.time_span().map_or(0.0, |s| s.start),
         flight_s: crate::log::total_duration(&flight),
         vibration: readiness::vibration_level(log),
         noise_pre: noise.as_ref().map(|n| n.noise_rms_pre),
@@ -154,6 +172,14 @@ mod tests {
     }
 
     #[test]
+    fn implausible_clock_times() {
+        let now = 1_794_000_000;
+        assert!(plausible_time(1_779_019_127, now));
+        assert!(!plausible_time(315_964_800, now), "GPS epoch: no fix");
+        assert!(!plausible_time(now + 7 * 86_400, now), "in the future");
+    }
+
+    #[test]
     fn banner_form_of_a_raw_chip_id() {
         // ChibiOS memcpy's the ID bytes into uid2 and prints each word
         // most significant byte first.
@@ -166,6 +192,7 @@ mod tests {
         let log = Log::from_bytes(&crate::synth::sample_flight(crate::synth::Preset::Ready));
         let s = summarize(&log);
         assert!(s.flight_s > 10.0, "{s:?}");
+        assert!(s.started.is_none(), "the sample has no GPS fix");
         assert!(s.noise_pre.is_some() && s.vibration.is_some());
         assert_eq!(s.axes.len(), 3);
         assert!(s.params.iter().any(|(n, _)| n == "INS_GYRO_FILTER"));

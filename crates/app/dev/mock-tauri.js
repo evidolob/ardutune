@@ -255,13 +255,16 @@
     },
     flight_history: async () => {
       await progress("Reading flight logs", 3);
+      let n = 0;
       const flight = (when, mins, vib, pre, post, ov, osc, changes, gps = true, autotune = false) => ({
         path: `/logs/${when}.bin`,
         file_name: `${when}.bin`,
         size_mb: 60,
-        when,
-        when_from_gps: gps,
+        number: 0,
+        when: gps ? when : null,
         summary: {
+          boot_count: 170 - n++,
+          after_boot_s: 38 + n * 7,
           flight_s: mins * 60,
           vibration: vib,
           noise_pre: pre,
@@ -271,6 +274,7 @@
         },
         changes,
       });
+      const numbered = (list) => list.map((f, i) => ({ ...f, number: list.length - i }));
       return [
         {
           id: KAKUTE,
@@ -279,12 +283,12 @@
           named: !!names[KAKUTE],
           board: "KakuteH7-bdshot",
           connected,
-          flights: [
+          flights: numbered([
             flight("2026-11-14 10:20:05", 6.1, 7.9, 9.1, 1.4, [9, 12, 15], null, [["ATC_RAT_PIT_D", 0.0052, 0.0045], ["ATC_RAT_PIT_P", 0.11, 0.1]]),
             flight("2026-11-13 16:02:40", 5.4, 8.2, 9.3, 1.9, [14, 31, 22], 32, [["INS_HNTCH_MODE", 1, 3], ["INS_HNTCH_REF", 0, 1], ["INS_GYRO_FILTER", 20, 75]], true, true),
             flight("2026-11-13 11:47:12", 4.2, 8.0, 9.0, 3.6, [18, 45, 35], 32, [["INS_LOG_BAT_MASK", 0, 1], ["INS_RAW_LOG_OPT", 0, 9]]),
             flight("2026-11-12 18:30:00", 2.1, 12.5, null, null, [], null, [], false),
-          ],
+          ]),
         },
         {
           id: "0035003D4B564E0C20204232",
@@ -293,7 +297,7 @@
           named: !!names["0035003D4B564E0C20204232"],
           board: "MatekH7A3",
           connected: false,
-          flights: [flight("2026-05-17 11:58:47", 6.4, 4.8, 8.7, 2.1, [17.7, 45.4, 35], 32, [], true, true)],
+          flights: numbered([flight("2026-05-17 11:58:47", 6.4, 4.8, 8.7, 2.1, [17.7, 45.4, 35], 32, [], true, true)]),
         },
       ];
     },

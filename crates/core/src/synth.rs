@@ -221,8 +221,10 @@ pub fn sample_flight(preset: Preset) -> Vec<u8> {
     w.write(msg, &[us(0.5), V::S("Frame: QUAD/X")]);
 
     let log_bitmask = if ready { DEFAULT_LOG_BITMASK | 1 | (1 << 12) } else { DEFAULT_LOG_BITMASK };
-    let params: [(&str, f64); 8] = [
+    let params: [(&str, f64); 9] = [
         ("LOG_BITMASK", log_bitmask as f64),
+        // The ready flight is the later one: logging was fixed after a boot.
+        ("STAT_BOOTCNT", if ready { 12.0 } else { 11.0 }),
         ("INS_RAW_LOG_OPT", if ready { 9.0 } else { 0.0 }),
         ("INS_LOG_BAT_MASK", 0.0),
         ("INS_LOG_BAT_OPT", 0.0),

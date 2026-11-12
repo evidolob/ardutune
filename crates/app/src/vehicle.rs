@@ -221,7 +221,13 @@ fn log_list(slot: &mut Option<Connected>) -> CmdResult<Vec<LogView>> {
     Ok(entries
         .iter()
         .filter(|e| e.size > 0)
-        .map(|e| LogView { id: e.id, size_mb: e.size as f64 / 1e6, date: (e.time_utc > 0).then(|| date_time(e.time_utc as u64)) })
+        // The flight controller's clock: wrong until GPS had a fix, so
+        // dates before 2015 or in the future are left out.
+        .map(|e| LogView {
+            id: e.id,
+            size_mb: e.size as f64 / 1e6,
+            date: ardutune_core::history::plausible_time(i64::from(e.time_utc), now() as i64).then(|| date_time(e.time_utc as u64)),
+        })
         .collect())
 }
 
@@ -275,10 +281,14 @@ pub async fn download_vehicle_log<R: Runtime>(app: AppHandle<R>, id: u16) -> Cmd
         // The vehicle's name keeps logs of several vehicles apart (each
         // numbers its logs from 1); the log itself also records the ID.
         let who = connected(&mut slot)?.drone.as_ref().map(|d| format!("_{}", backups::slug(&d.label()))).unwrap_or_default();
-        let name = if entry.time_utc > 0 {
-            format!("log_{}_{}{who}.bin", entry.id, file_stamp(entry.time_utc as u64))
-        } else {
-            format!("log_{}_downloaded-{}{who}.bin", entry.id, file_stamp(now()))
+        // No date: the flight controller's clock is only right after a GPS
+        // fix. The power-up count logged inside tells flights apart instead
+        // (log numbers restart after erasing), and downloading the same log
+        // again replaces the copy.
+        let boot = ardutune_core::log::Log::from_bytes(&data).param("STAT_BOOTCNT").filter(|b| *b > 0.0);
+        let name = match boot {
+            Some(b) => format!("log_{}_boot{}{who}.bin", entry.id, b as u32),
+            None => format!("log_{}_downloaded-{}{who}.bin", entry.id, file_stamp(now())),
         };
         let path = dir.join(name);
         std::fs::write(&path, data).map_err(|e| format!("writing {}: {e}", path.display()))?;
