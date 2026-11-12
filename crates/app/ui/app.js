@@ -2195,7 +2195,7 @@ function modal() {
           <p class="muted">${q ? `${list.length} match${list.length === 1 ? "" : "es"}` : "Common functions; search for any of ArduPilot's switch functions."}</p>
           <div class="optlist">${list.map(([val, name]) => `<button class="opt" data-action="rcPick" data-value="${val}" data-name="${esc(name)}">${esc(name)} <span class="muted">${val}</span></button>`).join("")}</div>
           <div class="actions"><button class="btn" data-action="closeModal">Cancel</button></div>`
-        : `<p><b>${esc(m.option[1])}</b> (RCn_OPTION = ${m.option[0]}) <button class="link" data-action="rcUnpick">change</button></p>
+        : `<p><b>${esc(m.option[1])}</b> (RC${m.ch ?? "n"}_OPTION = ${m.option[0]}) <button class="link" data-action="rcUnpick">change</button></p>
           ${
             m.ch
               ? `<p>On channel ${m.ch}.</p><div class="actions"><button class="btn primary" data-action="rcAssignChannel" data-ch="${m.ch}">Continue…</button><button class="btn" data-action="closeModal">Cancel</button></div>`
