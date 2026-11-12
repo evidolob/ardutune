@@ -88,6 +88,25 @@ pub fn assign(param: impl Fn(&str) -> Option<f64>, ch: u8, option: f64) -> Resul
     Ok(change(p, &format!("RC{ch}_OPTION"), option, reason).into_iter().collect())
 }
 
+/// Two functions on one three-position switch, which the transmitter splits
+/// over two channels: `up` on channel `a` (high with the switch up), `down`
+/// on channel `b` (high with the switch down); the middle leaves both low.
+pub fn split(param: impl Fn(&str) -> Option<f64>, (a, up): (u8, f64), (b, down): (u8, f64)) -> Result<Vec<ParamChange>, String> {
+    let p: Param = &param;
+    if a == b {
+        return Err("The two positions need two different channels.".to_owned());
+    }
+    let mut out = Vec::new();
+    for (ch, option, pos) in [(a, up, "up"), (b, down, "down")] {
+        if let Some(why) = taken(p, ch, option) {
+            return Err(why);
+        }
+        let reason = format!("Switch {pos} (channel {ch} high): {}", option_name(option));
+        out.extend(change(p, &format!("RC{ch}_OPTION"), option, reason));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +149,17 @@ mod tests {
         // Removing a function.
         let off = assign(|n: &str| m.get(n).copied(), 7, 0.0).unwrap();
         assert_eq!((off[0].value, off[0].reason.as_str()), (0.0, "Channel 7 no longer does \"GPS Disable\""));
+    }
+
+    #[test]
+    fn three_position_split() {
+        let m = kakute();
+        let p = |n: &str| m.get(n).copied();
+        let c = split(p, (7, 4.0), (8, GPS_DISABLE)).unwrap();
+        let got: Vec<(&str, f64)> = c.iter().map(|c| (c.name.as_str(), c.value)).collect();
+        assert_eq!(got, [("RC7_OPTION", 4.0), ("RC8_OPTION", 65.0)]);
+        assert!(c[0].reason.starts_with("Switch up (channel 7 high)"));
+        assert!(split(p, (7, 4.0), (7, 65.0)).is_err());
+        assert!(split(p, (7, 4.0), (5, 65.0)).unwrap_err().contains("already does"));
     }
 }

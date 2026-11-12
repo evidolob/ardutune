@@ -22,6 +22,14 @@ const NAV = [
 /** Rows shown at once in the parameter list; refine the search for more. */
 const PARAM_ROWS = 300;
 
+function safeGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 const state = {
   view: "welcome",
   log: null, // overview of the open log
@@ -36,7 +44,8 @@ const state = {
   arming: null, // latest pre-arm check report
   setup: null, // latest setup guide
   compass: { cal: null, running: false }, // compass calibration progress
-  rc: { status: null, choices: null, polling: false, showAll: false, modes: {} }, // RC channels page; modes: staged FLTMODEn changes
+  // RC channels page; modes: staged FLTMODEn changes; seen: per channel {lo, hi, vals} since the page opened
+  rc: { status: null, choices: null, polling: false, showAll: false, modes: {}, seen: {}, stickMode: Number(safeGet("ardutune.stickMode")) === 1 ? 1 : 2 },
   motors: { layout: null, propsOff: false, throttle: 7, seen: [], verdict: null, spinning: null }, // motor test
   tune: { prop: "", cells: null, chemistry: null, pack: null, result: null }, // initial tune inputs and result
   ptable: null, // full parameter list from the vehicle
@@ -426,7 +435,7 @@ async function pollRc() {
     while (state.view === "rc" && state.vehicle) {
       const m = state.modal;
       // Leave the link to a write or a switch search.
-      if (state.vehicleBusy || ["planning", "writing", "switchListening", "rcListening"].includes(m?.stage)) {
+      if (state.vehicleBusy || ["planning", "writing", "switchListening", "rcListening", "rcKnobListening"].includes(m?.stage)) {
         await new Promise((r) => setTimeout(r, 300));
         continue;
       }
@@ -440,7 +449,21 @@ async function pollRc() {
         }
         state.modal = { ...m, captured: cap };
       }
-      set({ rc: { ...state.rc, status } });
+      const seen = { ...state.rc.seen };
+      for (const [ch, lo, hi] of status.ranges) {
+        if (!lo) continue;
+        const s = seen[ch] ?? { lo, hi, vals: new Set() };
+        const vals = new Set(s.vals);
+        for (const x of [lo, hi]) vals.add(Math.round(x / 8));
+        seen[ch] = { lo: Math.min(s.lo, lo), hi: Math.max(s.hi, hi), vals };
+      }
+      if (m?.stage === "rcSplit" && state.modal === m) {
+        const val = (ch) => status.view.channels[Number(ch) - 1]?.value ?? 0;
+        const [a, b] = [val(m.a), val(m.b)];
+        const pos = a > 1800 && b < 1200 ? "up" : a < 1200 && b < 1200 ? "mid" : b > 1800 && a < 1200 ? "down" : null;
+        if (pos && !m.checked[pos]) state.modal = { ...m, checked: { ...m.checked, [pos]: true } };
+      }
+      set({ rc: { ...state.rc, status, seen } });
     }
   } catch (e) {
     toast(e);
@@ -458,6 +481,56 @@ async function detectRcSwitch() {
   } catch (e) {
     set({ modal: { ...m, stage: "rcAssign", error: String(e) } });
   }
+}
+
+/** Free channels that haven't moved, for a transmitter mix; ExpressLRS sends 6-12 in every mode. */
+function quietChannels() {
+  const chans = (state.rc.status?.view.channels ?? []).filter((c) => c.kind === "free" && c.ch > 4 && !rcUsed(c));
+  return [...chans.filter((c) => c.ch >= 6 && c.ch <= 12), ...chans.filter((c) => c.ch < 6 || c.ch > 12)].map((c) => c.ch);
+}
+
+function startSplit() {
+  const [a, b] = quietChannels();
+  set({ modal: { stage: "rcSplit", title: "Two functions on a 3-position switch", up: "", down: "", a: a ?? "", b: b ?? "", sw: "SA", checked: {}, error: null } });
+}
+
+/** Knob defaults: half to one and a half times the gain it tunes. */
+function knobRange(tune) {
+  const st = state.rc.status;
+  const target = state.rc.choices?.tune.find(([v]) => v === Number(tune))?.[2];
+  const now = target ? st?.tuning[target] : null;
+  const round = (x) => Number(x.toPrecision(3));
+  if (now) return { min: round(now * 0.5), max: round(now * 1.5), now, target };
+  return { min: st?.tuning.TUNE_MIN ?? 0, max: st?.tuning.TUNE_MAX ?? 0, now: null, target };
+}
+
+function startKnob(d) {
+  const tune = state.rc.choices?.tune.find(([v]) => v === 4)?.[0] ?? state.rc.choices?.tune[0]?.[0] ?? 4;
+  const r = knobRange(tune);
+  set({ modal: { stage: "rcKnob", title: "Set up a knob", ch: d.ch ? Number(d.ch) : null, func: "219", tune: String(tune), min: String(r.min), max: String(r.max), error: null } });
+}
+
+async function detectKnob() {
+  const m = state.modal;
+  set({ modal: { ...m, stage: "rcKnobListening", error: null } });
+  try {
+    const ch = await invoke("detect_switch", { listenS: 6, option: Number(m.func) });
+    set({ modal: { ...m, stage: "rcKnob", ch } });
+  } catch (e) {
+    set({ modal: { ...m, stage: "rcKnob", error: String(e) } });
+  }
+}
+
+function writeKnob() {
+  const m = state.modal;
+  const name = state.rc.choices?.options.find(([v]) => v === Number(m.func))?.[1] ?? "function";
+  if (m.func === "219") writeChanges(`knob:${m.ch}:${m.tune}:${Number(m.min)}:${Number(m.max)}`, `tuning knob on channel ${m.ch}`);
+  else writeChanges(`switch:${m.ch}:${m.func}`, `"${name}" on channel ${m.ch}`);
+}
+
+function writeSplit() {
+  const m = state.modal;
+  writeChanges(`split:${m.a}:${m.up}:${m.b}:${m.down}`, `two functions on switch ${m.sw}`);
 }
 
 function finishRcCalibration() {
@@ -642,6 +715,21 @@ const actions = {
   rcRemove: (d) => writeChanges(`switch:${d.ch}:0`, `removing "${d.role}" from channel ${d.ch}`),
   rcReverse: (d) => writeValues(`channel ${d.ch} ${d.rev === "true" ? "normal" : "reversed"}`, [[`RC${d.ch}_REVERSED`, d.rev === "true" ? 0 : 1]]),
   rcShowAll: () => set({ rc: { ...state.rc, showAll: !state.rc.showAll } }),
+  rcStickMode: (d) => {
+    try {
+      localStorage.setItem("ardutune.stickMode", d.mode);
+    } catch {}
+    set({ rc: { ...state.rc, stickMode: Number(d.mode) } });
+  },
+  rcSplit: startSplit,
+  writeSplit,
+  rcKnob: startKnob,
+  detectKnob,
+  writeKnob,
+  rcKnobChannel: () => {
+    const ch = Number(document.getElementById("rcknobch")?.value);
+    if (ch) set({ modal: { ...state.modal, ch } });
+  },
   rcWriteModes: () => {
     writeValues("flight modes", Object.entries(state.rc.modes).map(([n, v]) => [n, Number(v)]));
     set({ rc: { ...state.rc, modes: {} } });
@@ -719,6 +807,15 @@ document.addEventListener("change", (e) => {
   const t = e.target;
   if (t.id === "fwbackup" && state.modal) state.modal.backup = t.checked;
   if (t.name === "port") set({ address: t.value });
+  if (t.dataset.mfield && state.modal) {
+    const patch = { [t.dataset.mfield]: t.value };
+    if (["a", "b", "sw"].includes(t.dataset.mfield)) patch.checked = {};
+    if (t.dataset.mfield === "tune") {
+      const r = knobRange(t.value);
+      Object.assign(patch, { min: String(r.min), max: String(r.max) });
+    }
+    set({ modal: { ...state.modal, ...patch } });
+  }
   if (t.dataset.fltmode) set({ rc: { ...state.rc, modes: { ...state.rc.modes, [t.dataset.fltmode]: t.value } } });
   if (t.id === "propsOff") set({ motors: { ...state.motors, propsOff: t.checked } });
   if (t.id === "mthrottle") set({ motors: { ...state.motors, throttle: Number(t.value) } });
@@ -1487,32 +1584,125 @@ function rcBar(c, captured = null) {
   return `<div class="rcbar">${range}${trim}${needle}</div>`;
 }
 
+/** What the page has seen a channel do since it opened. */
+function rcSeen(ch) {
+  return state.rc.seen[ch] ?? { lo: 0, hi: 0, vals: new Set() };
+}
+
+/** A channel that moved since the page opened, or already does something. */
+function rcUsed(c) {
+  const s = rcSeen(c.ch);
+  return c.kind !== "free" || s.hi - s.lo >= 100;
+}
+
+/** A knob or slider: it rests at many values, not just a switch's two or three. */
+function rcIsKnob(c) {
+  if (c.option !== null && (state.rc.choices?.knob_options ?? []).includes(c.option)) return true;
+  const s = rcSeen(c.ch);
+  return s.vals.size >= 6 && s.hi - s.lo >= 200;
+}
+
+/** A stick's deflection, -1..1 (throttle 0..1), as ArduPilot reads it after RCn_REVERSED. */
+function stickAxis(c) {
+  if (!c?.value || !c.min || !c.max) return 0;
+  const v = c.reversed ? c.min + c.max - c.value : c.value;
+  if (c.role === "Throttle") return Math.max(0, Math.min(1, (v - c.min) / (c.max - c.min)));
+  const trim = c.trim ?? (c.min + c.max) / 2;
+  const d = v >= trim ? (v - trim) / (c.max - trim) : (v - trim) / (trim - c.min);
+  return Math.max(-1, Math.min(1, d));
+}
+
+/** One gimbal: x right, y up, both -1..1. */
+function gimbal(id, x, y, xs, ys) {
+  const left = 50 + x * 44;
+  const top = 50 - y * 44;
+  const label = (c) => (c ? `${esc(c.role)} <span class="mono">${c.value ?? "–"}</span>` : "");
+  return `<div class="gimbalbox">
+    <div class="gimbal"><div class="gx"></div><div class="gy"></div><div class="dot" data-anim="${id}" style="left:${left.toFixed(1)}%;top:${top.toFixed(1)}%"></div></div>
+    <div class="glabel">${label(ys)}<br>${label(xs)}</div>
+  </div>`;
+}
+
+function sticksCard(v) {
+  const by = (role) => v.channels.find((c) => c.kind === "stick" && c.role === role);
+  const [roll, pitch, thr, yaw] = ["Roll", "Pitch", "Throttle", "Yaw"].map(by);
+  // Pitch forward is low PWM in ArduPilot; throttle runs bottom to top.
+  const pitchUp = -stickAxis(pitch);
+  const thrUp = stickAxis(thr) * 2 - 1;
+  const mode1 = state.rc.stickMode === 1;
+  const leftG = mode1 ? gimbal("gl", stickAxis(yaw), pitchUp, yaw, pitch) : gimbal("gl", stickAxis(yaw), thrUp, yaw, thr);
+  const rightG = mode1 ? gimbal("gr", stickAxis(roll), thrUp, roll, thr) : gimbal("gr", stickAxis(roll), pitchUp, roll, pitch);
+  const rows = [roll, pitch, thr, yaw]
+    .filter(Boolean)
+    .map(
+      (c) => `<tr><td class="muted">CH ${c.ch}</td><td>${esc(c.role)}${c.reversed ? ` <span class="muted">· reversed</span>` : ""}</td><td class="num mono">${c.value ? `${c.value} µs` : "–"}</td>
+        <td class="num"><button class="btn small" data-action="rcReverse" data-ch="${c.ch}" data-rev="${c.reversed}">${c.reversed ? "Un-reverse" : "Reverse"}</button></td></tr>`,
+    )
+    .join("");
+  return `<div class="card">
+    <h2>Sticks <span class="seg">${[2, 1].map((n) => `<button class="${(state.rc.stickMode ?? 2) === n ? "on" : ""}" data-action="rcStickMode" data-mode="${n}">Mode ${n}</button>`).join("")}</span></h2>
+    <div class="sticks">
+      <div class="gimbals">${leftG}${rightG}</div>
+      <div>
+        <table class="sticktable">${rows}</table>
+        <p class="muted">Move each stick: the dot should follow it. If it goes the other way, reverse that channel. Throttle down should put the dot at the bottom.</p>
+      </div>
+    </div>
+  </div>`;
+}
+
+/** A switch's position as three segments, the active one lit. */
+function switchSegs(c) {
+  const at = c.value ? (c.value < 1200 ? 0 : c.value > 1800 ? 2 : 1) : -1;
+  return `<div class="segs">${["low", "mid", "high"].map((n, i) => `<span class="${i === at ? "on" : ""}">${n}</span>`).join("")}</div>`;
+}
+
+function otherRow(c) {
+  const knob = rcIsKnob(c);
+  const v = state.rc.status.view;
+  let indicator;
+  let role;
+  let actions = "";
+  if (c.kind === "mode") {
+    const active = v.modes.find((m) => m.active);
+    indicator = `<div class="segs six">${v.modes.map((m) => `<span class="${m.active ? "on" : ""}" title="${esc(m.name)}">${m.position}</span>`).join("")}</div>`;
+    role = `${chip("info", "modes")} Flight mode <span class="muted">· ${esc(active?.name ?? "–")}</span>`;
+  } else if (c.kind === "switch") {
+    indicator = knob ? rcBar(c) : switchSegs(c);
+    const at = c.position === "low" ? 0 : c.position === "middle" ? 1 : c.position === "high" ? 2 : -1;
+    const meaning = c.positions
+      ? `<div class="posmeaning">${["Low", "Middle", "High"]
+          .map((n, i) => (c.positions[i] ? `<span class="${i === at ? "now" : ""}">${n}: ${esc(c.positions[i])}</span>` : ""))
+          .filter(Boolean)
+          .join("")}</div>`
+      : "";
+    role = `${chip(knob ? "info" : "pass", knob ? "knob" : "switch")} ${esc(c.role)}${meaning}`;
+    actions = `<button class="btn small" data-action="${knob ? "rcKnob" : "rcAssign"}" data-ch="${c.ch}">Change</button><button class="btn small" data-action="rcRemove" data-ch="${c.ch}" data-role="${esc(c.role)}">Remove</button>`;
+  } else {
+    indicator = knob ? rcBar(c) : switchSegs(c);
+    role = `<span class="muted">${c.value ? (knob ? "Knob, no function" : "No function") : "Not received"}</span>`;
+    actions = c.value ? `<button class="btn small" data-action="${knob ? "rcKnob" : "rcAssign"}" data-ch="${c.ch}">Set function</button>` : "";
+  }
+  return `<div class="swrow ${c.value ? "" : "nosignal"}">
+    <div class="rcch">CH ${c.ch}</div>
+    ${indicator}
+    <div class="rcval">${c.value ? `${c.value} µs` : "–"}</div>
+    <div class="rcrole">${role}</div>
+    <div class="rcact">${actions}</div>
+  </div>`;
+}
+
 function rcView() {
-  const head = `<h1>RC channels</h1><p class="lead">Every radio channel live, and what it does: sticks, the flight mode switch and switch functions. Put a new function on a switch by flipping it, set the flight mode for each switch position, and calibrate the radio.</p>`;
+  const head = `<h1>RC channels</h1><p class="lead">Your sticks, switches and knobs live, and what each one does. Put functions on switches and knobs, set the flight mode for each switch position, and calibrate the radio.</p>`;
   if (!state.vehicle) return head + notConnected("see its radio channels");
   const st = state.rc.status;
   if (!st) return head + busy("Reading the radio…");
   const v = st.view;
   const choices = state.rc.choices;
-  const shown = v.channels.filter((c) => state.rc.showAll || c.value || c.kind !== "free");
-  const kindChip = { stick: chip("info", "stick"), mode: chip("info", "modes"), switch: chip("pass", "switch"), free: "" };
-  const rows = shown
-    .map((c) => {
-      const actions =
-        c.kind === "switch"
-          ? `<button class="link" data-action="rcAssign" data-ch="${c.ch}">Change</button> · <button class="link" data-action="rcRemove" data-ch="${c.ch}" data-role="${esc(c.role)}">Remove</button>`
-          : c.kind === "free" && c.value
-            ? `<button class="link" data-action="rcAssign" data-ch="${c.ch}">Assign…</button>`
-            : "";
-      return `<div class="rcrow ${c.value ? "" : "nosignal"}">
-        <div class="rcch">CH ${c.ch}</div>
-        ${rcBar(c)}
-        <div class="rcval">${c.value ? `${c.value} µs` : "–"}</div>
-        <div class="rcrole">${kindChip[c.kind]} ${esc(c.role || (c.value ? "free" : "not received"))}${c.position ? ` <span class="muted">· ${c.position}</span>` : ""}${c.reversed ? ` <span class="muted">· reversed</span>` : ""}</div>
-        <div class="rcact">${actions}${actions ? " · " : ""}<button class="link" data-action="rcReverse" data-ch="${c.ch}" data-rev="${c.reversed}">${c.reversed ? "Un-reverse" : "Reverse"}</button></div>
-      </div>`;
-    })
-    .join("");
+  const others = v.channels.filter((c) => c.kind !== "stick");
+  const used = others.filter(rcUsed);
+  const unused = others.filter((c) => !rcUsed(c));
+  const shown = state.rc.showAll ? others : used;
   const active = v.modes.find((m) => m.active);
   const modeRows = v.modes
     .map((m) => {
@@ -1524,6 +1714,9 @@ function rcView() {
     })
     .join("");
   const staged = Object.keys(state.rc.modes).length;
+  const hidden = unused.length
+    ? `<p class="muted">${state.rc.showAll ? "" : `${unused.length} more channel${unused.length === 1 ? " hasn't" : "s haven't"} moved since this page opened: flip a switch or turn a knob to bring its channel up here. `}<button class="link" data-action="rcShowAll">${state.rc.showAll ? "Hide channels that haven't moved" : `Show ${unused.length === 1 ? "it" : "them"}`}</button></p>`
+    : "";
   return `${head}
     <div class="stats">
       ${stat("Receiver", v.signal ? chip("pass", "signal") : chip("fail", "no signal"), st.rssi_pct !== null ? `RSSI ${st.rssi_pct}%` : "")}
@@ -1531,13 +1724,16 @@ function rcView() {
     </div>
     ${v.signal ? "" : `<div class="banner warn">No radio input. Turn the transmitter on, and connect the battery if the receiver only gets power from it.</div>`}
     ${v.notes.map((n) => `<div class="banner ${n.status === "fail" ? "fail" : "warn"}"><b>${esc(n.title)}</b> ${esc(n.detail)}</div>`).join("")}
+    ${sticksCard(v)}
     <div class="card">
-      <h2>Channels</h2>
-      <div class="rcrows">${rows}</div>
+      <h2>Switches and knobs</h2>
+      <div class="rcrows">${shown.map(otherRow).join("") || `<p class="muted">No switch has a function yet and none has moved.</p>`}</div>
+      ${hidden}
       <div class="actions">
         <button class="btn primary" data-action="rcAssign" ${v.signal ? "" : "disabled"}>Put a function on a switch…</button>
+        <button class="btn" data-action="rcSplit" ${v.signal ? "" : "disabled"}>Two functions on a 3-position switch…</button>
+        <button class="btn" data-action="rcKnob" ${v.signal ? "" : "disabled"}>Set up a knob…</button>
         <button class="btn" data-action="rcCal" ${v.signal ? "" : "disabled"}>Calibrate the radio…</button>
-        <button class="link" data-action="rcShowAll">${state.rc.showAll ? "Hide unused channels" : "Show all 16 channels"}</button>
       </div>
     </div>
     ${
@@ -2015,6 +2211,79 @@ function modal() {
           <p class="muted">Most functions act when the switch goes high (above 1800 µs); some use three positions. Check the function in ArduPilot's documentation before flying.</p>`;
       break;
     }
+    case "rcSplit": {
+      const opts = state.rc.choices?.options ?? [];
+      const free = (state.rc.status?.view.channels ?? []).filter((c) => c.kind === "free" && c.ch > 4);
+      const fsel = (field) =>
+        `<select data-mfield="${field}"><option value="">Choose a function…</option>${opts.map(([v, n]) => `<option value="${v}" ${String(v) === String(m[field]) ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
+      const csel = (field) => `<select data-mfield="${field}">${free.map((c) => `<option value="${c.ch}" ${String(c.ch) === String(m[field]) ? "selected" : ""}>channel ${c.ch}</option>`).join("")}</select>`;
+      const chans = state.rc.status?.view.channels ?? [];
+      const val = (ch) => chans[Number(ch) - 1]?.value ?? null;
+      const tick = (k, label) => `<li class="${m.checked[k] ? "ok" : ""}">${m.checked[k] ? "✓" : "○"} ${label}</li>`;
+      const sw = esc(m.sw || "SA");
+      const done = m.checked.up && m.checked.mid && m.checked.down;
+      const ready = m.up && m.down && m.a && m.b && m.a !== m.b;
+      body = `<p>ArduPilot gives each channel one function. To get a different function at each end of a 3-position switch, the transmitter turns the switch into two channels: one goes high with the switch up, the other with it down. The middle leaves both off.</p>
+        <div class="form">
+          <label>Switch up</label><div>${fsel("up")} on ${csel("a")}</div>
+          <label>Switch down</label><div>${fsel("down")} on ${csel("b")}</div>
+          <label>Transmitter switch</label><div><input type="text" data-mfield="sw" value="${sw}" maxlength="4" style="width:70px" spellcheck="false"> <span class="muted">its name on the radio, e.g. SA, SB, SC</span></div>
+        </div>
+        ${m.a === m.b && m.a ? `<div class="banner warn">Choose two different channels.</div>` : ""}
+        <h3>1. On the transmitter (EdgeTX or OpenTX), model's MIXES page</h3>
+        <ol class="recipe">
+          <li><b>CH${esc(m.a)}</b>: Source <b>MAX</b>, Weight <b>−100</b>. Add a second line: Source <b>MAX</b>, Weight <b>+100</b>, Switch <b>${sw}↑</b>, Multiplex <b>REPLACE</b>.</li>
+          <li><b>CH${esc(m.b)}</b>: the same, with Switch <b>${sw}↓</b>.</li>
+        </ol>
+        <p class="muted">With ExpressLRS, use channels 6–12: channels 13–16 are only sent in a 16-channel switch mode.</p>
+        <h3>2. Check it: move the switch through all three positions</h3>
+        <ul class="ticks">${tick("up", `Up: CH${esc(m.a)} high, CH${esc(m.b)} low`)}${tick("mid", "Middle: both low")}${tick("down", `Down: CH${esc(m.b)} high, CH${esc(m.a)} low`)}</ul>
+        <p class="muted mono">CH${esc(m.a)} ${val(m.a) ?? "–"} µs · CH${esc(m.b)} ${val(m.b) ?? "–"} µs</p>
+        ${m.error ? `<div class="banner warn">${esc(m.error)}</div>` : ""}
+        <div class="actions">
+          <button class="btn primary" data-action="writeSplit" ${ready && done ? "" : "disabled"}>Write both functions…</button>
+          ${ready && !done ? `<button class="link" data-action="writeSplit">Write without checking</button>` : ""}
+          <button class="btn" data-action="closeModal">Cancel</button>
+        </div>`;
+      break;
+    }
+    case "rcKnob":
+    case "rcKnobListening": {
+      const listening = m.stage === "rcKnobListening";
+      const choices = state.rc.choices;
+      const name = (v) => choices?.options.find(([o]) => o === v)?.[1] ?? `option ${v}`;
+      const funcs = (choices?.knob_options ?? [219]).map((v) => [v, v === 219 ? "Tune a gain in flight (Transmitter Tuning)" : `Camera ${name(v)}`]);
+      const free = (state.rc.status?.view.channels ?? []).filter((c) => c.kind === "free" && c.ch > 4);
+      const r = knobRange(m.tune);
+      const valid = m.func !== "219" || (Number(m.min) < Number(m.max) && m.min !== "" && m.max !== "");
+      body = `<div class="form">
+          <label>The knob</label><div>${
+            m.ch
+              ? `channel ${m.ch} <button class="link" data-action="rcKnob">change</button>`
+              : `<button class="btn" data-action="detectKnob" ${listening ? "disabled" : ""}>Find it</button> <span class="muted">turn it end to end within 6 s</span>${free.length ? ` <span class="muted">or</span> <select id="rcknobch">${free.map((c) => `<option value="${c.ch}">channel ${c.ch}</option>`).join("")}</select> <button class="btn" data-action="rcKnobChannel" ${listening ? "disabled" : ""}>Use it</button>` : ""}`
+          }</div>
+          <label>Does</label><div><select data-mfield="func">${funcs.map(([v, n]) => `<option value="${v}" ${String(v) === m.func ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+          ${
+            m.func === "219"
+              ? `<label>Tunes</label><div><select data-mfield="tune">${(choices?.tune ?? []).map(([v, n]) => `<option value="${v}" ${String(v) === m.tune ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>${r.target ? ` <span class="muted mono">${esc(r.target)} = ${fmt(r.now)}</span>` : ""}</div>
+                <label>Knob down</label><div><input type="number" step="any" data-mfield="min" value="${esc(m.min)}" style="width:110px"></div>
+                <label>Knob up</label><div><input type="number" step="any" data-mfield="max" value="${esc(m.max)}" style="width:110px"></div>`
+              : ""
+          }
+        </div>
+        ${listening ? busy("Turn the knob now…") : ""}
+        ${m.error ? `<div class="banner warn">${esc(m.error)}</div>` : ""}
+        ${
+          m.func === "219"
+            ? `<p class="muted">In flight the knob sets the gain anywhere between these two values, so start with a narrow range around the current value. After landing, read the value it was at on the Parameters page, then remove the knob.</p>`
+            : `<p class="muted">The knob points the camera mount on that axis. The mount needs to be set up first (MNT1_TYPE).</p>`
+        }
+        <div class="actions">
+          <button class="btn primary" data-action="writeKnob" ${m.ch && valid && !listening ? "" : "disabled"}>Continue…</button>
+          <button class="btn" data-action="closeModal" ${listening ? "disabled" : ""}>Cancel</button>
+        </div>`;
+      break;
+    }
     case "rcCalStart":
       body = `<p>ArduTune records the lowest and highest value of every channel while you move the sticks and switches, then the centre of each stick.</p>
         <ul class="plain"><li>Remove the propellers or disconnect the motors' battery: nothing arms, but be safe.</li><li>Turn the transmitter on and set its trims to centre.</li></ul>
@@ -2168,11 +2437,30 @@ function put(sel, html) {
   }
 }
 
+/** Glides gimbal dots from where they were drawn last to where they are now. */
+const dotsAt = {};
+function animateDots() {
+  for (const el of document.querySelectorAll("[data-anim]")) {
+    const id = el.dataset.anim;
+    const to = [el.style.left, el.style.top];
+    const from = dotsAt[id];
+    dotsAt[id] = to;
+    if (!from || (from[0] === to[0] && from[1] === to[1]) || el.dataset.placed) continue;
+    el.dataset.placed = "1";
+    el.style.transition = "none";
+    [el.style.left, el.style.top] = from;
+    void el.offsetWidth;
+    el.style.transition = "";
+    [el.style.left, el.style.top] = to;
+  }
+}
+
 function render() {
   const t = state.toast;
   put("header", header());
   put("nav", nav());
   put("main", content());
+  animateDots();
   put(
     "#overlay",
     modal() + (t ? `<div class="toast" data-action="closeToast" style="${t.kind === "info" ? "background:var(--info-bg);color:var(--info)" : ""}">${esc(t.text)}</div>` : ""),

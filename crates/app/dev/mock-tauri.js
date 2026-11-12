@@ -171,19 +171,23 @@
     reboot: async () => (connected = false),
     rc_choices: async () => ({
       modes: [[0, "Stabilize"], [1, "Acro"], [2, "AltHold"], [3, "Auto"], [5, "Loiter"], [6, "RTL"], [9, "Land"], [16, "PosHold"]],
-      options: [[4, "RTL"], [17, "AutoTune Mode"], [31, "Motor Emergency Stop"], [41, "ArmDisarm (4.1 and lower)"], [65, "GPS Disable"], [9, "Camera Trigger"], [153, "ArmDisarm (4.2 and higher)"], [90, "EKF Source Set"]],
+      options: [[4, "RTL"], [17, "AUTOTUNE Mode"], [31, "Motor Emergency Stop"], [65, "GPS Disable"], [9, "Camera Trigger"], [153, "ArmDisarm"], [90, "EKF Source Set"], [212, "Mount1 Roll"], [213, "Mount1 Pitch"], [214, "Mount1 Yaw"], [219, "Transmitter Tuning"]],
+      tune: [[1, "Stab Roll/Pitch kP", "ATC_ANG_RLL_P"], [4, "Rate Roll/Pitch kP", "ATC_RAT_RLL_P"], [5, "Rate Roll/Pitch kI", "ATC_RAT_RLL_I"], [21, "Rate Roll/Pitch kD", "ATC_RAT_RLL_D"], [6, "Rate Yaw kP", "ATC_RAT_YAW_P"], [38, "Declination", null]],
+      knob_options: [219, 212, 213, 214],
     }),
     rc_status: async () => {
       await sleep(250);
       const t = Date.now() / 1000;
       const wave = (f, a = 450) => Math.round(1500 + a * Math.sin(t * f));
-      const values = [wave(0.9), wave(0.7), Math.round(1250 + 250 * Math.sin(t * 0.5)), wave(1.1, 200), 999, 1550, Math.sin(t * 0.3) > 0 ? 2011 : 999, 1500];
-      const roles = [["stick", "Roll"], ["stick", "Pitch"], ["stick", "Throttle"], ["stick", "Yaw"], ["switch", "ArmDisarm (4.2 and higher)", 153], ["mode", "Flight mode"], ["free", ""], ["free", ""]];
+      const sw3 = Math.floor(t / 2) % 3; // a 3-position switch split over channels 7 and 8
+      const values = [wave(0.9), wave(0.7), Math.round(1250 + 250 * Math.sin(t * 0.5)), wave(1.1, 200), 999, 1550, sw3 === 0 ? 2011 : 988, sw3 === 2 ? 2011 : 988, 999, 999, wave(0.4, 480), 1500, 880, 880, 2011, 2011];
+      const roles = [["stick", "Roll"], ["stick", "Pitch"], ["stick", "Throttle"], ["stick", "Yaw"], ["switch", "ArmDisarm", 153], ["mode", "Flight mode"], ["free", ""], ["free", ""]];
+      const positions = { 153: ["disarm", "no change", "arm"] };
       const channels = Array.from({ length: 16 }, (_, i) => {
         const [kind, role, option] = roles[i] ?? ["free", ""];
         const value = values[i] ?? null;
         const position = kind === "switch" && value ? (value < 1200 ? "low" : value > 1800 ? "high" : "middle") : null;
-        return { ch: i + 1, value, min: i < 8 ? 988 : null, max: i < 8 ? 2011 : null, trim: i < 8 ? (i === 2 ? 988 : 1500) : null, reversed: false, kind, role, option: option ?? null, position };
+        return { ch: i + 1, value, min: i < 8 ? 988 : null, max: i < 8 ? 2011 : null, trim: i < 8 ? (i === 2 ? 988 : 1500) : null, reversed: i === 1, kind, role, option: option ?? null, position, positions: positions[option] ?? null };
       });
       const modes = [[0, "Stabilize"], [0, "Stabilize"], [2, "AltHold"], [2, "AltHold"], [5, "Loiter"], [5, "Loiter"]].map(([mode, name], i) => ({
         position: i + 1,
@@ -192,7 +196,7 @@
         name,
         active: i === 3,
       }));
-      return { view: { channels, mode_channel: 6, modes, notes: [], signal: true }, ranges: channels.map((c) => [c.ch, c.value ?? 0, c.value ?? 0]), rssi_pct: 87 };
+      return { view: { channels, mode_channel: 6, modes, notes: [], signal: true }, ranges: channels.map((c) => [c.ch, c.value ?? 0, c.value ?? 0]), rssi_pct: 87, tuning: { TUNE: 0, TUNE_MIN: 0, TUNE_MAX: 0, ATC_RAT_RLL_P: 0.135, ATC_RAT_RLL_I: 0.135, ATC_RAT_RLL_D: 0.0036, ATC_ANG_RLL_P: 4.5, ATC_RAT_YAW_P: 0.18 } };
     },
     detect_switch: async () => {
       await sleep(2500);

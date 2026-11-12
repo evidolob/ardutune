@@ -430,6 +430,20 @@ fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Opt
         let changes = switch::assign(|n| live.get(n).map(|p| p.value as f64), ch, option)?;
         return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
     }
+    // Two functions on one three-position switch: "split:<a>:<up>:<b>:<down>".
+    if let Some(rest) = source.strip_prefix("split:") {
+        let n: Vec<f64> = rest.split(':').map(|x| x.parse::<f64>().map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
+        let [a, up, b, down] = n[..] else { return Err("bad split source".into()) };
+        let changes = switch::split(|n| live.get(n).map(|p| p.value as f64), (a as u8, up), (b as u8, down))?;
+        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
+    }
+    // A tuning knob: "knob:<channel>:<TUNE>:<min>:<max>".
+    if let Some(rest) = source.strip_prefix("knob:") {
+        let n: Vec<f64> = rest.split(':').map(|x| x.parse::<f64>().map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
+        let [ch, tune, min, max] = n[..] else { return Err("bad knob source".into()) };
+        let changes = rc::tuning_knob(|n| live.get(n).map(|p| p.value as f64), ch as u8, tune, min, max)?;
+        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
+    }
     if let Some(step) = source.strip_prefix("setup:") {
         return setup_changes(live, step);
     }
@@ -562,6 +576,8 @@ pub struct RcStatus {
     ranges: Vec<(u8, u16, u16)>,
     /// Signal strength in percent, when the receiver reports it.
     rssi_pct: Option<u8>,
+    /// TUNE, TUNE_MIN, TUNE_MAX and the gains a tuning knob can set, for its defaults.
+    tuning: std::collections::BTreeMap<String, f64>,
 }
 
 /// The RC channels now: values, what each does, switch positions, modes.
@@ -575,7 +591,9 @@ pub async fn rc_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<RcStatus> {
         let c = connected(&mut slot)?;
         let view = rc::view(|n| c.params.get(n).map(|p| p.value as f64), &sample.last);
         let rssi_pct = sample.rssi.map(|r| ((u32::from(r) * 100 + 127) / 254) as u8);
-        Ok(RcStatus { view, ranges: sample.ranges, rssi_pct })
+        let names = ["TUNE", "TUNE_MIN", "TUNE_MAX"].into_iter().chain((1..=61).filter_map(|t| rc::tune_target(f64::from(t))));
+        let tuning = names.filter_map(|n| c.params.get(n).map(|p| (n.to_owned(), p.value as f64))).collect();
+        Ok(RcStatus { view, ranges: sample.ranges, rssi_pct, tuning })
     })
     .await
 }
@@ -584,13 +602,17 @@ pub async fn rc_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<RcStatus> {
 pub struct RcChoices {
     modes: Vec<(f64, String)>,
     options: Vec<(f64, String)>,
+    /// TUNE choices for a tuning knob, with the parameter each one sets when known.
+    tune: Vec<(f64, String, Option<&'static str>)>,
+    knob_options: Vec<f64>,
 }
 
 /// Flight modes and switch functions to choose from.
 #[tauri::command]
 pub fn rc_choices() -> RcChoices {
-    let (modes, options) = rc::choices();
-    RcChoices { modes, options }
+    let (modes, options, tune) = rc::choices();
+    let tune = tune.into_iter().map(|(v, n)| (v, n, rc::tune_target(v))).collect();
+    RcChoices { modes, options, tune, knob_options: rc::KNOB_OPTIONS.to_vec() }
 }
 
 /// Watches the radio for `listen_s` seconds and returns the channel of the

@@ -51,12 +51,15 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   every compass with live progress and direction coverage, explains
   failures (field strength, orientation, fit, large offsets) and saves the
   result. `ardutune compass`.
-- RC channels: channels 1-16 live with their calibrated range and trim,
-  what each does (sticks, flight mode, switch functions by name) and the
-  switch position now; flight mode per switch position; put any of
-  ArduPilot's switch functions on a switch by flipping it (or on a free
-  channel), remove or reverse; radio calibration from captured ranges with
-  the failsafe value kept below the lowest throttle.
+- RC channels: the sticks as two animated gimbals (mode 1 or 2) to check
+  directions, with reversing; switches and knobs with their position now and
+  what the function does low, in the middle and high; channels that haven't
+  moved stay hidden until you flip a switch or turn a knob. Put any of
+  ArduPilot's switch functions on a switch by flipping it; two functions on
+  one 3-position switch (with the transmitter mix to set up and a live check
+  of all three positions); a knob for in-flight tuning of a gain between two
+  values, or for a camera mount axis; flight mode per switch position; radio
+  calibration with the failsafe value kept below the lowest throttle.
 - Initial tune: starting filter, acceleration-limit, thrust-curve and battery
   values for a new build from its prop size and pack (the formulas of
   ArduPilot's initial tune parameters calculator, with ArduCopter 4.7 names),

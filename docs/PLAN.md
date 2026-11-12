@@ -282,8 +282,11 @@ functions on switches.
 
 Done: RC channels screen (live bars, roles, switch positions, flight modes
 per position, assign by flipping or picking a channel, remove, reverse,
-radio calibration). Not yet: three-position switch behaviour per function,
-a CLI view.
+radio calibration). Then: sticks as animated gimbals, switches and knobs
+apart, what each function does per switch position, two functions on one
+3-position switch (transmitter mix recipe plus a live check), knobs for
+transmitter tuning (`TUNE`, `TUNE_MIN/MAX`) and mount axes, channels that
+haven't moved hidden. Not yet: a CLI view.
 
 ### Basic vehicle configuration
 
