@@ -396,7 +396,7 @@ fn spoofing(s: &Snapshot, param: &impl Fn(&str) -> Option<f64>) -> Option<Proble
 
 /// Turning the GPS off, and failsafes that land instead of flying to a
 /// home position that would be false.
-fn spoofing_changes(param: &impl Fn(&str) -> Option<f64>) -> Vec<ParamChange> {
+pub(crate) fn spoofing_changes(param: &impl Fn(&str) -> Option<f64>) -> Vec<ParamChange> {
     let p: crate::setup::Param = param;
     let mut out = Vec::new();
     // GPS_TYPE before ArduPilot 4.6.

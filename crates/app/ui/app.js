@@ -15,7 +15,7 @@ const LOG_VIEWS = [
 /** The sidebar, in the order a build goes: set it up, configure it, tune it from flight logs, and find out what's wrong. */
 const NAV = [
   ["Initial setup", [["setup", "Setup guide"], ["firmware", "Firmware"], ["motors", "Motor test"], ["compass", "Compass calibration"], ["tune", "Initial tune"]]],
-  ["Configuration", [["rc", "RC channels"], ["allparams", "Parameters"], ["params", "Backups"]]],
+  ["Configuration", [["rc", "RC channels"], ["gps", "GPS"], ["allparams", "Parameters"], ["params", "Backups"]]],
   ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], "log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
   ["Troubleshoot", [["prearm", "Pre-arm check"], ["diagnose", "Crash diagnosis"]]],
 ];
@@ -45,6 +45,7 @@ const state = {
   setup: null, // latest setup guide
   compass: { cal: null, running: false }, // compass calibration progress
   // RC channels page; modes: staged FLTMODEn changes; seen: per channel {lo, hi, vals} since the page opened
+  gps: { page: null, polling: false, staged: {}, showSettings: false }, // GPS page; staged: setting edits
   rc: { status: null, choices: null, polling: false, showAll: false, modes: {}, seen: {}, stickMode: Number(safeGet("ardutune.stickMode")) === 1 ? 1 : 2 },
   motors: { layout: null, propsOff: false, throttle: 7, seen: [], verdict: null, spinning: null }, // motor test
   tune: { prop: "", cells: null, chemistry: null, pack: null, result: null }, // initial tune inputs and result
@@ -125,6 +126,7 @@ function go(view) {
   if (view === "motors" && state.vehicle && !state.motors.layout && !state.vehicleBusy) loadMotors();
   if (view === "tune" && state.vehicle && !state.tune.pack && !state.vehicleBusy) loadPack();
   if (view === "rc" && state.vehicle) pollRc();
+  if (view === "gps" && state.vehicle) pollGps();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
   if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
 }
@@ -426,6 +428,26 @@ async function writeValues(title, values) {
   }
 }
 
+/** Keeps the GPS page live while it is open. */
+async function pollGps() {
+  if (state.gps.polling) return;
+  state.gps.polling = true;
+  try {
+    while (state.view === "gps" && state.vehicle) {
+      if (state.vehicleBusy || ["planning", "writing", "switchListening"].includes(state.modal?.stage)) {
+        await new Promise((r) => setTimeout(r, 300));
+        continue;
+      }
+      const page = await invoke("gps_status");
+      set({ gps: { ...state.gps, page } });
+    }
+  } catch (e) {
+    toast(e);
+  } finally {
+    state.gps.polling = false;
+  }
+}
+
 /** Keeps the RC channels page live while it is open. */
 async function pollRc() {
   if (state.rc.polling) return;
@@ -715,6 +737,20 @@ const actions = {
   rcRemove: (d) => writeChanges(`switch:${d.ch}:0`, `removing "${d.role}" from channel ${d.ch}`),
   rcReverse: (d) => writeValues(`channel ${d.ch} ${d.rev === "true" ? "normal" : "reversed"}`, [[`RC${d.ch}_REVERSED`, d.rev === "true" ? 0 : 1]]),
   rcShowAll: () => set({ rc: { ...state.rc, showAll: !state.rc.showAll } }),
+  gpsSettings: () => set({ gps: { ...state.gps, showSettings: !state.gps.showSettings } }),
+  gpsDiscard: () => set({ gps: { ...state.gps, staged: {} } }),
+  gpsWrite: () => {
+    writeValues("GPS settings", Object.entries(state.gps.staged).map(([n, v]) => [n, Number(v)]));
+    set({ gps: { ...state.gps, staged: {} } });
+  },
+  gpsAccept: async () => {
+    try {
+      await invoke("gps_accept_position");
+      toast("ArduTune now compares with this position.", "info");
+    } catch (e) {
+      toast(e);
+    }
+  },
   rcStickMode: (d) => {
     try {
       localStorage.setItem("ardutune.stickMode", d.mode);
@@ -815,6 +851,16 @@ document.addEventListener("change", (e) => {
       Object.assign(patch, { min: String(r.min), max: String(r.max) });
     }
     set({ modal: { ...state.modal, ...patch } });
+  }
+  if (t.dataset.gset || t.dataset.gbits) {
+    const name = t.dataset.gset ?? t.dataset.gbits;
+    const setting = state.gps.page?.settings.flatMap((g) => g.settings).find((s) => s.name === name);
+    const before = state.gps.staged[name] ?? setting?.value ?? 0;
+    const value = t.dataset.gbits ? (t.checked ? before | (1 << Number(t.dataset.bit)) : before & ~(1 << Number(t.dataset.bit))) : Number(t.value);
+    const staged = { ...state.gps.staged };
+    if (value === setting?.value || (t.dataset.gset && t.value === "")) delete staged[name];
+    else staged[name] = value;
+    set({ gps: { ...state.gps, staged } });
   }
   if (t.dataset.fltmode) set({ rc: { ...state.rc, modes: { ...state.rc.modes, [t.dataset.fltmode]: t.value } } });
   if (t.id === "propsOff") set({ motors: { ...state.motors, propsOff: t.checked } });
@@ -1692,6 +1738,103 @@ function otherRow(c) {
   </div>`;
 }
 
+/** A GPS setting as a form control: a list, ticks for a bitmask, or a number. */
+function gpsSetting(s) {
+  const staged = state.gps.staged[s.name];
+  const value = staged !== undefined ? staged : s.value;
+  if (s.kind === "bits") {
+    const ticks = s.options
+      .map(([bit, name]) => `<label class="tick"><input type="checkbox" data-gbits="${esc(s.name)}" data-bit="${bit}" ${(value & (1 << bit)) !== 0 ? "checked" : ""}> ${esc(name)}</label>`)
+      .join("");
+    return `<div class="ticksrow">${ticks}</div><div class="muted" style="font-size:12px;margin-top:2px">None ticked: the receiver's own default.</div>`;
+  }
+  if (s.kind === "select") {
+    const known = s.options.some(([v]) => v === value);
+    const opts = (known ? s.options : [[value, `${value}`], ...s.options]).map(([v, n]) => `<option value="${v}" ${v === value ? "selected" : ""}>${esc(n)}</option>`).join("");
+    return `<select data-gset="${esc(s.name)}">${opts}</select>`;
+  }
+  const hint = s.options.length ? `<span class="muted">${s.options.map(([v, n]) => `${esc(n)} = ${v}`).join(", ")}</span>` : "";
+  return `<input type="number" step="any" data-gset="${esc(s.name)}" value="${esc(String(value ?? ""))}" style="width:100px"> <span class="muted">${esc(s.unit)}</span> ${hint}`;
+}
+
+function gpsUnit(u) {
+  const row = (label, value) => `<tr><td class="muted">${label}</td><td>${value}</td></tr>`;
+  const fixKind = u.fix_type >= 3 ? "pass" : u.fix_type >= 1 ? "warn" : "fail";
+  const pos = u.position ? `<span class="mono">${u.position[0].toFixed(6)}, ${u.position[1].toFixed(6)}</span> · ${u.position[2].toFixed(0)} m` : "–";
+  return `<div class="card">
+    <h2>GPS ${u.number} ${chip(fixKind, u.fix)}</h2>
+    <table class="kv">
+      ${row("Receiver", `${esc(u.kind ?? "off")}${u.port ? ` <span class="muted">on ${esc(u.port)}</span>` : ""}`)}
+      ${row("Satellites", u.satellites ?? "–")}
+      ${row("Accuracy", u.h_acc !== null ? `${u.h_acc.toFixed(1)} m across${u.v_acc !== null ? `, ${u.v_acc.toFixed(1)} m up and down` : ""}` : "–")}
+      ${row("HDOP", u.hdop !== null ? u.hdop.toFixed(2) : "–")}
+      ${row("Position", pos)}
+      ${row("Speed", u.speed !== null ? `${u.speed.toFixed(1)} m/s${u.course !== null && u.speed > 0.5 ? ` towards ${u.course.toFixed(0)}°` : ""}` : "–")}
+      ${row("Satellite systems", esc(u.constellations.join(", ")))}
+      ${row("Update rate", u.rate_hz ? `${u.rate_hz} Hz` : "–")}
+      ${u.first_fix_s !== null ? row("First fix", `${u.first_fix_s.toFixed(0)} s after power-up`) : ""}
+    </table>
+  </div>`;
+}
+
+function gpsView() {
+  const head = `<h1>GPS</h1><p class="lead">What the GPS sees now, whether it can be trusted, and its settings.</p>`;
+  if (!state.vehicle) return head + notConnected("see its GPS");
+  const pg = state.gps.page;
+  if (!pg) return head + busy("Listening to the GPS…");
+  const u1 = pg.units[0];
+  const kind = (st) => (st === "fail" ? "fail" : st === "warn" ? "warn" : "info");
+  const checks = pg.checks
+    .map((c, i) => {
+      const buttons = [
+        c.changes.length ? `<button class="btn ${c.status === "fail" ? "primary" : ""}" data-action="write" data-source="gps:${i}" data-title="${esc(c.changes.length > 1 ? "GPS fixes" : "GPS fix")}" ${state.vehicleBusy ? "disabled" : ""}>${c.changes.some((x) => /GPS\d?_TYPE2?$/.test(x.name) && x.value === 0) ? "Turn the GPS off…" : "Fix it…"}</button>` : "",
+        c.gps_switch ? `<button class="btn" data-action="askGpsSwitch" ${state.vehicleBusy ? "disabled" : ""}>Put GPS on a switch…</button>` : "",
+        c.accept_position ? `<button class="btn" data-action="gpsAccept">The vehicle really is here</button>` : "",
+      ].join("");
+      return `<div class="banner ${kind(c.status)}"><b>${esc(c.title)}</b> ${esc(c.detail)}${buttons ? `<div class="actions">${buttons}</div>` : ""}</div>`;
+    })
+    .join("");
+  const e = pg.ekf;
+  const ratio = ([name, r]) => {
+    const pct = Math.min(100, (r / 1.2) * 100);
+    const cls = r >= 1 ? "fail" : r >= 0.5 ? "warn" : "pass";
+    return `<div class="ratio"><span>${esc(name)}</span><div class="ratiobar"><div class="${cls}" style="width:${pct}%"></div><div class="limit"></div></div><span class="mono">${r.toFixed(2)}</span></div>`;
+  };
+  const staged = Object.keys(state.gps.staged).length;
+  const settings = pg.settings
+    .map((g) => `<h3>${esc(g.title)}</h3><div class="form gpsform">${g.settings.map((s) => `<label>${esc(s.label)}</label><div>${gpsSetting(s)}</div>`).join("")}</div>`)
+    .join("");
+  return `${head}
+    <div class="stats">
+      ${stat("Fix", u1 ? chip(u1.fix_type >= 3 ? "pass" : u1.fix_type >= 1 ? "warn" : "fail", u1.fix) : chip("info", "GPS off"))}
+      ${stat("Satellites", u1?.satellites ?? "–", u1?.hdop !== null && u1 ? `HDOP ${u1.hdop.toFixed(1)}` : "")}
+      ${stat("Accuracy", u1?.h_acc != null ? `${u1.h_acc.toFixed(1)} m` : "–")}
+      ${stat("EKF", e ? (e.using_gps ? chip("pass", "uses GPS") : chip("warn", "no GPS position")) : "–", e?.glitching ? "GPS glitch" : "")}
+    </div>
+    ${checks}
+    <div class="gpsgrid">
+      ${pg.units.map(gpsUnit).join("")}
+      ${
+        e
+          ? `<div class="card"><h2>EKF's view</h2>
+              <p class="muted" style="margin-top:-4px">How far each sensor is from what the EKF expects. Above 1 (the line) it stops trusting that sensor.</p>
+              ${e.ratios.map(ratio).join("")}
+              ${pg.messages.length ? `<h3>Vehicle says</h3><ul class="plain">${pg.messages.slice(-6).map((m) => `<li><code>${esc(m)}</code></li>`).join("")}</ul>` : ""}
+            </div>`
+          : ""
+      }
+    </div>
+    <div class="card">
+      <h2>Settings <button class="link" data-action="gpsSettings">${state.gps.showSettings ? "hide" : "show"}</button></h2>
+      ${
+        state.gps.showSettings
+          ? `${settings}<p class="muted">Receiver type and satellite system changes apply after a reboot.</p>
+            <div class="actions"><button class="btn primary" data-action="gpsWrite" ${staged && !state.vehicleBusy ? "" : "disabled"}>Write ${staged || ""} change${staged === 1 ? "" : "s"}…</button>${staged ? `<button class="link" data-action="gpsDiscard">discard</button>` : ""}</div>`
+          : ""
+      }
+    </div>`;
+}
+
 function rcView() {
   const head = `<h1>RC channels</h1><p class="lead">Your sticks, switches and knobs live, and what each one does. Put functions on switches and knobs, set the flight mode for each switch position, and calibrate the radio.</p>`;
   if (!state.vehicle) return head + notConnected("see its radio channels");
@@ -2397,6 +2540,8 @@ function content() {
       return tuneView();
     case "rc":
       return rcView();
+    case "gps":
+      return gpsView();
     case "history":
       return historyView();
     case "motors":

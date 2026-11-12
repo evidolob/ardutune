@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, motors, paramdoc, params, rc, setup, switch, tune};
+use ardutune_core::{arming, gps, motors, paramdoc, params, rc, setup, switch, tune};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,17 @@ pub struct Connected {
     pub(crate) drone: Option<Drone>,
     /// The latest pre-arm check, whose fixes can be written.
     pub(crate) last_arming: Option<arming::Report>,
+    /// GPS page: a fix was missing at some point, and the time after power-up
+    /// (s) the first 3D fix then came.
+    pub(crate) gps_fix: GpsFixTiming,
+    /// The latest GPS page, whose fixes can be written.
+    pub(crate) last_gps: Option<gps::Page>,
+}
+
+#[derive(Default)]
+pub(crate) struct GpsFixTiming {
+    pub(crate) saw_no_fix: bool,
+    pub(crate) first_fix_s: Option<f64>,
 }
 
 /// Changes shown to the user and waiting for confirmation. They are planned
@@ -167,7 +178,7 @@ pub async fn connect<R: Runtime>(app: AppHandle<R>, address: String) -> CmdResul
         let mut link = Link::connect(&address, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
         let mut progress = Reporter::new(app, "Reading parameters");
         let params = link.fetch_params(&mut |got, total| progress.update(got, total)).map_err(|e| e.to_string())?;
-        let mut c = Connected { link, params, address, defaults: None, compass_cal: None, drone: None, last_arming: None };
+        let mut c = Connected { link, params, address, defaults: None, compass_cal: None, drone: None, last_arming: None, gps_fix: Default::default(), last_gps: None };
         c.identify(app);
         let info = c.info();
         *slot = Some(c);
@@ -417,6 +428,12 @@ fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Opt
             .flat_map(|p| p.changes.iter().map(|ch| (ch.name.clone(), ch.value, Some(ch.reason.clone()))))
             .collect());
     }
+    // Fixes from the GPS page, by check: "gps:<index>".
+    if let Some(i) = source.strip_prefix("gps:") {
+        let page = c.last_gps.as_ref().ok_or("Open the GPS page first.")?;
+        let check = i.parse::<usize>().ok().and_then(|i| page.checks.get(i)).ok_or("That GPS problem is gone: look at the page again.")?;
+        return Ok(check.changes.iter().map(|ch| (ch.name.clone(), ch.value, Some(ch.reason.clone()))).collect());
+    }
     // The reversed version of the frame layout: "frame:<FRAME_TYPE>".
     if let Some(t) = source.strip_prefix("frame:") {
         let t = t.parse::<i64>().map_err(|e| e.to_string())?;
@@ -594,6 +611,82 @@ pub async fn rc_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<RcStatus> {
         let names = ["TUNE", "TUNE_MIN", "TUNE_MAX"].into_iter().chain((1..=61).filter_map(|t| rc::tune_target(f64::from(t))));
         let tuning = names.filter_map(|n| c.params.get(n).map(|p| (n.to_owned(), p.value as f64))).collect();
         Ok(RcStatus { view, ranges: sample.ranges, rssi_pct, tuning })
+    })
+    .await
+}
+
+/// The GPS page: each GPS live, the EKF's view, checks and settings.
+#[tauri::command]
+pub async fn gps_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<gps::Page> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let r = connected(&mut slot)?.link.gps_sample(Duration::from_millis(600));
+        let sample = check(&mut slot, r)?;
+        let c = connected(&mut slot)?;
+        let fixes: Vec<gps::Fix> = sample
+            .gps
+            .iter()
+            .map(|g| gps::Fix {
+                instance: g.instance,
+                fix_type: g.fix_type,
+                satellites: g.satellites,
+                hdop: g.hdop,
+                speed: g.speed,
+                course: g.course,
+                position: g.position,
+                h_acc: g.h_acc,
+                v_acc: g.v_acc,
+            })
+            .collect();
+        // Time to first fix, when the page saw it arrive.
+        let has_fix = fixes.iter().any(|g| g.instance == 0 && g.fix_type >= 3);
+        if !has_fix {
+            c.gps_fix.saw_no_fix = true;
+        } else if c.gps_fix.saw_no_fix && c.gps_fix.first_fix_s.is_none() {
+            c.gps_fix.first_fix_s = sample.boot_s;
+        }
+        let live = gps::Live {
+            gps: fixes,
+            ekf: sample.ekf.map(|e| gps::Ekf { flags: e.flags, velocity: e.velocity, pos_horiz: e.pos_horiz, pos_vert: e.pos_vert, compass: e.compass }),
+            armed: c.link.vehicle().armed,
+            boot_s: sample.boot_s,
+            first_fix_s: c.gps_fix.first_fix_s,
+            messages: sample.messages,
+            last_known: c.drone.as_ref().and_then(|d| d.last_position.clone()),
+        };
+        let page = gps::page(|n| c.params.get(n).map(|p| p.value as f64), &live);
+        // Remember a trusted position, once it moved (or the day changed).
+        if page.trusted {
+            if let (Some(d), Some((lat, lon, _))) = (&c.drone, live.gps.iter().find(|g| g.fix_type >= 3).and_then(|g| g.position)) {
+                let today = date_time(now())[..10].to_owned();
+                let stale = d.last_position.as_ref().is_none_or(|k| k.when != today || gps::distance_km((k.lat, k.lon), (lat, lon)) > 1.0);
+                if stale {
+                    if let Ok(Some(updated)) = drones::set_position(app, d.key(), Some(gps::Known { lat, lon, when: today })) {
+                        c.drone = Some(updated);
+                    }
+                }
+            }
+        }
+        c.last_gps = Some(page.clone());
+        Ok(page)
+    })
+    .await
+}
+
+/// "The vehicle really is here": the current position becomes the one to
+/// compare with.
+#[tauri::command]
+pub async fn gps_accept_position<R: Runtime>(app: AppHandle<R>) -> CmdResult<()> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let c = connected(&mut slot)?;
+        let d = c.drone.as_ref().ok_or("This flight controller doesn't report a chip ID, so ArduTune can't remember its position.")?;
+        let at = c.last_gps.as_ref().and_then(|p| p.units.iter().find_map(|u| u.position)).ok_or("No GPS position yet.")?;
+        let today = date_time(now())[..10].to_owned();
+        c.drone = drones::set_position(app, d.key(), Some(gps::Known { lat: at.0, lon: at.1, when: today }))?;
+        Ok(())
     })
     .await
 }

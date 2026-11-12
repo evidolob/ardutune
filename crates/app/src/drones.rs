@@ -27,11 +27,14 @@ pub struct Drone {
     pub board: Option<String>,
     /// "YYYY-MM-DD HH:MM:SS" UTC of the last connection.
     pub last_seen: Option<String>,
+    /// Where its GPS was last trusted, to spot a spoofed position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_position: Option<ardutune_core::gps::Known>,
 }
 
 impl Drone {
     pub fn new(uid: Option<String>, serial: Option<String>) -> Self {
-        Drone { uid, serial, name: None, board: None, last_seen: None }
+        Drone { uid, serial, name: None, board: None, last_seen: None, last_position: None }
     }
 
     /// The ID it is filed under: the chip ID, else the banner one.
@@ -78,6 +81,16 @@ fn store<R: Runtime>(app: &AppHandle<R>, drones: &[Drone]) -> CmdResult<()> {
     let path = file(app)?;
     let text = serde_json::to_string_pretty(drones).map_err(|e| e.to_string())?;
     std::fs::write(&path, text).map_err(|e| format!("writing {}: {e}", path.display()))
+}
+
+/// Remembers where a vehicle's GPS was trusted; returns the updated record.
+pub fn set_position<R: Runtime>(app: &AppHandle<R>, key: &str, known: Option<ardutune_core::gps::Known>) -> CmdResult<Option<Drone>> {
+    let mut drones = load(app)?;
+    let Some(d) = drones.iter_mut().find(|d| d.is(key)) else { return Ok(None) };
+    d.last_position = known;
+    let d = d.clone();
+    store(app, &drones)?;
+    Ok(Some(d))
 }
 
 /// The vehicle with this ID (either form).

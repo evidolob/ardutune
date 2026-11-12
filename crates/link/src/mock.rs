@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
     MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, AUTOPILOT_VERSION_DATA, COMMAND_ACK_DATA,
-    FILE_TRANSFER_PROTOCOL_DATA, GPS_RAW_INT_DATA, GpsFixType, HEARTBEAT_DATA, LOG_DATA_DATA, LOG_ENTRY_DATA, MavSeverity,
+    FILE_TRANSFER_PROTOCOL_DATA, EKF_STATUS_REPORT_DATA, EkfStatusFlags, SYSTEM_TIME_DATA, GPS_RAW_INT_DATA, GpsFixType, HEARTBEAT_DATA, LOG_DATA_DATA, LOG_ENTRY_DATA, MavSeverity,
     PARAM_VALUE_DATA, RC_CHANNELS_DATA, STATUSTEXT_DATA, MAG_CAL_PROGRESS_DATA, MAG_CAL_REPORT_DATA, MagCalStatus,
 };
 use mavlink::{MavConnection, MavHeader};
@@ -143,7 +143,7 @@ impl MockState {
             params.insert(format!("COMPASS_OFS_{a}"), (0.0, MAV_PARAM_TYPE_REAL32));
         }
         // GPS, failsafes returning home, an arm switch on 5 and modes on 6.
-        for (n, v) in [("GPS1_TYPE", 1.0), ("FS_THR_ENABLE", 1.0), ("BATT_FS_LOW_ACT", 2.0), ("FLTMODE_CH", 6.0)] {
+        for (n, v) in [("GPS1_TYPE", 1.0), ("GPS1_GNSS_MODE", 0.0), ("GPS1_RATE_MS", 200.0), ("GPS_AUTO_CONFIG", 1.0), ("GPS_HDOP_GOOD", 140.0), ("SERIAL3_PROTOCOL", 5.0), ("SERIAL3_BAUD", 230.0), ("FS_THR_ENABLE", 1.0), ("BATT_FS_LOW_ACT", 2.0), ("FLTMODE_CH", 6.0)] {
             params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_INT8));
         }
         // An uncalibrated radio: ArduPilot's default ranges.
@@ -258,6 +258,7 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
         let _ = conn.send(&MavHeader { system_id: 1, component_id: 1, sequence: seq }, &msg);
     };
     let mut last_heartbeat = Instant::now() - Duration::from_secs(1);
+    let started = Instant::now();
     let mut stream: Option<Stream> = None;
     let mut dropped: BTreeSet<usize> = BTreeSet::new();
 
@@ -277,9 +278,22 @@ fn run(conn: impl MavConnection<MavMessage>, state: Arc<Mutex<MockState>>, stop:
                     lat: (st.gps_motion.1 * 1e7) as i32,
                     lon: (st.gps_motion.2 * 1e7) as i32,
                     alt: 186_000,
+                    h_acc: if fix_type as u8 >= 3 { 1_400 } else { 0 },
+                    v_acc: if fix_type as u8 >= 3 { 2_600 } else { 0 },
                     ..Default::default()
                 }));
             }
+            send(MavMessage::SYSTEM_TIME(SYSTEM_TIME_DATA { time_unix_usec: 0, time_boot_ms: started.elapsed().as_millis() as u32 + 95_000 }));
+            send(MavMessage::EKF_STATUS_REPORT(EKF_STATUS_REPORT_DATA {
+                velocity_variance: 0.12,
+                pos_horiz_variance: 0.08,
+                pos_vert_variance: 0.21,
+                compass_variance: 0.05,
+                terrain_alt_variance: 0.0,
+                // Attitude, velocities, relative and absolute horizontal position, vertical position.
+                flags: EkfStatusFlags::from_bits_truncate(if st.gps.is_some_and(|g| g.0 as u8 >= 3) { 0x3F } else { 0x07 }),
+                ..Default::default()
+            }));
             let rc = st.rc;
             send(MavMessage::RC_CHANNELS(RC_CHANNELS_DATA {
                 chancount: 8,

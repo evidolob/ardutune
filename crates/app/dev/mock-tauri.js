@@ -198,6 +198,48 @@
       }));
       return { view: { channels, mode_channel: 6, modes, notes: [], signal: true }, ranges: channels.map((c) => [c.ch, c.value ?? 0, c.value ?? 0]), rssi_pct: 87, tuning: { TUNE: 0, TUNE_MIN: 0, TUNE_MAX: 0, ATC_RAT_RLL_P: 0.135, ATC_RAT_RLL_I: 0.135, ATC_RAT_RLL_D: 0.0036, ATC_ANG_RLL_P: 4.5, ATC_RAT_YAW_P: 0.18 } };
     },
+    gps_accept_position: async () => null,
+    gps_status: async () => {
+      await sleep(600);
+      const spoof = window.mockSpoof === true;
+      const t = Date.now() / 1000;
+      const jitter = (a) => a * Math.sin(t * 0.7);
+      const gnss = (window.mockStaged?.GPS1_GNSS_MODE ?? 0);
+      const unit = {
+        number: 1, kind: "AUTO", port: "SERIAL3", fix: "3D fix", fix_type: 3, satellites: spoof ? 21 : 17, hdop: spoof ? 0.6 : 0.78 + jitter(0.03),
+        h_acc: spoof ? 0.9 : 1.4 + jitter(0.1), v_acc: spoof ? 1.5 : 2.6, speed: spoof ? 55.99 : 0.04, course: spoof ? 7 : 0,
+        position: spoof ? [-12.03831, -77.05871, 150] : [50.450112 + jitter(0.000004), 30.523415, 186], constellations: gnss ? ["GPS", "Galileo"] : ["receiver default"], rate_hz: 5, first_fix_s: 41,
+      };
+      const checks = spoof
+        ? [
+            { status: "fail", title: "The GPS says the vehicle moves at 56 m/s while it stands still: spoofed or faulty", detail: "The GPS reports 56.0 m/s and puts it at -12.03831, -77.05871. If that isn't where the vehicle is, the receiver gets fake satellite signals. The EKF tilts its attitude to explain the false speed, in every flight mode: don't fly like this. To fly here, turn the GPS off (below), reboot and fly Stabilize or AltHold, or put the GPS on a switch.", changes: [{ name: "GPS1_TYPE", value: 0, reason: "Turn the GPS off" }, { name: "FS_THR_ENABLE", value: 3, reason: "Land when the radio link is lost" }], gps_switch: true, accept_position: false },
+            { status: "fail", title: "The GPS puts the vehicle 12278 km from where it was last seen", detail: "On 2026-11-10 the GPS was trusted at 50.4501, 30.5234; now it says -12.0383, -77.0587. If you didn't travel there, the GPS is spoofed: turn it off or put it on a switch. If the vehicle really is here, say so and ArduTune remembers the new place.", changes: [], gps_switch: false, accept_position: true },
+          ]
+        : [];
+      const bits = [[0, "GPS"], [1, "SBAS"], [2, "Galileo"], [3, "Beidou"], [4, "IMES"], [5, "QZSS"], [6, "GLONASS"], [7, "NAVIC"]];
+      return {
+        units: [unit],
+        ekf: { using_gps: true, glitching: spoof, ratios: [["Velocity", spoof ? 1.4 : 0.12 + jitter(0.02)], ["Horizontal position", spoof ? 0.9 : 0.08], ["Height", 0.21], ["Compass", spoof ? 0.7 : 0.05]] },
+        checks,
+        settings: [
+          { title: "GPS 1", settings: [
+            { name: "GPS1_TYPE", label: "Receiver type", value: 1, kind: "select", options: [[0, "None"], [1, "AUTO"], [2, "uBlox"], [5, "NMEA"], [9, "DroneCAN"]], unit: "" },
+            { name: "GPS1_GNSS_MODE", label: "Satellite systems", value: 0, kind: "bits", options: bits, unit: "" },
+            { name: "GPS1_RATE_MS", label: "Update rate", value: 200, kind: "select", options: [[100, "10Hz"], [125, "8Hz"], [200, "5Hz"]], unit: "" },
+            { name: "GPS1_POS_X", label: "Antenna offset forward", value: 0, kind: "number", options: [], unit: "m" },
+            { name: "GPS1_POS_Y", label: "Antenna offset right", value: 0, kind: "number", options: [], unit: "m" },
+            { name: "GPS1_POS_Z", label: "Antenna offset down", value: 0, kind: "number", options: [], unit: "m" },
+          ] },
+          { title: "GPS 2", settings: [{ name: "GPS2_TYPE", label: "Receiver type", value: 0, kind: "select", options: [[0, "None"], [1, "AUTO"], [2, "uBlox"]], unit: "" }] },
+          { title: "General", settings: [
+            { name: "GPS_AUTO_CONFIG", label: "ArduPilot configures the receiver", value: 1, kind: "select", options: [[0, "Disables automatic configuration"], [1, "Enable automatic configuration for Serial GPSes only"], [2, "Enable automatic configuration for DroneCAN as well"]], unit: "" },
+            { name: "GPS_HDOP_GOOD", label: "HDOP to arm in position modes", value: 140, kind: "number", options: [], unit: "×100 (140 = 1.4)" },
+          ] },
+        ],
+        messages: spoof ? ["EKF3 IMU0 GPS Glitch"] : [],
+        trusted: !spoof,
+      };
+    },
     detect_switch: async () => {
       await sleep(2500);
       return 7;

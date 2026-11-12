@@ -120,6 +120,28 @@ fn analyse_connect_download_write_and_reboot() {
     mock.state().gps_motion = (0.02, 50.4501, 30.5234);
     mock.state().prearm_failures.clear();
 
+    // GPS page: a healthy GPS on SERIAL3 whose position is remembered; then a
+    // spoofed one far away, with GPS off offered and the place accepted.
+    let page = call("gps_status", json!({})).unwrap();
+    assert_eq!((page["units"][0]["fix"].clone(), page["units"][0]["port"].clone()), (json!("3D fix"), json!("SERIAL3")), "{page}");
+    assert_eq!(page["units"][0]["h_acc"], json!(1.4));
+    assert_eq!(page["ekf"]["using_gps"], json!(true));
+    assert!(page["trusted"].as_bool().unwrap() && page["checks"].as_array().unwrap().is_empty(), "{page}");
+    let drones = call("list_drones", json!({})).unwrap();
+    assert!(drones.to_string().contains("\"last_position\""), "{drones}");
+    mock.state().gps_motion = (55.99, -12.03831, -77.05871);
+    let page = call("gps_status", json!({})).unwrap();
+    assert!(page["checks"][0]["title"].as_str().unwrap().contains("56 m/s"), "{page}");
+    assert!(page["checks"][1]["title"].as_str().unwrap().contains("km from where it was last seen"), "{page}");
+    let plan = call("prepare_changes", json!({ "source": "gps:0", "label": "GPS off" })).unwrap();
+    assert!(plan["rows"].as_array().unwrap().iter().any(|r| r["name"] == "GPS1_TYPE" && r["value"] == json!(0.0)), "{plan}");
+    call("gps_accept_position", json!({})).unwrap();
+    mock.state().gps_motion = (0.02, -12.03831, -77.05871);
+    let page = call("gps_status", json!({})).unwrap();
+    assert!(page["checks"].as_array().unwrap().is_empty(), "accepted: {page}");
+    mock.state().gps_motion = (0.02, 50.4501, 30.5234);
+    call("gps_accept_position", json!({})).ok();
+
     // The setup guide covers every step and proposes logging changes for the
     // simulated quad's default logging; they can be written like any other.
     let guide = call("setup_guide", json!({})).unwrap();

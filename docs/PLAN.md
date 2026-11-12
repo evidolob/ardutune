@@ -330,6 +330,27 @@ setup.
 - Checks: no GPS detected on the configured port, wrong baud, no fix after
   a few minutes outdoors, constellations that leave too few satellites.
 
+Done: GPS page (Configuration). Each GPS live (fix, satellites, accuracy,
+HDOP, position, speed, systems, rate, time to first fix) and the EKF's test
+ratios. Checks:
+- spoofing, with GPS off or a GPS switch offered;
+- a position more than 50 km from where this drone's GPS was last trusted
+  (remembered per drone in drones.json, with "the vehicle really is here");
+- GPS not detected (no GPS serial port, or wiring);
+- no fix after five minutes;
+- one satellite system with few satellites;
+- HDOP above GPS_HDOP_GOOD, poor accuracy;
+- EKF glitch or rejection;
+- GPS off, with a way to turn it back on.
+
+Settings per GPS and general ones, for both 4.6+ and older parameter names.
+
+Not yet:
+- jamming/spoofing state from the receiver (u-blox M10);
+- the compass in the GPS module;
+- GPS for yaw;
+- a CLI view.
+
 ## Before publishing on GitHub: license
 
 Done: GPL-3.0-or-later, like ArduPilot, Mission Planner and the Methodic

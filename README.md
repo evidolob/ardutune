@@ -60,6 +60,13 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   of all three positions); a knob for in-flight tuning of a gain between two
   values, or for a camera mount axis; flight mode per switch position; radio
   calibration with the failsafe value kept below the lowest throttle.
+- GPS: each GPS live (fix, satellites, accuracy, position, speed,
+  satellite systems, update rate, time to first fix) next to the EKF's view
+  of it. It checks for spoofing, a position far from where this drone was last
+  seen, a GPS that isn't detected, a slow fix, too few satellite systems,
+  HDOP above what arming needs, and EKF glitches. It offers GPS off or a GPS
+  switch where needed. Edit the receiver type, satellite systems, rate,
+  antenna offset and HDOP limit.
 - Initial tune: starting filter, acceleration-limit, thrust-curve and battery
   values for a new build from its prop size and pack (the formulas of
   ArduPilot's initial tune parameters calculator, with ArduCopter 4.7 names),

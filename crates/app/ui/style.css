@@ -1074,6 +1074,84 @@ table.modes tr.activerow td {
   background: var(--code-bg);
 }
 
+.gpsgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+table.kv td {
+  padding: 4px 10px 4px 0;
+  vertical-align: top;
+}
+
+table.kv td:first-child {
+  width: 130px;
+}
+
+.ratio {
+  display: grid;
+  grid-template-columns: 130px 1fr 44px;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.ratiobar {
+  position: relative;
+  height: 8px;
+  background: var(--code-bg);
+  border-radius: 4px;
+}
+
+.ratiobar > div:first-child {
+  height: 100%;
+  border-radius: 4px;
+}
+
+.ratiobar .pass {
+  background: var(--pass);
+}
+
+.ratiobar .warn {
+  background: var(--warn);
+}
+
+.ratiobar .fail {
+  background: var(--fail);
+}
+
+.ratiobar .limit {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: 83.3%;
+  width: 1px;
+  background: var(--muted);
+}
+
+.form.gpsform {
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.ticksrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.tick {
+  display: inline-flex !important;
+  gap: 5px;
+  align-items: center;
+}
+
+.card h3 {
+  font-size: 13px;
+  margin: 14px 0 8px;
+}
+
 button.btn.small {
   padding: 3px 9px;
   font-size: 12px;

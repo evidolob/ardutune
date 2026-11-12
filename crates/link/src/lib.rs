@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
     MagCalStatus, MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_LONG_DATA,
-    FILE_TRANSFER_PROTOCOL_DATA, GpsFixType, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA, LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA,
+    FILE_TRANSFER_PROTOCOL_DATA, GPS2_RAW_DATA, GPS_RAW_INT_DATA, GpsFixType, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA, LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA,
     PARAM_REQUEST_READ_DATA, PARAM_SET_DATA,
 };
 use mavlink::error::MessageReadError;
@@ -755,8 +755,34 @@ pub struct GpsStatus {
     pub course: Option<f32>,
     /// Latitude, longitude (degrees) and altitude (m), with a fix.
     pub position: Option<(f64, f64, f32)>,
+    /// Horizontal and vertical accuracy (m), when the receiver reports them.
+    pub h_acc: Option<f32>,
+    pub v_acc: Option<f32>,
 }
 
+/// The EKF's own report on how well it trusts each sensor.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize)]
+pub struct EkfReport {
+    /// MAVLink EKF_STATUS_FLAGS.
+    pub flags: u16,
+    /// Innovation test ratios: above 1 the EKF rejects that sensor.
+    pub velocity: f32,
+    pub pos_horiz: f32,
+    pub pos_vert: f32,
+    pub compass: f32,
+}
+
+/// What the GPS page shows: each GPS, the EKF's view and messages.
+#[derive(Debug, Clone, Default)]
+pub struct GpsSample {
+    pub gps: Vec<GpsStatus>,
+    pub ekf: Option<EkfReport>,
+    /// Seconds since the flight controller powered up.
+    pub boot_s: Option<f64>,
+    pub messages: Vec<String>,
+}
+
+const SYSTEM_TIME_ID: f32 = 2.0;
 const GPS_RAW_INT_ID: f32 = 24.0;
 const GPS2_RAW_ID: f32 = 124.0;
 const SYS_STATUS_ID: f32 = 1.0;
@@ -803,6 +829,16 @@ struct RawGps {
     lat: i32,
     lon: i32,
     alt: i32,
+    h_acc: u32,
+    v_acc: u32,
+}
+
+fn raw_gps_int(g: &GPS_RAW_INT_DATA) -> RawGps {
+    RawGps { fix: g.fix_type, satellites: g.satellites_visible, eph: g.eph, vel: g.vel, cog: g.cog, lat: g.lat, lon: g.lon, alt: g.alt, h_acc: g.h_acc, v_acc: g.v_acc }
+}
+
+fn raw_gps2(g: &GPS2_RAW_DATA) -> RawGps {
+    RawGps { fix: g.fix_type, satellites: g.satellites_visible, eph: g.eph, vel: g.vel, cog: g.cog, lat: g.lat, lon: g.lon, alt: g.alt, h_acc: g.h_acc, v_acc: g.v_acc }
 }
 
 fn gps_status(instance: u8, g: RawGps) -> GpsStatus {
@@ -815,6 +851,9 @@ fn gps_status(instance: u8, g: RawGps) -> GpsStatus {
         speed: (fix >= 2 && g.vel != u16::MAX).then_some(g.vel as f32 / 100.0),
         course: (fix >= 2 && g.cog != u16::MAX).then_some(g.cog as f32 / 100.0),
         position: (fix >= 2).then_some((g.lat as f64 / 1e7, g.lon as f64 / 1e7, g.alt as f32 / 1000.0)),
+        // 0 when the receiver doesn't report it.
+        h_acc: (fix >= 2 && g.h_acc > 0 && g.h_acc != u32::MAX).then_some(g.h_acc as f32 / 1000.0),
+        v_acc: (fix >= 2 && g.v_acc > 0 && g.v_acc != u32::MAX).then_some(g.v_acc as f32 / 1000.0),
     }
 }
 
@@ -963,6 +1002,36 @@ impl Link {
         Ok(LevelStatus { attitude: pair(&att), ahrs2: pair(&ahrs2), accels: triples(&imu), mags: triples(&mag), ..status })
     }
 
+    /// Listens for `listen` to each GPS, the EKF's status report, the time
+    /// since power-up and status texts (GPS glitches).
+    pub fn gps_sample(&mut self, listen: Duration) -> Result<GpsSample> {
+        for id in [GPS_RAW_INT_ID, GPS2_RAW_ID, EKF_STATUS_REPORT_ID, SYSTEM_TIME_ID] {
+            self.command(MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL, [id, 250_000.0, 0.0, 0.0, 0.0, 0.0, 0.0])?;
+        }
+        let mut out = GpsSample::default();
+        let deadline = Instant::now() + listen;
+        while let Some(msg) = self.next(deadline)? {
+            match msg {
+                MavMessage::GPS_RAW_INT(g) => upsert(&mut out.gps, gps_status(0, raw_gps_int(&g))),
+                MavMessage::GPS2_RAW(g) => upsert(&mut out.gps, gps_status(1, raw_gps2(&g))),
+                MavMessage::EKF_STATUS_REPORT(e) => {
+                    out.ekf = Some(EkfReport {
+                        flags: e.flags.bits(),
+                        velocity: e.velocity_variance,
+                        pos_horiz: e.pos_horiz_variance,
+                        pos_vert: e.pos_vert_variance,
+                        compass: e.compass_variance,
+                    })
+                }
+                MavMessage::SYSTEM_TIME(t) => out.boot_s = Some(f64::from(t.time_boot_ms) / 1000.0),
+                MavMessage::STATUSTEXT(t) => push_text(&mut out.messages, t.text.to_str().unwrap_or_default().to_owned()),
+                _ => {}
+            }
+        }
+        out.gps.sort_by_key(|g| g.instance);
+        Ok(out)
+    }
+
     /// Asks the vehicle to run its pre-arm checks and listens for `listen`
     /// to the reasons it gives, the GPS state and sensor health.
     pub fn arming_status(&mut self, listen: Duration) -> Result<ArmingStatus> {
@@ -989,14 +1058,8 @@ impl Link {
                         push_text(&mut status.messages, text);
                     }
                 }
-                MavMessage::GPS_RAW_INT(g) => upsert(
-                    &mut status.gps,
-                    gps_status(0, RawGps { fix: g.fix_type, satellites: g.satellites_visible, eph: g.eph, vel: g.vel, cog: g.cog, lat: g.lat, lon: g.lon, alt: g.alt }),
-                ),
-                MavMessage::GPS2_RAW(g) => upsert(
-                    &mut status.gps,
-                    gps_status(1, RawGps { fix: g.fix_type, satellites: g.satellites_visible, eph: g.eph, vel: g.vel, cog: g.cog, lat: g.lat, lon: g.lon, alt: g.alt }),
-                ),
+                MavMessage::GPS_RAW_INT(g) => upsert(&mut status.gps, gps_status(0, raw_gps_int(&g))),
+                MavMessage::GPS2_RAW(g) => upsert(&mut status.gps, gps_status(1, raw_gps2(&g))),
                 MavMessage::SYS_STATUS(s) => {
                     status.sensors = Some((
                         s.onboard_control_sensors_present.bits(),
