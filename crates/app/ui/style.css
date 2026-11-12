@@ -113,6 +113,41 @@ nav h3:first-child {
   margin-top: 2px;
 }
 
+nav button .dot {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+nav button.navconn > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The open log, above the analyses that use it. */
+.navlog {
+  font-size: 12px;
+  margin: 4px 10px 2px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navlog.muted {
+  white-space: normal;
+}
+
+nav .navlog button.link {
+  display: inline;
+  width: auto;
+  padding: 0;
+  font-size: 12px;
+  color: var(--link);
+}
+
 nav button {
   display: flex;
   align-items: center;
@@ -122,7 +157,7 @@ nav button {
   border: 0;
   background: none;
   color: var(--text);
-  padding: 7px 10px;
+  padding: 6px 10px;
   border-radius: 6px;
   font: inherit;
   cursor: pointer;

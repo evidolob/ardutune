@@ -4,6 +4,7 @@
 const tauri = window.__TAURI__;
 const invoke = (cmd, args = {}) => tauri.core.invoke(cmd, args);
 
+/** Views that analyse the open log. */
 const LOG_VIEWS = [
   ["overview", "Readiness"],
   ["diagnose", "Crash diagnosis"],
@@ -11,17 +12,12 @@ const LOG_VIEWS = [
   ["filters", "Filters"],
   ["pid", "PIDs"],
 ];
-const VEHICLE_VIEWS = [
-  ["connection", "Connection"],
-  ["setup", "Setup guide"],
-  ["motors", "Motor test"],
-  ["compass", "Compass calibration"],
-  ["tune", "Initial tune"],
-  ["prearm", "Pre-arm check"],
-  ["allparams", "Parameters"],
-  ["params", "Backups"],
-  ["firmware", "Firmware"],
-  ["vlogs", "Logs on vehicle"],
+/** The sidebar, in the order a build goes: set it up, configure it, tune it from flight logs, and find out what's wrong. */
+const NAV = [
+  ["Initial setup", [["setup", "Setup guide"], ["firmware", "Firmware"], ["motors", "Motor test"], ["compass", "Compass calibration"], ["tune", "Initial tune"]]],
+  ["Configuration", [["allparams", "Parameters"], ["params", "Backups"]]],
+  ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], "log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
+  ["Troubleshoot", [["prearm", "Pre-arm check"], ["diagnose", "Crash diagnosis"]]],
 ];
 /** Rows shown at once in the parameter list; refine the search for more. */
 const PARAM_ROWS = 300;
@@ -719,14 +715,21 @@ function header() {
 }
 
 function nav() {
-  const item = ([id, label], disabled) =>
-    `<button data-action="go" data-view="${id}" class="${state.view === id ? "active" : ""}" ${disabled ? "disabled" : ""}>${esc(label)}${badge(id)}</button>`;
-  return `
-    <h3>Vehicle</h3>
-    ${VEHICLE_VIEWS.map((v) => item(v, false)).join("")}
-    <h3>Flight log</h3>
-    ${item(["history", "Flight history"], false)}
-    ${LOG_VIEWS.map((v) => item(v, !state.log)).join("")}`;
+  const needsLog = (id) => LOG_VIEWS.some(([v]) => v === id);
+  const item = ([id, label]) => {
+    const off = needsLog(id) && !state.log;
+    return `<button data-action="go" data-view="${id}" class="${state.view === id ? "active" : ""}" ${off ? 'disabled title="Open a flight log first"' : ""}>${esc(label)}${badge(id)}</button>`;
+  };
+  // Which log the analyses below it work on.
+  const log = state.log
+    ? `<div class="navlog" title="${esc(state.log.path)}">${esc(state.log.file_name)}</div>`
+    : `<div class="navlog muted">No log open: <button class="link" data-action="pickLog">open one</button> or pick a flight</div>`;
+  const v = state.vehicle;
+  const connection = `<button data-action="go" data-view="connection" class="navconn ${state.view === "connection" ? "active" : ""}" title="${esc(v?.label ?? "Connect to a vehicle")}"><span><span class="dot ${v ? (v.armed ? "armed" : "on") : ""}"></span> ${v ? esc(v.label ?? "Vehicle") : "Connect"}</span></button>`;
+  return (
+    connection +
+    NAV.map(([title, items]) => `<h3>${esc(title)}</h3>${items.map((i) => (i === "log" ? log : item(i))).join("")}`).join("")
+  );
 }
 
 function badge(id) {
