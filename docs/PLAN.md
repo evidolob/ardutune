@@ -332,26 +332,12 @@ setup.
 
 ## Before publishing on GitHub: license
 
-Pick the project's license before the first push. `Cargo.toml` already says
-`MIT OR Apache-2.0`, a placeholder from the start; there is no LICENSE file.
-
-- Bundled ArduPilot data: `crates/core/data/copter-params.json.gz` is
-  ArduPilot's parameter metadata (`apm.pdef.json`, generated from ArduPilot's
-  GPLv3 source), compiled into the binary. With a permissive license, either
-  keep it as a separate GPLv3 file with its notice, or download it on first
-  run instead of bundling it.
-- Formulas taken from Mission Planner's initial-parameters calculator (GPLv3)
-  are reimplemented, not copied code. Note where they come from either way.
-- Options:
-  - GPLv3, like ArduPilot, Mission Planner and the Methodic Configurator. It
-    fits the bundled data as it is, and forks stay open.
-  - MIT OR Apache-2.0, the Rust norm, with the most freedom for others. It
-    needs the parameter-data handling above.
-- Dependencies (Tauri, mavlink, rustfft, serde, flate2, ureq) are MIT or
-  Apache-2.0, which is compatible with both.
-- Then: add LICENSE, set `license` in `Cargo.toml`, add a short "License"
-  section to the README, and add a third-party notice for the ArduPilot
-  parameter data.
+Done: GPL-3.0-or-later, like ArduPilot, Mission Planner and the Methodic
+Configurator. It fits the bundled ArduPilot parameter metadata (GPLv3) as it
+is. The project has LICENSE (GPLv3 text), `license` in `Cargo.toml`, a README
+section, and THIRD-PARTY.md for the parameter metadata, the initial tune
+formulas and the Rust dependencies (mostly MIT/Apache-2.0; serialport is
+MPL-2.0; all are GPLv3-compatible).
 
 ## Installers for Windows, macOS and Linux
 

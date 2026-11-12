@@ -185,3 +185,9 @@ app, export what the app shows for a log, then serve `crates/app` and open
 ARDUTUNE_FIXTURE_LOG=$PWD/flight.bin cargo test --release -p ardutune-app -- --ignored export_fixtures
 python3 -m http.server -d crates/app 8765   # http://localhost:8765/dev/preview.html
 ```
+
+## License
+
+ArduTune is free software under the GNU General Public License, version 3
+or (at your option) any later version: see [LICENSE](LICENSE). It bundles
+ArduPilot's parameter metadata (GPLv3); see [THIRD-PARTY.md](THIRD-PARTY.md).
