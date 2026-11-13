@@ -35,6 +35,12 @@ pub struct View {
     svg: Option<String>,
 }
 
+/// Closes the open log: the analyses forget it.
+#[tauri::command]
+pub fn close_log<R: Runtime>(app: AppHandle<R>) {
+    *lock(&app.state::<AppState>().log) = None;
+}
+
 #[tauri::command]
 pub async fn open_log<R: Runtime>(app: AppHandle<R>, path: String) -> CmdResult<Value> {
     blocking(app, move |app| load(app, PathBuf::from(path))).await

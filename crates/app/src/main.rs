@@ -106,6 +106,7 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     builder.manage(AppState::default()).invoke_handler(tauri::generate_handler![
         pick_file,
         analysis::open_log,
+        analysis::close_log,
         analysis::open_sample,
         analysis::analysis,
         vehicle::list_ports,

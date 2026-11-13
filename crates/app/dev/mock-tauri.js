@@ -294,6 +294,7 @@
       };
     },
     gps_accept_position: async () => null,
+    close_log: async () => null,
     gps_status: async () => {
       await sleep(600);
       const spoof = window.mockSpoof === true;

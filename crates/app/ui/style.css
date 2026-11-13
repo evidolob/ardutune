@@ -140,6 +140,22 @@ nav button.navconn > span {
   white-space: normal;
 }
 
+.navlog.open {
+  white-space: normal;
+}
+
+.navlogname {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.navlogacts {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
 nav .navlog button.link {
   display: inline;
   width: auto;

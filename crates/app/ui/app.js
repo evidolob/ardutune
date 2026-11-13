@@ -16,7 +16,8 @@ const LOG_VIEWS = [
 const NAV = [
   ["Initial setup", [["setup", "Setup guide"], ["firmware", "Firmware"], ["config", "Frame and hardware"], ["motors", "Motor test"], ["compass", "Compass calibration"], ["tune", "Initial tune"]]],
   ["Configuration", [["ports", "Serial ports"], ["rc", "RC channels"], ["gps", "GPS"], ["allparams", "Parameters"], ["params", "Backups"]]],
-  ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], ["autotune", "AutoTune"], "log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
+  ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], ["autotune", "AutoTune"]]],
+  ["Log analysis", ["log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
   ["Troubleshoot", [["prearm", "Pre-arm check"], ["diagnose", "Crash diagnosis"]]],
 ];
 /** Rows shown at once in the parameter list; refine the search for more. */
@@ -898,6 +899,16 @@ const actions = {
   },
   configDiscard: () => set({ config: { ...state.config, staged: {} } }),
   closeToast: () => set({ toast: null }),
+  closeLog: async () => {
+    try {
+      await invoke("close_log");
+    } catch (e) {
+      toast(e);
+    }
+    const needsLog = LOG_VIEWS.some(([v]) => v === state.view);
+    set({ log: null, analyses: {}, view: needsLog ? "welcome" : state.view });
+    if (state.view === "autotune" && state.vehicle) loadAutotune();
+  },
   retry: (d) => {
     delete state.analyses[d.kind];
     analyse(d.kind);
@@ -1026,8 +1037,9 @@ function nav() {
   };
   // Which log the analyses below it work on.
   const log = state.log
-    ? `<div class="navlog" title="${esc(state.log.path)}">${esc(state.log.file_name)}</div>`
-    : `<div class="navlog muted">No log open: <button class="link" data-action="pickLog">open one</button> or pick a flight</div>`;
+    ? `<div class="navlog open"><div class="navlogname" title="${esc(state.log.path)}">${esc(state.log.file_name)}</div>
+        <div class="navlogacts"><button class="link" data-action="pickLog">Open another</button> · <button class="link" data-action="closeLog">Close</button></div></div>`
+    : `<div class="navlog muted">No log open: <button class="link" data-action="pickLog">open one</button> or pick one from <button class="link" data-action="go" data-view="history">Flight history</button></div>`;
   const v = state.vehicle;
   const connection = `<button data-action="go" data-view="connection" class="navconn ${state.view === "connection" ? "active" : ""}" title="${esc(v?.label ?? "Connect to a vehicle")}"><span><span class="dot ${v ? (v.armed ? "armed" : "on") : ""}"></span> ${v ? esc(v.label ?? "Vehicle") : "Connect"}</span></button>`;
   return (
