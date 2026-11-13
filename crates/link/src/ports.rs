@@ -41,13 +41,8 @@ pub fn list() -> Vec<PortInfo> {
         })
         .map(|p| match p.port_type {
             SerialPortType::UsbPort(usb) => {
-                let text = [usb.manufacturer.as_deref(), usb.product.as_deref()]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let likely = AUTOPILOT_VIDS.contains(&usb.vid)
-                    || ["ardupilot", "px4", "cube"].iter().any(|k| text.to_lowercase().contains(k));
+                let text = [usb.manufacturer.as_deref(), usb.product.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+                let likely = AUTOPILOT_VIDS.contains(&usb.vid) || ["ardupilot", "px4", "cube"].iter().any(|k| text.to_lowercase().contains(k));
                 PortInfo {
                     name: p.port_name,
                     description: if text.is_empty() { "USB serial".to_owned() } else { text },
@@ -55,12 +50,7 @@ pub fn list() -> Vec<PortInfo> {
                     likely_autopilot: likely,
                 }
             }
-            other => PortInfo {
-                name: p.port_name,
-                description: format!("{other:?}"),
-                usb_id: None,
-                likely_autopilot: false,
-            },
+            other => PortInfo { name: p.port_name, description: format!("{other:?}"), usb_id: None, likely_autopilot: false },
         })
         .collect()
 }
@@ -80,8 +70,7 @@ fn choose(ports: &[PortInfo]) -> Result<String, String> {
                          (e.g. udpin:0.0.0.0:14550 for a telemetry link)"
             .to_owned()),
         _ => {
-            let names: Vec<&str> =
-                (if likely.is_empty() { &usb } else { &likely }).iter().map(|p| p.name.as_str()).collect();
+            let names: Vec<&str> = (if likely.is_empty() { &usb } else { &likely }).iter().map(|p| p.name.as_str()).collect();
             Err(format!("several serial ports found ({}); choose one with --conn serial:<port>:{USB_BAUD}", names.join(", ")))
         }
     }
@@ -92,12 +81,7 @@ mod tests {
     use super::*;
 
     fn port(name: &str, usb: bool, likely: bool) -> PortInfo {
-        PortInfo {
-            name: name.into(),
-            description: String::new(),
-            usb_id: usb.then_some((0x1209, 0x5741)),
-            likely_autopilot: likely,
-        }
+        PortInfo { name: name.into(), description: String::new(), usb_id: usb.then_some((0x1209, 0x5741)), likely_autopilot: likely }
     }
 
     #[test]

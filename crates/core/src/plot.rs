@@ -45,9 +45,7 @@ pub fn render(r: &NoiseReport) -> String {
     let pre = r.pre.total_db();
     let post = r.post.as_ref().map(|p| p.total_db());
 
-    let visible = |v: &[f64]| -> Vec<f64> {
-        r.pre.freq_hz.iter().zip(v).filter(|(f, _)| **f >= 5.0).map(|(_, d)| *d).collect()
-    };
+    let visible = |v: &[f64]| -> Vec<f64> { r.pre.freq_hz.iter().zip(v).filter(|(f, _)| **f >= 5.0).map(|(_, d)| *d).collect() };
     let mut all = visible(&pre);
     if let Some(p) = &post {
         all.extend(visible(p));
@@ -122,8 +120,7 @@ pub fn render(r: &NoiseReport) -> String {
     );
 
     let line = |vals: &[f64], colour: &str| -> String {
-        let pts: Vec<String> =
-            r.pre.freq_hz.iter().zip(vals).map(|(f, d)| format!("{:.1},{:.1}", x_of(*f), y_of(*d))).collect();
+        let pts: Vec<String> = r.pre.freq_hz.iter().zip(vals).map(|(f, d)| format!("{:.1},{:.1}", x_of(*f), y_of(*d))).collect();
         format!(r##"<polyline fill="none" stroke="{colour}" stroke-width="1.5" points="{}"/>"##, pts.join(" ")) + "\n"
     };
     s += &line(&pre, PRE);
@@ -240,41 +237,23 @@ fn spectrogram(s: &mut String, r: &NoiseReport, fmax: f64) {
         s.push('\n');
     }
     for k in [1.0, 2.0] {
-        let pts: Vec<String> = g
-            .time_s
-            .iter()
-            .zip(&g.motor_hz)
-            .filter_map(|(t, m)| m.filter(|m| m * k <= fmax).map(|m| format!("{:.1},{:.1}", x_of(*t), y_of(m * k))))
-            .collect();
+        let pts: Vec<String> =
+            g.time_s.iter().zip(&g.motor_hz).filter_map(|(t, m)| m.filter(|m| m * k <= fmax).map(|m| format!("{:.1},{:.1}", x_of(*t), y_of(m * k)))).collect();
         if pts.len() > 1 {
             let dash = if k > 1.0 { r##" stroke-dasharray="4 3""## } else { "" };
-            let _ = writeln!(
-                s,
-                r##"<polyline fill="none" stroke="#ffffff" stroke-width="1.2"{dash} points="{}"/>"##,
-                pts.join(" ")
-            );
+            let _ = writeln!(s, r##"<polyline fill="none" stroke="#ffffff" stroke-width="1.2"{dash} points="{}"/>"##, pts.join(" "));
         }
     }
     let fstep = nice_step(fmax, 5.0);
     let mut f = 0.0;
     while f <= fmax + 1e-9 {
-        let _ = writeln!(
-            s,
-            r##"<text x="{:.1}" y="{:.1}" fill="#374151" text-anchor="end">{f:.0}</text>"##,
-            LEFT - 6.0,
-            y_of(f) + 4.0
-        );
+        let _ = writeln!(s, r##"<text x="{:.1}" y="{:.1}" fill="#374151" text-anchor="end">{f:.0}</text>"##, LEFT - 6.0, y_of(f) + 4.0);
         f += fstep;
     }
     let tstep = nice_step(span, 8.0);
     let mut t = (t0 / tstep).ceil() * tstep;
     while t <= t1 {
-        let _ = writeln!(
-            s,
-            r##"<text x="{:.1}" y="{:.1}" fill="#374151" text-anchor="middle">{t:.0}</text>"##,
-            x_of(t),
-            GRAM_TOP + GRAM_H + 16.0
-        );
+        let _ = writeln!(s, r##"<text x="{:.1}" y="{:.1}" fill="#374151" text-anchor="middle">{t:.0}</text>"##, x_of(t), GRAM_TOP + GRAM_H + 16.0);
         t += tstep;
     }
     let _ = write!(
@@ -314,10 +293,8 @@ pub fn render_filters(r: &FilterReport) -> String {
     if let Some(e) = &r.quieter {
         lines.push((&e.spectrum_db, QUIET, "Simulated: quieter", false));
     }
-    let visible: Vec<f64> = lines
-        .iter()
-        .flat_map(|(v, ..)| r.freq_hz.iter().zip(v.iter()).filter(|(f, _)| **f >= 5.0 && **f <= fmax).map(|(_, d)| *d))
-        .collect();
+    let visible: Vec<f64> =
+        lines.iter().flat_map(|(v, ..)| r.freq_hz.iter().zip(v.iter()).filter(|(f, _)| **f >= 5.0 && **f <= fmax).map(|(_, d)| *d)).collect();
     let top = visible.iter().copied().fold(f64::NEG_INFINITY, f64::max) + 5.0;
     let bottom = visible.iter().copied().fold(f64::INFINITY, f64::min).max(top - 90.0) - 2.0;
     let y_of = |d: f64| TOP + (top - d.clamp(bottom, top)) / (top - bottom) * PH;
@@ -331,23 +308,13 @@ pub fn render_filters(r: &FilterReport) -> String {
     );
     grid(&mut s, LEFT, TOP, plot_w, PH, 0.0, fmax, bottom, top, &x_of, &y_of, "Frequency (Hz)", "dB re (°/s)²/Hz");
     for (vals, colour, _, dashed) in &lines {
-        let pts: Vec<String> = r
-            .freq_hz
-            .iter()
-            .zip(vals.iter())
-            .filter(|(f, _)| **f <= fmax)
-            .map(|(f, d)| format!("{:.1},{:.1}", x_of(*f), y_of(*d)))
-            .collect();
+        let pts: Vec<String> =
+            r.freq_hz.iter().zip(vals.iter()).filter(|(f, _)| **f <= fmax).map(|(f, d)| format!("{:.1},{:.1}", x_of(*f), y_of(*d))).collect();
         let dash = if *dashed { r##" stroke-dasharray="5 3""## } else { "" };
         let _ = writeln!(s, r##"<polyline fill="none" stroke="{colour}" stroke-width="1.5"{dash} points="{}"/>"##, pts.join(" "));
     }
     let lx = W - RIGHT - 250.0;
-    let _ = writeln!(
-        s,
-        r##"<rect x="{lx}" y="{}" width="246" height="{}" fill="#ffffff" stroke="#e5e7eb"/>"##,
-        TOP + 8.0,
-        12.0 + 18.0 * lines.len() as f64
-    );
+    let _ = writeln!(s, r##"<rect x="{lx}" y="{}" width="246" height="{}" fill="#ffffff" stroke="#e5e7eb"/>"##, TOP + 8.0, 12.0 + 18.0 * lines.len() as f64);
     for (i, (_, colour, label, dashed)) in lines.iter().enumerate() {
         let y = TOP + 24.0 + 18.0 * i as f64;
         let dash = if *dashed { r##" stroke-dasharray="5 3""## } else { "" };
@@ -364,8 +331,7 @@ pub fn render_filters(r: &FilterReport) -> String {
     // Trade-off: delay vs noise for every setting on the frontier.
     // Beyond twice today's delay the options are only of academic interest.
     let lag_cap = 2.0 * r.current.lag_deg.max(10.0);
-    let pts: Vec<(f64, f64)> =
-        r.frontier.iter().filter(|e| e.lag_deg <= lag_cap).map(|e| (e.lag_deg, e.noise_rms)).collect();
+    let pts: Vec<(f64, f64)> = r.frontier.iter().filter(|e| e.lag_deg <= lag_cap).map(|e| (e.lag_deg, e.noise_rms)).collect();
     let mut all = pts.clone();
     all.push((r.current.lag_deg, r.current.noise_rms));
     let lag_max = all.iter().map(|p| p.0).fold(0.0, f64::max) * 1.05;
@@ -469,13 +435,7 @@ pub fn render_pid(r: &PidReport) -> String {
     const HEIGHT: f64 = TOP + PH + 60.0;
     let plot_w = W - LEFT - RIGHT;
     let tmax = crate::pid::RESPONSE_S * 1000.0;
-    let peak = r
-        .axes
-        .iter()
-        .filter_map(|a| a.step.as_ref())
-        .flat_map(|s| s.response.iter().copied())
-        .fold(1.2, f64::max)
-        .min(2.5);
+    let peak = r.axes.iter().filter_map(|a| a.step.as_ref()).flat_map(|s| s.response.iter().copied()).fold(1.2, f64::max).min(2.5);
     let (y0, y1) = (0.0, (peak * 10.0).ceil() / 10.0 + 0.1);
     let x_of = |ms: f64| LEFT + ms / tmax * plot_w;
     let y_of = |v: f64| TOP + (y1 - v.clamp(y0, y1)) / (y1 - y0) * PH;
@@ -487,18 +447,11 @@ pub fn render_pid(r: &PidReport) -> String {
 <text x="{LEFT}" y="24" font-size="16" font-weight="600" fill="#111827">Rate-loop step response (response to a unit step in target rate)</text>"##
     );
     grid(&mut s, LEFT, TOP, plot_w, PH, 0.0, tmax, y0, y1, &x_of, &y_of, "Time (ms)", "Rate / target");
-    let _ = writeln!(
-        s,
-        r##"<line x1="{LEFT}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="#111827" stroke-dasharray="4 3"/>"##,
-        y_of(1.0),
-        W - RIGHT,
-        y_of(1.0)
-    );
+    let _ = writeln!(s, r##"<line x1="{LEFT}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="#111827" stroke-dasharray="4 3"/>"##, y_of(1.0), W - RIGHT, y_of(1.0));
     let mut legend = 0;
     for (a, colour) in r.axes.iter().zip(AXIS_COLOURS) {
         let Some(step) = &a.step else { continue };
-        let pts: Vec<String> =
-            step.time_s.iter().zip(&step.response).map(|(t, v)| format!("{:.1},{:.1}", x_of(t * 1000.0), y_of(*v))).collect();
+        let pts: Vec<String> = step.time_s.iter().zip(&step.response).map(|(t, v)| format!("{:.1},{:.1}", x_of(t * 1000.0), y_of(*v))).collect();
         let dash = if a.includes_autotune { r##" stroke-dasharray="6 2""## } else { "" };
         let _ = writeln!(s, r##"<polyline fill="none" stroke="{colour}" stroke-width="2"{dash} points="{}"/>"##, pts.join(" "));
         let ly = TOP + 24.0 + 18.0 * legend as f64;

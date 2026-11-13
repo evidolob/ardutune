@@ -202,10 +202,8 @@ fn autotune_step(log: &Log, time: f64) -> Option<String> {
 }
 
 pub fn diagnose(log: &Log) -> Diagnosis {
-    let mut incidents: Vec<Incident> = find_losses_of_control(log)
-        .into_iter()
-        .map(|(onset, extreme)| build_incident(log, IncidentKind::LossOfControl, onset, Some(extreme)))
-        .collect();
+    let mut incidents: Vec<Incident> =
+        find_losses_of_control(log).into_iter().map(|(onset, extreme)| build_incident(log, IncidentKind::LossOfControl, onset, Some(extreme))).collect();
     if incidents.is_empty() {
         if let Some(end) = ends_in_flight(log) {
             incidents.push(build_incident(log, IncidentKind::LogEndsInFlight, end, None));
@@ -222,8 +220,7 @@ pub fn diagnose(log: &Log) -> Diagnosis {
 fn find_losses_of_control(log: &Log) -> Vec<(f64, f64)> {
     let table = if log.table("ANG").is_some() { "ANG" } else { "ATT" };
     let get = |f: &str| Series::get(log, table, f);
-    let (Some(roll), Some(pitch), Some(des_r), Some(des_p)) = (get("Roll"), get("Pitch"), get("DesRoll"), get("DesPitch"))
-    else {
+    let (Some(roll), Some(pitch), Some(des_r), Some(des_p)) = (get("Roll"), get("Pitch"), get("DesRoll"), get("DesPitch")) else {
         return Vec::new();
     };
     let (flight, _) = log.flight();
@@ -305,10 +302,7 @@ fn build_incident(log: &Log, kind: IncidentKind, onset: f64, extreme: Option<f64
     }
     if log_end - onset < END_AFTER_ONSET_S {
         let text = match kind {
-            IncidentKind::LossOfControl => format!(
-                "Log ends {:.1} s after control was lost, consistent with impact or power loss",
-                log_end - onset
-            ),
+            IncidentKind::LossOfControl => format!("Log ends {:.1} s after control was lost, consistent with impact or power loss", log_end - onset),
             IncidentKind::LogEndsInFlight => "Log ends while flying, with motors running".to_owned(),
         };
         timeline.push(Event { time_s: log_end, text });
@@ -321,9 +315,7 @@ fn build_incident(log: &Log, kind: IncidentKind, onset: f64, extreme: Option<f64
         IncidentKind::LogEndsInFlight => format!("Log ends in flight at {onset:.2} s"),
     };
     let during = mode_text.map_or(String::new(), |m| format!(" in {m}"));
-    let cause = findings.first().map_or(". No clear cause found in the log".to_owned(), |f| {
-        format!(". Most likely cause: {}", lowercase_first(&f.title))
-    });
+    let cause = findings.first().map_or(". No clear cause found in the log".to_owned(), |f| format!(". Most likely cause: {}", lowercase_first(&f.title)));
     Incident { kind, onset_s: onset, mode: mode.map(mode_name), summary: format!("{what}{during}{cause}."), timeline, findings, ruled_out }
 }
 
@@ -365,26 +357,16 @@ fn peak_rate(log: &Log, from: f64, to: f64) -> Option<(f64, f64)> {
 fn messages(log: &Log, from: f64, to: f64) -> Vec<(f64, String)> {
     let Some(msg) = log.table("MSG") else { return Vec::new() };
     let (Some(t), Some(text)) = (msg.time_s(), msg.text("Message")) else { return Vec::new() };
-    t.into_iter()
-        .zip(text)
-        .filter(|(t, m)| *t >= from && *t <= to && !m.contains("pilot overrides"))
-        .map(|(t, m)| (t, m.clone()))
-        .collect()
+    t.into_iter().zip(text).filter(|(t, m)| *t >= from && *t <= to && !m.contains("pilot overrides")).map(|(t, m)| (t, m.clone())).collect()
 }
 
 /// ESCs that stop sending telemetry around the onset while others carry on.
 fn esc_dropouts(log: &Log, onset: f64, findings: &mut Vec<Finding>, timeline: &mut Vec<Event>) {
     let instances = esc_instances(log);
-    let last: Vec<(u32, f64)> = instances
-        .iter()
-        .filter_map(|i| Series::get_where(log, "ESC", "RPM", "Instance", *i as f64)?.last_time().map(|t| (*i, t)))
-        .collect();
+    let last: Vec<(u32, f64)> =
+        instances.iter().filter_map(|i| Series::get_where(log, "ESC", "RPM", "Instance", *i as f64)?.last_time().map(|t| (*i, t))).collect();
     let Some(esc_end) = last.iter().map(|(_, t)| *t).reduce(f64::max) else { return };
-    let lost: Vec<(u32, f64)> = last
-        .iter()
-        .copied()
-        .filter(|(_, t)| *t < esc_end - ESC_SILENT_S && *t >= onset - LOOKBACK_S && *t <= onset + 0.5)
-        .collect();
+    let lost: Vec<(u32, f64)> = last.iter().copied().filter(|(_, t)| *t < esc_end - ESC_SILENT_S && *t >= onset - LOOKBACK_S && *t <= onset + 0.5).collect();
     if lost.is_empty() {
         return;
     }
@@ -396,11 +378,7 @@ fn esc_dropouts(log: &Log, onset: f64, findings: &mut Vec<Finding>, timeline: &m
     let who = join_motors(&motors);
     timeline.push(Event { time_s: first, text: format!("{who}: ESC telemetry stops") });
 
-    let lead = if before {
-        format!("{:.2} s before control was lost", onset - first)
-    } else {
-        format!("{:.2} s after control was lost", first - onset)
-    };
+    let lead = if before { format!("{:.2} s before control was lost", onset - first) } else { format!("{:.2} s after control was lost", first - onset) };
     let mut evidence = vec![
         format!("{who} sent no ESC telemetry after {first:.2} s ({lead})."),
         format!("{} kept reporting until {esc_end:.2} s, so the telemetry link itself was working.", join_motors(&still)),
@@ -428,8 +406,7 @@ fn esc_dropouts(log: &Log, onset: f64, findings: &mut Vec<Finding>, timeline: &m
 
 /// ArduPilot's own thrust-loss detector.
 fn thrust_loss_messages(log: &Log, onset: f64, findings: &mut Vec<Finding>) {
-    let hits: Vec<(f64, String)> =
-        messages(log, onset - 10.0, onset + 1.0).into_iter().filter(|(_, m)| m.contains("Thrust Loss")).collect();
+    let hits: Vec<(f64, String)> = messages(log, onset - 10.0, onset + 1.0).into_iter().filter(|(_, m)| m.contains("Thrust Loss")).collect();
     if let Some((t, m)) = hits.first() {
         findings.push(Finding {
             id: "thrust_loss",
@@ -494,10 +471,7 @@ fn oscillation(log: &Log, onset: f64, findings: &mut Vec<Finding>, ruled_out: &m
             id: "oscillation",
             confidence: Confidence::Medium,
             title: format!("{} rate control was oscillating before the loss", capitalize(axis)),
-            evidence: vec![format!(
-                "{} rate error RMS {pre_rms:.0} °/s in the 2 s before, against {base_rms:.0} °/s earlier in the flight.",
-                capitalize(axis)
-            )],
+            evidence: vec![format!("{} rate error RMS {pre_rms:.0} °/s in the 2 s before, against {base_rms:.0} °/s earlier in the flight.", capitalize(axis))],
             advice: Some(
                 "Gains too high or too little filtering. If AutoTune was running, the step it was testing pushed \
                  the gains past stability: restart AutoTune with lower AUTOTUNE_AGGR, or tune manually."
@@ -597,9 +571,7 @@ fn ekf(log: &Log, onset: f64, findings: &mut Vec<Finding>, ruled_out: &mut Vec<S
             advice: Some("Check GPS, compass and vibration.".to_owned()),
         });
     } else {
-        ruled_out.push(format!(
-            "Navigation estimate: EKF innovations averaged below 1 in the 5 s before (highest: {what}, {mean:.2})."
-        ));
+        ruled_out.push(format!("Navigation estimate: EKF innovations averaged below 1 in the 5 s before (highest: {what}, {mean:.2})."));
     }
 }
 
@@ -778,7 +750,17 @@ mod tests {
         }
         for i in 0..(END_S * 10.0) as usize {
             let t = i as f64 / 10.0;
-            let pwm = |hi: bool| if diverging(t) { if hi { 2000 } else { 1100 } } else { 1400 };
+            let pwm = |hi: bool| {
+                if diverging(t) {
+                    if hi {
+                        2000
+                    } else {
+                        1100
+                    }
+                } else {
+                    1400
+                }
+            };
             w.write(rcou, &[us(t), V::I(pwm(false)), V::I(pwm(true)), V::I(pwm(false)), V::I(pwm(true))]);
             let volt = if diverging(t) { 19.0 } else { 24.0 };
             w.write(bat, &[us(t), V::F(volt), V::F(20.0)]);

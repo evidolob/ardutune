@@ -28,12 +28,7 @@ impl Version {
         let word = word.trim_start_matches('V');
         let (nums, tag) = word.split_once('-').unwrap_or((word, ""));
         let mut it = nums.split('.').map(|n| n.parse::<u32>());
-        Some(Self {
-            major: it.next()?.ok()?,
-            minor: it.next().unwrap_or(Ok(0)).ok()?,
-            patch: it.next().unwrap_or(Ok(0)).ok()?,
-            tag: tag.to_owned(),
-        })
+        Some(Self { major: it.next()?.ok()?, minor: it.next().unwrap_or(Ok(0)).ok()?, patch: it.next().unwrap_or(Ok(0)).ok()?, tag: tag.to_owned() })
     }
 
     /// From AUTOPILOT_VERSION.flight_sw_version: major, minor, patch, type bytes.
@@ -357,11 +352,20 @@ pub enum FlashError {
     Timeout(&'static str),
     Protocol(String),
     /// The firmware was built for another board.
-    WrongBoard { firmware: u32, board: u32 },
-    TooBig { image: usize, flash: usize },
+    WrongBoard {
+        firmware: u32,
+        board: u32,
+    },
+    TooBig {
+        image: usize,
+        flash: usize,
+    },
     Unsupported(String),
     /// Programming finished but the flash doesn't hold the image.
-    Verify { expected: u32, got: u32 },
+    Verify {
+        expected: u32,
+        got: u32,
+    },
 }
 
 impl fmt::Display for FlashError {
@@ -370,18 +374,16 @@ impl fmt::Display for FlashError {
             FlashError::Io(e) => write!(f, "USB connection to the bootloader failed: {e}"),
             FlashError::Timeout(what) => write!(f, "the bootloader didn't answer while {what}"),
             FlashError::Protocol(e) => write!(f, "bootloader error: {e}"),
-            FlashError::WrongBoard { firmware, board } => write!(
-                f,
-                "this firmware is for board ID {firmware} but the flight controller is board ID {board}; nothing was written"
-            ),
+            FlashError::WrongBoard { firmware, board } => {
+                write!(f, "this firmware is for board ID {firmware} but the flight controller is board ID {board}; nothing was written")
+            }
             FlashError::TooBig { image, flash } => {
                 write!(f, "the firmware ({image} bytes) doesn't fit the flash ({flash} bytes); nothing was written")
             }
             FlashError::Unsupported(e) => write!(f, "{e}; nothing was written"),
-            FlashError::Verify { expected, got } => write!(
-                f,
-                "the written firmware doesn't verify (CRC {got:#010x}, expected {expected:#010x}); flash it again before powering off"
-            ),
+            FlashError::Verify { expected, got } => {
+                write!(f, "the written firmware doesn't verify (CRC {got:#010x}, expected {expected:#010x}); flash it again before powering off")
+            }
         }
     }
 }

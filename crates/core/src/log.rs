@@ -184,9 +184,7 @@ impl Firmware {
             ("ArduSub", Vehicle::Sub),
             ("Rover", Vehicle::Rover),
         ];
-        let (vehicle, rest) = VEHICLES
-            .iter()
-            .find_map(|(p, v)| s.find(p).map(|i| (v.clone(), &s[i + p.len()..])))?;
+        let (vehicle, rest) = VEHICLES.iter().find_map(|(p, v)| s.find(p).map(|i| (v.clone(), &s[i + p.len()..])))?;
         let rest = rest.trim_start().strip_prefix('V')?;
         let ver: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
         let mut parts = ver.split('.').map(|p| p.parse::<u32>().ok());
@@ -292,10 +290,7 @@ impl Log {
 
     /// Text from MSG messages, in log order.
     pub fn text_messages(&self) -> Vec<&str> {
-        self.table("MSG")
-            .and_then(|t| t.text("Message"))
-            .map(|m| m.iter().map(String::as_str).collect())
-            .unwrap_or_default()
+        self.table("MSG").and_then(|t| t.text("Message")).map(|m| m.iter().map(String::as_str).collect()).unwrap_or_default()
     }
 
     pub fn firmware(&self) -> Option<Firmware> {
@@ -304,13 +299,7 @@ impl Log {
         }
         let ver = self.table("VER")?;
         let get = |f: &str| ver.num(f).and_then(|v| v.first()).map(|v| *v as u32);
-        Some(Firmware {
-            vehicle: Vehicle::Unknown,
-            major: get("Maj")?,
-            minor: get("Min").unwrap_or(0),
-            patch: get("Pat").unwrap_or(0),
-            text: String::new(),
-        })
+        Some(Firmware { vehicle: Vehicle::Unknown, major: get("Maj")?, minor: get("Min").unwrap_or(0), patch: get("Pat").unwrap_or(0), text: String::new() })
     }
 
     /// First and last timestamp across all messages.
@@ -379,12 +368,7 @@ impl Log {
         if edges.is_empty() {
             if let Some(ev) = self.table("EV") {
                 if let (Some(t), Some(id)) = (ev.time_s(), ev.num("Id")) {
-                    edges = t
-                        .into_iter()
-                        .zip(id)
-                        .filter(|(_, id)| **id == EV_ARMED || **id == EV_DISARMED)
-                        .map(|(t, id)| (t, *id == EV_ARMED))
-                        .collect();
+                    edges = t.into_iter().zip(id).filter(|(_, id)| **id == EV_ARMED || **id == EV_DISARMED).map(|(t, id)| (t, *id == EV_ARMED)).collect();
                 }
             }
         }

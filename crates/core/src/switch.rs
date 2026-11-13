@@ -13,18 +13,12 @@ const FLIPPED_US: u16 = 300;
 
 /// The name of an RCn_OPTION value, from ArduPilot's parameter docs.
 pub fn option_name(option: f64) -> String {
-    paramdoc::doc("RC5_OPTION")
-        .and_then(|d| d.values.iter().find(|(v, _)| *v == option).map(|(_, n)| n.clone()))
-        .unwrap_or_else(|| format!("option {option}"))
+    paramdoc::doc("RC5_OPTION").and_then(|d| d.values.iter().find(|(v, _)| *v == option).map(|(_, n)| n.clone())).unwrap_or_else(|| format!("option {option}"))
 }
 
 /// The stick channels (roll, pitch, throttle, yaw).
 fn sticks(p: Param) -> Vec<u8> {
-    ["RCMAP_ROLL", "RCMAP_PITCH", "RCMAP_THROTTLE", "RCMAP_YAW"]
-        .iter()
-        .zip([1.0, 2.0, 3.0, 4.0])
-        .map(|(n, d)| p(n).unwrap_or(d) as u8)
-        .collect()
+    ["RCMAP_ROLL", "RCMAP_PITCH", "RCMAP_THROTTLE", "RCMAP_YAW"].iter().zip([1.0, 2.0, 3.0, 4.0]).map(|(n, d)| p(n).unwrap_or(d) as u8).collect()
 }
 
 /// Why a channel can't take a new function, if it can't.
@@ -50,8 +44,11 @@ fn taken(p: Param, ch: u8, option: f64) -> Option<String> {
 pub fn flipped(param: impl Fn(&str) -> Option<f64>, moves: &[(u8, u16, u16)], option: f64) -> Result<u8, String> {
     let p: Param = &param;
     let sticks = sticks(p);
-    let mut moved: Vec<(u8, u16)> =
-        moves.iter().filter(|(ch, lo, hi)| *lo > 0 && hi.saturating_sub(*lo) >= FLIPPED_US && !sticks.contains(ch)).map(|(ch, lo, hi)| (*ch, hi - lo)).collect();
+    let mut moved: Vec<(u8, u16)> = moves
+        .iter()
+        .filter(|(ch, lo, hi)| *lo > 0 && hi.saturating_sub(*lo) >= FLIPPED_US && !sticks.contains(ch))
+        .map(|(ch, lo, hi)| (*ch, hi - lo))
+        .collect();
     moved.sort_by_key(|(_, range)| std::cmp::Reverse(*range));
     match moved.as_slice() {
         [] if moves.iter().all(|(_, lo, _)| *lo == 0) => {
@@ -80,11 +77,8 @@ pub fn assign(param: impl Fn(&str) -> Option<f64>, ch: u8, option: f64) -> Resul
     if let Some(why) = taken(p, ch, option) {
         return Err(why);
     }
-    let reason = if option == GPS_DISABLE {
-        format!("Channel {ch} turns the GPS off when high, on when low")
-    } else {
-        format!("Channel {ch}: {}", option_name(option))
-    };
+    let reason =
+        if option == GPS_DISABLE { format!("Channel {ch} turns the GPS off when high, on when low") } else { format!("Channel {ch}: {}", option_name(option)) };
     Ok(change(p, &format!("RC{ch}_OPTION"), option, reason).into_iter().collect())
 }
 

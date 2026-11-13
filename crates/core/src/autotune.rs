@@ -167,7 +167,11 @@ pub fn view(param: impl Fn(&str) -> Option<f64>, prop_in: Option<f64>, log: Opti
             id: "autotune",
             title: "AutoTune",
             state: if log_result.as_ref().is_some_and(|l| !l.saved.is_empty()) { "done" } else { "todo" },
-            detail: if ready { "AltHold and AutoTune are on switches: ready to fly the tune.".to_owned() } else { "Put AltHold and AutoTune on switches (checks below).".to_owned() },
+            detail: if ready {
+                "AltHold and AutoTune are on switches: ready to fly the tune.".to_owned()
+            } else {
+                "Put AltHold and AutoTune on switches (checks below).".to_owned()
+            },
             view: "autotune",
         },
         Step {
@@ -454,7 +458,13 @@ mod tests {
         use crate::synth::{LogWriter, V};
         let mut w = LogWriter::new();
         let msg = w.define("MSG", "QZ", "TimeUS,Message");
-        for (t, m) in [(1, "AutoTune: Roll Rate D Up 10%"), (2, "AutoTune: pilot overrides active"), (3, "AutoTune: Roll complete"), (4, "AutoTune: Pitch complete"), (5, "AutoTune: Saved gains for Roll Pitch")] {
+        for (t, m) in [
+            (1, "AutoTune: Roll Rate D Up 10%"),
+            (2, "AutoTune: pilot overrides active"),
+            (3, "AutoTune: Roll complete"),
+            (4, "AutoTune: Pitch complete"),
+            (5, "AutoTune: Saved gains for Roll Pitch"),
+        ] {
             w.write(msg, &[V::I(t * 1_000_000), V::S(m)]);
         }
         let log = Log::from_bytes(&w.into_bytes());

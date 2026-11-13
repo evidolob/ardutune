@@ -393,7 +393,8 @@ pub fn page(param: impl Fn(&str) -> Option<f64>, live: &Live) -> Page {
         _ => 2,
     });
 
-    let trusted = best.is_some_and(|g| g.satellites.is_some_and(|s| s >= 8) && g.hdop.is_some_and(|h| h <= 1.5) && (live.armed || g.speed.is_some_and(|v| v < 1.0)))
+    let trusted = best
+        .is_some_and(|g| g.satellites.is_some_and(|s| s >= 8) && g.hdop.is_some_and(|h| h <= 1.5) && (live.armed || g.speed.is_some_and(|v| v < 1.0)))
         && !spoofed
         && !far;
     Page { settings: settings(p), units, ekf, checks, messages: live.messages.clone(), trusted }
@@ -457,13 +458,24 @@ mod tests {
     }
 
     fn good() -> Fix {
-        Fix { instance: 0, fix_type: 3, satellites: Some(16), hdop: Some(0.8), speed: Some(0.05), course: Some(0.0), position: Some((50.45, 30.52, 180.0)), h_acc: Some(1.2), v_acc: Some(2.0) }
+        Fix {
+            instance: 0,
+            fix_type: 3,
+            satellites: Some(16),
+            hdop: Some(0.8),
+            speed: Some(0.05),
+            course: Some(0.0),
+            position: Some((50.45, 30.52, 180.0)),
+            h_acc: Some(1.2),
+            v_acc: Some(2.0),
+        }
     }
 
     #[test]
     fn healthy_gps_is_trusted() {
         let m = params();
-        let live = Live { gps: vec![good()], ekf: Some(Ekf { flags: 0x3F, velocity: 0.1, pos_horiz: 0.1, pos_vert: 0.2, compass: 0.05 }), ..Default::default() };
+        let live =
+            Live { gps: vec![good()], ekf: Some(Ekf { flags: 0x3F, velocity: 0.1, pos_horiz: 0.1, pos_vert: 0.2, compass: 0.05 }), ..Default::default() };
         let pg = page(|n| m.get(n).copied(), &live);
         assert!(pg.checks.is_empty(), "{:?}", pg.checks);
         assert!(pg.trusted);

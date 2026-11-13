@@ -55,7 +55,8 @@ pub struct RcView {
 
 /// ArduPilot's mode switch bands (µs) for FLTMODE1-6.
 const MODE_BANDS: [(u16, u16); 6] = [(0, 1230), (1231, 1360), (1361, 1490), (1491, 1620), (1621, 1749), (1750, 2200)];
-const STICKS: [(&str, &str, f64); 4] = [("RCMAP_ROLL", "Roll", 1.0), ("RCMAP_PITCH", "Pitch", 2.0), ("RCMAP_THROTTLE", "Throttle", 3.0), ("RCMAP_YAW", "Yaw", 4.0)];
+const STICKS: [(&str, &str, f64); 4] =
+    [("RCMAP_ROLL", "Roll", 1.0), ("RCMAP_PITCH", "Pitch", 2.0), ("RCMAP_THROTTLE", "Throttle", 3.0), ("RCMAP_YAW", "Yaw", 4.0)];
 
 /// Where an aux switch is: ArduPilot's thresholds are 1200 and 1800 µs.
 pub fn position(value: u16) -> &'static str {
@@ -69,9 +70,7 @@ pub fn position(value: u16) -> &'static str {
 }
 
 pub fn mode_label(mode: f64) -> String {
-    paramdoc::doc("FLTMODE1")
-        .and_then(|d| d.values.iter().find(|(v, _)| *v == mode).map(|(_, n)| n.clone()))
-        .unwrap_or_else(|| format!("mode {mode}"))
+    paramdoc::doc("FLTMODE1").and_then(|d| d.values.iter().find(|(v, _)| *v == mode).map(|(_, n)| n.clone())).unwrap_or_else(|| format!("mode {mode}"))
 }
 
 /// What a switch function does with the switch low, in the middle and high,
@@ -242,7 +241,13 @@ pub fn calibration(param: impl Fn(&str) -> Option<f64>, captured: &[(u8, u16, u1
         out.extend(change(p, &name("MIN"), f64::from(lo), format!("Channel {ch} lowest")));
         out.extend(change(p, &name("MAX"), f64::from(hi), format!("Channel {ch} highest")));
         // Throttle trim sits at the bottom; the other sticks centre.
-        let trim = if ch == thr { lo } else if sticks.contains(&ch) { centre } else { lo + (hi - lo) / 2 };
+        let trim = if ch == thr {
+            lo
+        } else if sticks.contains(&ch) {
+            centre
+        } else {
+            lo + (hi - lo) / 2
+        };
         out.extend(change(p, &name("TRIM"), f64::from(trim), format!("Channel {ch} centre")));
     }
     if let (Some(fs), Some(&&(_, lo, _, _))) = (p("FS_THR_VALUE"), moved.iter().find(|m| m.0 == thr)) {

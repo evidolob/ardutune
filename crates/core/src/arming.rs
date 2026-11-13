@@ -171,15 +171,7 @@ pub fn assess(s: &Snapshot, param: impl Fn(&str) -> Option<f64>) -> Report {
     problems.sort_by_key(|p| std::cmp::Reverse(rank(p.status)));
 
     let ready = !s.armed && !problems.iter().any(|p| p.status == Status::Fail);
-    Report {
-        armed: s.armed,
-        ready,
-        mode: s.mode.map(mode_name),
-        problems,
-        gps,
-        how_to_arm: how_to_arm(s, &param),
-        messages: s.messages.clone(),
-    }
+    Report { armed: s.armed, ready, mode: s.mode.map(mode_name), problems, gps, how_to_arm: how_to_arm(s, &param), messages: s.messages.clone() }
 }
 
 fn rank(s: Status) -> u8 {
@@ -529,8 +521,7 @@ fn rc_problems(s: &Snapshot, param: &impl Fn(&str) -> Option<f64>) -> Vec<Proble
 /// Sensors the vehicle uses that it reports as unhealthy.
 fn unhealthy(s: &Snapshot) -> Option<Problem> {
     let (_, enabled, healthy) = s.sensors?;
-    let bad: Vec<&str> =
-        SENSOR_NAMES.iter().filter(|(bit, _)| enabled & bit != 0 && healthy & bit == 0).map(|(_, n)| *n).collect();
+    let bad: Vec<&str> = SENSOR_NAMES.iter().filter(|(bit, _)| enabled & bit != 0 && healthy & bit == 0).map(|(_, n)| *n).collect();
     if bad.is_empty() {
         return None;
     }

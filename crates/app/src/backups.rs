@@ -61,10 +61,8 @@ pub fn save<R: Runtime>(app: &AppHandle<R>, c: &Connected, reason: &str) -> CmdR
         None => format!("sys{system_id}"),
     };
     let stem = format!("backup-{who}-{}", file_stamp(now));
-    let path = (0..)
-        .map(|n| dir.join(if n == 0 { format!("{stem}.param") } else { format!("{stem}-{n}.param") }))
-        .find(|p| !p.exists())
-        .expect("a free file name");
+    let path =
+        (0..).map(|n| dir.join(if n == 0 { format!("{stem}.param") } else { format!("{stem}-{n}.param") })).find(|p| !p.exists()).expect("a free file name");
     let mut header = format!("{TITLE}, {} UTC, system {system_id}.\n", date_time(now));
     if let Some(d) = &c.drone {
         header += &vehicle_lines(d);
@@ -93,7 +91,11 @@ pub fn slug(s: &str) -> String {
         }
     }
     let out = out.trim_matches('-');
-    if out.is_empty() { "vehicle".to_owned() } else { out.chars().take(30).collect() }
+    if out.is_empty() {
+        "vehicle".to_owned()
+    } else {
+        out.chars().take(30).collect()
+    }
 }
 
 fn one_line(s: &str) -> String {
@@ -236,10 +238,8 @@ fn match_vehicle(backup: &[(String, f64)], live: &HashMap<String, f32>) -> Optio
     let equal = shared.iter().filter(|(b, l)| same(*b, *l)).count();
     let pct = 100.0 * equal as f64 / shared.len() as f64;
     let recalibrated = calibrated >= 3;
-    (pct >= 98.0 && !recalibrated).then(|| Match {
-        level: "likely",
-        why: format!("{pct:.0}% of its values match the connected vehicle's (no accelerometer calibration to compare)."),
-    })
+    (pct >= 98.0 && !recalibrated)
+        .then(|| Match { level: "likely", why: format!("{pct:.0}% of its values match the connected vehicle's (no accelerometer calibration to compare).") })
 }
 
 /// Tags a backup that doesn't say which vehicle it came from with the
@@ -340,8 +340,10 @@ mod tests {
 
     #[test]
     fn matches_untagged_backups_to_the_connected_vehicle() {
-        let mut live: HashMap<String, f32> =
-            [("INS_ACCOFFS_X", 0.017), ("INS_ACCOFFS_Y", -0.01), ("INS_ACCOFFS_Z", 0.19), ("INS_ACCSCAL_X", 1.002)].iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let mut live: HashMap<String, f32> = [("INS_ACCOFFS_X", 0.017), ("INS_ACCOFFS_Y", -0.01), ("INS_ACCOFFS_Z", 0.19), ("INS_ACCSCAL_X", 1.002)]
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect();
         for i in 0..100 {
             live.insert(format!("P{i}"), i as f32);
         }

@@ -48,11 +48,20 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
 
     let mut frame = Vec::new();
     // Multirotor classes; helicopters and scripting frames are set up elsewhere.
-    let classes: Vec<(f64, String)> =
-        [(0.0, "Not set"), (1.0, "Quad"), (2.0, "Hexa"), (3.0, "Octa"), (4.0, "OctaQuad (X8)"), (5.0, "Y6"), (7.0, "Tri"), (12.0, "DodecaHexa"), (14.0, "Deca")]
-            .iter()
-            .map(|(v, n)| (*v, (*n).to_owned()))
-            .collect();
+    let classes: Vec<(f64, String)> = [
+        (0.0, "Not set"),
+        (1.0, "Quad"),
+        (2.0, "Hexa"),
+        (3.0, "Octa"),
+        (4.0, "OctaQuad (X8)"),
+        (5.0, "Y6"),
+        (7.0, "Tri"),
+        (12.0, "DodecaHexa"),
+        (14.0, "Deca"),
+    ]
+    .iter()
+    .map(|(v, n)| (*v, (*n).to_owned()))
+    .collect();
     frame.extend(setting(p, "FRAME_CLASS", "Frame", "").map(|s| s.choices(classes)));
     frame.extend(setting(p, "FRAME_TYPE", "Layout", "").map(|s| {
         let named = s
@@ -74,8 +83,12 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
     }));
 
     let mut esc = Vec::new();
-    esc.extend(setting(p, "MOT_PWM_TYPE", "ESC protocol", "").map(|s| s.help("DShot600 for current BLHeli_32, AM32 and Bluejay ESCs; Normal PWM for older ones.")));
-    esc.extend(setting(p, "SERVO_DSHOT_ESC", "ESC firmware", "").map(|s| s.help("Lets ArduPilot reverse motors in software and read extended telemetry (EDT).")));
+    esc.extend(
+        setting(p, "MOT_PWM_TYPE", "ESC protocol", "").map(|s| s.help("DShot600 for current BLHeli_32, AM32 and Bluejay ESCs; Normal PWM for older ones.")),
+    );
+    esc.extend(
+        setting(p, "SERVO_DSHOT_ESC", "ESC firmware", "").map(|s| s.help("Lets ArduPilot reverse motors in software and read extended telemetry (EDT).")),
+    );
     if mask != 0 {
         let on = format!("On, motor outputs {}", outputs_list(mask));
         esc.extend(setting(p, "SERVO_BLH_BDMASK", "Bidirectional DShot", "").map(|s| {
@@ -83,9 +96,16 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
                 .help("The ESCs report RPM on the signal wire, so the noise filter follows the motor speed. Needs ESC firmware that supports it (Bluejay, BLHeli_32, AM32).")
         }));
     }
-    esc.extend(setting(p, "SERVO_BLH_POLES", "Motor poles", "magnets").map(|s| s.help("Count the magnets in the bell: 14 on most 5-inch motors, 12 on many small ones, 24-28 on large ones. Wrong poles give wrong RPM.")));
+    esc.extend(
+        setting(p, "SERVO_BLH_POLES", "Motor poles", "magnets").map(|s| {
+            s.help("Count the magnets in the bell: 14 on most 5-inch motors, 12 on many small ones, 24-28 on large ones. Wrong poles give wrong RPM.")
+        }),
+    );
     esc.extend(setting(p, "MOT_SPIN_ARM", "Spin when armed", "0-1").map(|s| s.help("Throttle the motors idle at once armed. Must be below Spin minimum.")));
-    esc.extend(setting(p, "MOT_SPIN_MIN", "Spin minimum", "0-1").map(|s| s.help("Lowest throttle in flight: high enough that no motor stops or stutters. About 0.03 above Spin when armed.")));
+    esc.extend(
+        setting(p, "MOT_SPIN_MIN", "Spin minimum", "0-1")
+            .map(|s| s.help("Lowest throttle in flight: high enough that no motor stops or stutters. About 0.03 above Spin when armed.")),
+    );
 
     // ESC configuration passthrough: AM32, Bluejay and BLHeli tools reach the
     // ESCs through the flight controller's USB port.
@@ -94,7 +114,10 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
         s.choices(vec![(0.0, "Off".to_owned()), (1.0, "On for the motor outputs".to_owned())])
             .help("Lets ESC configuration tools (AM32 Configurator, esc-configurator.com for Bluejay, BLHeliSuite32) talk to the ESCs through the flight controller. Needs DShot.")
     }));
-    passthrough.extend(setting(p, "SERVO_BLH_PORT", "Passthrough connection", "").map(|s| s.help("Console is the USB port. A telemetry radio's MAVLink channel only if you configure the ESCs over the radio.")));
+    passthrough.extend(
+        setting(p, "SERVO_BLH_PORT", "Passthrough connection", "")
+            .map(|s| s.help("Console is the USB port. A telemetry radio's MAVLink channel only if you configure the ESCs over the radio.")),
+    );
 
     let mut board = Vec::new();
     board.extend(setting(p, "AHRS_ORIENTATION", "Board orientation", "").map(|s| {
@@ -102,7 +125,9 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
     }));
 
     let mut battery = Vec::new();
-    battery.extend(setting(p, "BATT_MONITOR", "Battery monitor", "").map(|s| s.help("Analog Voltage and Current for most flight controllers with a current sensor.")));
+    battery.extend(
+        setting(p, "BATT_MONITOR", "Battery monitor", "").map(|s| s.help("Analog Voltage and Current for most flight controllers with a current sensor.")),
+    );
     battery.extend(setting(p, "BATT_CAPACITY", "Capacity", "mAh"));
 
     let groups: Vec<Group> = [("Frame", frame), ("ESCs and motors", esc), ("ESC configuration", passthrough), ("Board", board), ("Battery", battery)]
@@ -136,7 +161,11 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
     let dshot = matches!(pwm, Some(4..=7));
     let bd = int(p, "SERVO_BLH_BDMASK").unwrap_or(0) as u32;
     if bd != 0 && !dshot {
-        checks.push(check(Status::Warn, "Bidirectional DShot is on without DShot", "It only works with a DShot protocol: choose DShot300 or DShot600, or turn it off."));
+        checks.push(check(
+            Status::Warn,
+            "Bidirectional DShot is on without DShot",
+            "It only works with a DShot protocol: choose DShot300 or DShot600, or turn it off.",
+        ));
     }
     if bd != 0 && mask != 0 && bd & mask != mask {
         checks.push(check(

@@ -175,10 +175,7 @@ fn deletes_single_logs_by_file_and_erases_all() {
 #[test]
 fn reports_arming_status_and_joins_long_messages() {
     let mut state = MockState::quad(Vec::new());
-    state.prearm_failures = vec![
-        "Check mag field (xy diff:262>100)".into(),
-        "AHRS: DCM Roll/Pitch inconsistent 20 deg. Wait or reboot".into(),
-    ];
+    state.prearm_failures = vec!["Check mag field (xy diff:262>100)".into(), "AHRS: DCM Roll/Pitch inconsistent 20 deg. Wait or reboot".into()];
     state.gps = Some((mavlink::dialects::ardupilotmega::GpsFixType::GPS_FIX_TYPE_NO_FIX, 0, 99.99));
     state.mode = 5;
     state.rc[4] = 1900;
@@ -186,10 +183,7 @@ fn reports_arming_status_and_joins_long_messages() {
     let mut link = connect(&mock);
 
     let s = link.arming_status(Duration::from_millis(1200)).unwrap();
-    assert_eq!(
-        s.messages,
-        ["PreArm: Check mag field (xy diff:262>100)", "PreArm: AHRS: DCM Roll/Pitch inconsistent 20 deg. Wait or reboot"]
-    );
+    assert_eq!(s.messages, ["PreArm: Check mag field (xy diff:262>100)", "PreArm: AHRS: DCM Roll/Pitch inconsistent 20 deg. Wait or reboot"]);
     assert_eq!(s.gps.len(), 1);
     assert_eq!((s.gps[0].fix_type, s.gps[0].satellites), (1, Some(0)));
     assert_eq!(s.custom_mode, Some(5));

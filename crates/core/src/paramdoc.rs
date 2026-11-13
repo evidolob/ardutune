@@ -73,12 +73,7 @@ pub fn warnings(name: &str, value: f64) -> Vec<String> {
         }
     } else if let Some([lo, hi]) = d.range {
         if value < lo || value > hi {
-            out.push(format!(
-                "{} is outside the documented range {} to {}",
-                format_value(value),
-                format_value(lo),
-                format_value(hi)
-            ));
+            out.push(format!("{} is outside the documented range {} to {}", format_value(value), format_value(lo), format_value(hi)));
         }
     }
     if !d.bits.is_empty() {

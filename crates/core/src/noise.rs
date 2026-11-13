@@ -13,8 +13,7 @@ use crate::log::{in_any, Log};
 use crate::stats;
 
 const RAD_TO_DEG: f64 = 180.0 / PI;
-pub(crate) const NO_GYRO_DATA: &str =
-    "this log has no high-rate gyro data; run `ardutune check` for the logging parameters to set";
+pub(crate) const NO_GYRO_DATA: &str = "this log has no high-rate gyro data; run `ardutune check` for the logging parameters to set";
 const ISB_GYRO: f64 = 1.0;
 /// INS_LOG_BAT_OPT bits.
 const BAT_OPT_POST_ONLY_BIT: u32 = 1;
@@ -121,9 +120,7 @@ fn batch_sampler(log: &Log) -> Option<Vec<GyroBatch>> {
             continue;
         }
         let scale = RAD_TO_DEG / mul[i];
-        let axis = |a: &[[i16; 32]]| -> Vec<f64> {
-            rows.iter().flat_map(|r| a[*r].iter().map(|v| *v as f64 * scale)).take(want).collect()
-        };
+        let axis = |a: &[[i16; 32]]| -> Vec<f64> { rows.iter().flat_map(|r| a[*r].iter().map(|v| *v as f64 * scale)).take(want).collect() };
         let post_filter = if opt & (1 << BAT_OPT_PRE_POST_BIT) != 0 {
             // Post-filter batches are logged as extra instances after the sampled IMUs.
             inst[i] as u32 >= sampled
@@ -148,15 +145,12 @@ fn raw_gyro(log: &Log) -> Option<Vec<GyroBatch>> {
     let inst = g.num("I")?;
     let (gx, gy, gz) = (g.num("GyrX")?, g.num("GyrY")?, g.num("GyrZ")?);
     let pre_post = (log.param("INS_RAW_LOG_OPT").unwrap_or(0.0) as u32) & (1 << RAW_OPT_PRE_POST_BIT) != 0;
-    let imus = log
-        .table("IMU")
-        .and_then(|t| t.num("I"))
-        .map_or(1, |i| {
-            let mut v: Vec<i64> = i.iter().map(|x| *x as i64).collect();
-            v.sort_unstable();
-            v.dedup();
-            v.len()
-        }) as u32;
+    let imus = log.table("IMU").and_then(|t| t.num("I")).map_or(1, |i| {
+        let mut v: Vec<i64> = i.iter().map(|x| *x as i64).collect();
+        v.sort_unstable();
+        v.dedup();
+        v.len()
+    }) as u32;
 
     let mut by_inst: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (i, k) in inst.iter().enumerate() {
@@ -215,8 +209,7 @@ impl Spectrum {
     /// RMS noise between `from` Hz and Nyquist, all axes combined, in deg/s.
     pub fn rms_above(&self, from: f64) -> f64 {
         let df = self.df();
-        let total: f64 =
-            (self.bin(from)..self.freq_hz.len()).map(|k| self.psd.iter().map(|a| a[k]).sum::<f64>() * df).sum();
+        let total: f64 = (self.bin(from)..self.freq_hz.len()).map(|k| self.psd.iter().map(|a| a[k]).sum::<f64>() * df).sum();
         total.sqrt()
     }
 }
@@ -248,8 +241,7 @@ impl Fft {
     pub(crate) fn psd(&self, x: &[f64]) -> Vec<f64> {
         let x = &x[..self.n];
         let mean = x.iter().sum::<f64>() / self.n as f64;
-        let mut buf: Vec<Complex<f64>> =
-            x.iter().zip(&self.window).map(|(v, w)| Complex::new((v - mean) * w, 0.0)).collect();
+        let mut buf: Vec<Complex<f64>> = x.iter().zip(&self.window).map(|(v, w)| Complex::new((v - mean) * w, 0.0)).collect();
         self.plan.process(&mut buf);
         (0..=self.n / 2)
             .map(|k| {
@@ -308,7 +300,10 @@ pub struct Spectrogram {
 pub enum PeakClass {
     /// k × motor rotation frequency. `tracks_rpm` is `None` when motor speed
     /// barely changed, so tracking couldn't be tested.
-    MotorHarmonic { harmonic: u32, tracks_rpm: Option<bool> },
+    MotorHarmonic {
+        harmonic: u32,
+        tracks_rpm: Option<bool>,
+    },
     /// Stays put while motor speed changes: a frame or mount resonance.
     FixedFrequency,
     /// Below [`CONTROL_BAND_HZ`] and not a motor harmonic: real body motion
@@ -405,8 +400,7 @@ impl MotorSpeed {
             Some(by.into_iter().collect())
         };
         // ESC instances are numbered by output channel; map them to motor numbers.
-        let esc = split("ESC", "RPM", "Instance")
-            .map(|v| v.into_iter().map(|(i, s)| (crate::diagnose::motor_for_esc(log, i), s)).collect::<Vec<_>>());
+        let esc = split("ESC", "RPM", "Instance").map(|v| v.into_iter().map(|(i, s)| (crate::diagnose::motor_for_esc(log, i), s)).collect::<Vec<_>>());
         let sensor = || split("RPM", "RPM", "I").or_else(|| split("RPM", "rpm1", "I"));
         let motors = esc.or_else(|| sensor().map(|v| v.into_iter().map(|(i, s)| (i + 1, s)).collect())).unwrap_or_default();
         Self(motors.into_iter().filter(|(_, s)| s.v.iter().any(|v| *v > 0.0)).collect())
@@ -421,8 +415,7 @@ impl MotorSpeed {
         self.0
             .iter()
             .filter_map(|(m, s)| {
-                let w: Vec<f64> =
-                    windows.iter().flat_map(|(a, b)| s.window(*a, *b).iter().copied()).filter(|v| *v > 0.0).collect();
+                let w: Vec<f64> = windows.iter().flat_map(|(a, b)| s.window(*a, *b).iter().copied()).filter(|v| *v > 0.0).collect();
                 stats::median(&w).map(|rpm| (*m, rpm / 60.0))
             })
             .collect()
@@ -454,9 +447,7 @@ pub(crate) fn select<'a>(log: &Log, batches: &'a [GyroBatch], motors: &MotorSpee
             stats::percentile(&abs, 95.0).is_none_or(|p| p < CALM_RATE_DEG_S)
         })
     };
-    let flying = |b: &GyroBatch| {
-        in_any(&flight, b.start_s) && in_any(&flight, b.end_s()) && (!motors.known() || motors.hz(b.start_s, b.end_s()).is_some())
-    };
+    let flying = |b: &GyroBatch| in_any(&flight, b.start_s) && in_any(&flight, b.end_s()) && (!motors.known() || motors.hz(b.start_s, b.end_s()).is_some());
     let in_flight: Vec<&GyroBatch> = batches.iter().filter(|b| flying(b)).collect();
     if in_flight.is_empty() {
         return Err("no gyro batches were logged while flying".to_owned());
@@ -570,16 +561,8 @@ fn spectrogram(rows: &[BatchSpectrum]) -> Spectrogram {
     // Merge neighbouring bins to keep the matrix small.
     let group = first.freq_hz.len().div_ceil(SPECTROGRAM_MAX_BINS);
     let freq_hz = first.freq_hz.chunks(group).map(|c| c[0]).collect();
-    let power_db = rows
-        .iter()
-        .map(|r| r.psd.chunks(group).map(|c| db(c.iter().sum::<f64>() / c.len() as f64)).collect())
-        .collect();
-    Spectrogram {
-        time_s: rows.iter().map(|r| r.time_s).collect(),
-        freq_hz,
-        power_db,
-        motor_hz: rows.iter().map(|r| r.motor_hz).collect(),
-    }
+    let power_db = rows.iter().map(|r| r.psd.chunks(group).map(|c| db(c.iter().sum::<f64>() / c.len() as f64)).collect()).collect();
+    Spectrogram { time_s: rows.iter().map(|r| r.time_s).collect(), freq_hz, power_db, motor_hz: rows.iter().map(|r| r.motor_hz).collect() }
 }
 
 fn find_peaks(spec: &Spectrum) -> Vec<Peak> {
@@ -659,8 +642,7 @@ fn classify(f: f64, motor_range: Option<(f64, f64)>, rows: &[BatchSpectrum], df:
     } else {
         let band_db = |r: &BatchSpectrum, centre: f64| -> Option<f64> {
             let w = (0.06 * centre).max(2.0 * df);
-            let vals: Vec<f64> =
-                r.freq_hz.iter().zip(&r.psd).filter(|(fr, _)| (**fr - centre).abs() <= w).map(|(_, p)| *p).collect();
+            let vals: Vec<f64> = r.freq_hz.iter().zip(&r.psd).filter(|(fr, _)| (**fr - centre).abs() <= w).map(|(_, p)| *p).collect();
             vals.iter().copied().reduce(f64::max).map(db)
         };
         let mut track = Vec::new();
@@ -723,9 +705,9 @@ fn findings(peaks: &[Peak], per_motor: &[(u32, f64)], notches: &[Notch]) -> Vec<
                 if p.filter_reduction_db.is_some_and(|r| r >= WELL_FILTERED_DB) {
                     continue;
                 }
-                let target = notches.first().map_or("enable the harmonic notch (INS_HNTCH_ENABLE)".to_owned(), |n| {
-                    format!("add harmonic {harmonic} to {}_HMNCS", n.name)
-                });
+                let target = notches
+                    .first()
+                    .map_or("enable the harmonic notch (INS_HNTCH_ENABLE)".to_owned(), |n| format!("add harmonic {harmonic} to {}_HMNCS", n.name));
                 out.push(format!(
                     "Motor harmonic {harmonic} at {:.0} Hz is not targeted by a notch and the filters only remove {}: {target}.",
                     p.freq_hz,
@@ -747,10 +729,7 @@ fn findings(peaks: &[Peak], per_motor: &[(u32, f64)], notches: &[Notch]) -> Vec<
             _ => {}
         }
     }
-    if let (Some(lo), Some(hi)) = (
-        per_motor.iter().map(|(_, f)| *f).reduce(f64::min),
-        per_motor.iter().map(|(_, f)| *f).reduce(f64::max),
-    ) {
+    if let (Some(lo), Some(hi)) = (per_motor.iter().map(|(_, f)| *f).reduce(f64::min), per_motor.iter().map(|(_, f)| *f).reduce(f64::max)) {
         if per_motor.len() > 1 && hi / lo - 1.0 > MOTOR_SPREAD_WARN {
             let list: Vec<String> = per_motor.iter().map(|(m, f)| format!("motor {m} {:.0} RPM", f * 60.0)).collect();
             out.push(format!(
@@ -832,9 +811,7 @@ mod tests {
         assert_eq!(r.source, Source::RawImu);
         assert!((r.hover_motor_hz.unwrap() - 150.0).abs() < 3.0, "{:?}", r.hover_motor_hz);
         let classes: Vec<(u32, PeakClass)> = r.peaks.iter().map(|p| (p.freq_hz.round() as u32, p.class)).collect();
-        let harmonic = |k: u32| {
-            r.peaks.iter().any(|p| matches!(p.class, PeakClass::MotorHarmonic { harmonic, .. } if harmonic == k))
-        };
+        let harmonic = |k: u32| r.peaks.iter().any(|p| matches!(p.class, PeakClass::MotorHarmonic { harmonic, .. } if harmonic == k));
         assert!(harmonic(1) && harmonic(2), "{classes:?}");
         // The sample's notch is disabled.
         assert!(r.notches.is_empty());

@@ -167,9 +167,7 @@ pub fn layout(param: impl Fn(&str) -> Option<f64>) -> Result<Layout, String> {
             .collect(),
         // Without the layout, test letters still go clockwise from the
         // front, but the motor behind each isn't known here.
-        None => (0..count)
-            .map(|i| Position { letter: letter(i), motor: 0, name: String::new(), angle: None, spin: None, output: None })
-            .collect(),
+        None => (0..count).map(|i| Position { letter: letter(i), motor: 0, name: String::new(), angle: None, spin: None, output: None }).collect(),
     };
     let class_name = if class == 1 { "Quad" } else { "Multirotor" };
     let y4 = class == 1 && frame_type == Y4;
@@ -196,7 +194,14 @@ pub fn preview(class: i64, frame_type: i64) -> Option<Vec<Position>> {
     Some(
         q.iter()
             .enumerate()
-            .map(|(i, &(motor, angle, spin))| Position { letter: letter(i), motor, name: place(angle).to_owned(), angle: Some(angle), spin: Some(spin), output: None })
+            .map(|(i, &(motor, angle, spin))| Position {
+                letter: letter(i),
+                motor,
+                name: place(angle).to_owned(),
+                angle: Some(angle),
+                spin: Some(spin),
+                output: None,
+            })
             .collect(),
     )
 }
@@ -270,7 +275,12 @@ pub fn check(param: impl Fn(&str) -> Option<f64>, observations: &[Observation]) 
             items.push(item(
                 Status::Fail,
                 format!("Test {} spun the {} motor instead of the {} one", tested.letter, actual.name, tested.name),
-                format!("Output {output} is wired to the {} motor: it should drive motor {} (SERVO{output}_FUNCTION = {}).", actual.name, actual.motor, 32 + actual.motor),
+                format!(
+                    "Output {output} is wired to the {} motor: it should drive motor {} (SERVO{output}_FUNCTION = {}).",
+                    actual.name,
+                    actual.motor,
+                    32 + actual.motor
+                ),
             ));
             remap.push((output, actual.motor));
         }
@@ -370,10 +380,7 @@ mod tests {
         assert!(l.known && l.dshot);
         let summary: Vec<String> =
             l.positions.iter().map(|p| format!("{} M{} {} {:?} out {:?}", p.letter, p.motor, p.name, p.spin.unwrap(), p.output.unwrap())).collect();
-        assert_eq!(
-            summary,
-            ["A M2 front right Ccw out 2", "B M1 back right Cw out 1", "C M3 back left Ccw out 3", "D M4 front left Cw out 4"]
-        );
+        assert_eq!(summary, ["A M2 front right Ccw out 2", "B M1 back right Cw out 1", "C M3 back left Ccw out 3", "D M4 front left Cw out 4"]);
     }
 
     #[test]

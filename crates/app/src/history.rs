@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-
 use ardutune_core::history::{self, FlightSummary};
 use ardutune_core::log::Log;
 use ardutune_core::utc::date_time;
@@ -208,10 +207,8 @@ pub async fn import_log<R: Runtime>(app: AppHandle<R>, path: String) -> CmdResul
         }
         let name = src.file_name().ok_or("Not a file.")?.to_string_lossy().into_owned();
         let stem = name.trim_end_matches(".bin").trim_end_matches(".BIN");
-        let dest = (0..)
-            .map(|n| dir.join(if n == 0 { format!("{stem}.bin") } else { format!("{stem}-{n}.bin") }))
-            .find(|p| !p.exists())
-            .expect("a free file name");
+        let dest =
+            (0..).map(|n| dir.join(if n == 0 { format!("{stem}.bin") } else { format!("{stem}-{n}.bin") })).find(|p| !p.exists()).expect("a free file name");
         std::fs::copy(&src, &dest).map_err(|e| format!("copying {path}: {e}"))?;
         Ok(dest.display().to_string())
     })

@@ -47,11 +47,7 @@ impl LogWriter {
 
     /// Declares a message type and returns its id.
     pub fn define(&mut self, name: &str, format: &str, labels: &str) -> u8 {
-        let length = HEADER_LEN
-            + format
-                .chars()
-                .map(|c| FieldKind::from_char(c).expect("unsupported format char").prim.size())
-                .sum::<usize>();
+        let length = HEADER_LEN + format.chars().map(|c| FieldKind::from_char(c).expect("unsupported format char").prim.size()).sum::<usize>();
         self.define_raw(name, format, labels, length)
     }
 
@@ -245,10 +241,7 @@ pub fn sample_flight(preset: Preset) -> Vec<u8> {
         w.write(ctun, &[us(t), V::F(th), V::F(th), V::F(HOVER_THROTTLE)]);
         let flying = if th > 0.0 { 1.0 } else { 0.0 };
         let wob = (TAU * 0.3 * t).sin();
-        w.write(
-            vibe,
-            &[us(t), V::I(0), V::F(flying * (12.0 + wob)), V::F(flying * (13.0 - wob)), V::F(flying * (20.0 + 2.0 * wob)), V::I(0)],
-        );
+        w.write(vibe, &[us(t), V::I(0), V::F(flying * (12.0 + wob)), V::F(flying * (13.0 - wob)), V::F(flying * (20.0 + 2.0 * wob)), V::I(0)]);
         if ready {
             let rpm = if th > 0.05 { HOVER_RPM * (th / HOVER_THROTTLE).sqrt() } else { 0.0 };
             for m in 0..4 {

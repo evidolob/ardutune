@@ -44,9 +44,7 @@ impl Drone {
 
     /// Whether `id` (either form) names this flight controller.
     pub fn is(&self, id: &str) -> bool {
-        self.uid.as_deref() == Some(id)
-            || self.serial.as_deref() == Some(id)
-            || self.uid.as_deref().and_then(serial_from_uid).as_deref() == Some(id)
+        self.uid.as_deref() == Some(id) || self.serial.as_deref() == Some(id) || self.uid.as_deref().and_then(serial_from_uid).as_deref() == Some(id)
     }
 
     /// What to call it: its name, else its board and the end of its ID.

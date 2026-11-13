@@ -155,7 +155,5 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
 }
 
 fn main() {
-    setup(tauri::Builder::default().plugin(tauri_plugin_dialog::init()))
-        .run(tauri::generate_context!())
-        .expect("error while running ArduTune");
+    setup(tauri::Builder::default().plugin(tauri_plugin_dialog::init())).run(tauri::generate_context!()).expect("error while running ArduTune");
 }

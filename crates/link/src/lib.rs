@@ -15,13 +15,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use mavlink::dialects::ardupilotmega::{
-    MagCalStatus, MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_LONG_DATA,
-    FILE_TRANSFER_PROTOCOL_DATA, GPS2_RAW_DATA, GPS_RAW_INT_DATA, GpsFixType, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA, LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA,
-    PARAM_REQUEST_READ_DATA, PARAM_SET_DATA,
+    GpsFixType, MagCalStatus, MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_LONG_DATA,
+    FILE_TRANSFER_PROTOCOL_DATA, GPS2_RAW_DATA, GPS_RAW_INT_DATA, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA,
+    LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA, PARAM_REQUEST_READ_DATA, PARAM_SET_DATA,
 };
 use mavlink::error::MessageReadError;
-use serde::Serialize;
 use mavlink::{MavConnection, MavHeader};
+use serde::Serialize;
 
 pub mod firmware;
 pub mod ftp;
@@ -49,7 +49,11 @@ pub enum Error {
     Armed,
     Timeout(String),
     UnknownParam(String),
-    Rejected { name: String, wanted: f64, got: f32 },
+    Rejected {
+        name: String,
+        wanted: f64,
+        got: f32,
+    },
     Command(String),
     Send(String),
     Ftp(String),
@@ -73,10 +77,7 @@ impl fmt::Display for Error {
             Error::Command(e) => write!(f, "command failed: {e}"),
             Error::Send(e) => write!(f, "send failed: {e}"),
             Error::Ftp(e) => write!(f, "file access on the vehicle failed: {e}"),
-            Error::NewestLogOpen(id) => write!(
-                f,
-                "log {id} is the newest log, which the flight controller may still have open; reboot it first, then delete"
-            ),
+            Error::NewestLogOpen(id) => write!(f, "log {id} is the newest log, which the flight controller may still have open; reboot it first, then delete"),
         }
     }
 }
@@ -196,11 +197,7 @@ impl Drop for Link {
 }
 
 fn header(sequence: &AtomicU8) -> MavHeader {
-    MavHeader {
-        system_id: GCS_SYSTEM_ID,
-        component_id: GCS_COMPONENT_ID,
-        sequence: sequence.fetch_add(1, Ordering::Relaxed),
-    }
+    MavHeader { system_id: GCS_SYSTEM_ID, component_id: GCS_COMPONENT_ID, sequence: sequence.fetch_add(1, Ordering::Relaxed) }
 }
 
 fn gcs_heartbeat() -> MavMessage {
@@ -357,10 +354,8 @@ impl Link {
 
     /// Waits for a fresh heartbeat and returns whether the vehicle is armed.
     pub fn refresh_armed(&mut self) -> Result<bool> {
-        let is_autopilot_heartbeat =
-            |m: &MavMessage| matches!(m, MavMessage::HEARTBEAT(hb) if hb.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID);
-        self.wait_for(Duration::from_millis(2500), |m| is_autopilot_heartbeat(m).then_some(()))?
-            .ok_or(Error::Timeout("waiting for a heartbeat".to_owned()))?;
+        let is_autopilot_heartbeat = |m: &MavMessage| matches!(m, MavMessage::HEARTBEAT(hb) if hb.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID);
+        self.wait_for(Duration::from_millis(2500), |m| is_autopilot_heartbeat(m).then_some(()))?.ok_or(Error::Timeout("waiting for a heartbeat".to_owned()))?;
         // That one may have waited in the buffer: read what else has
         // arrived so the newest heartbeat decides.
         while self.next(Instant::now())?.is_some() {}
@@ -404,17 +399,10 @@ impl Link {
             if last_rx.elapsed() > Duration::from_secs(1) {
                 retries += 1;
                 if retries > 5 {
-                    return Err(Error::Timeout(format!(
-                        "downloading parameters ({} of {} received)",
-                        got.len(),
-                        total.unwrap_or(0)
-                    )));
+                    return Err(Error::Timeout(format!("downloading parameters ({} of {} received)", got.len(), total.unwrap_or(0))));
                 }
                 match total {
-                    None => self.send(&MavMessage::PARAM_REQUEST_LIST(PARAM_REQUEST_LIST_DATA {
-                        target_system: sys,
-                        target_component: comp,
-                    }))?,
+                    None => self.send(&MavMessage::PARAM_REQUEST_LIST(PARAM_REQUEST_LIST_DATA { target_system: sys, target_component: comp }))?,
                     Some(t) => {
                         for idx in (0..t).filter(|i| !got.contains_key(i)).take(64) {
                             self.send(&MavMessage::PARAM_REQUEST_READ(PARAM_REQUEST_READ_DATA {
@@ -451,11 +439,7 @@ impl Link {
                 _ => None,
             })?;
             if let Some(got) = reply {
-                return if values_match(value, got, integer) {
-                    Ok(got)
-                } else {
-                    Err(Error::Rejected { name: name.to_owned(), wanted: value, got })
-                };
+                return if values_match(value, got, integer) { Ok(got) } else { Err(Error::Rejected { name: name.to_owned(), wanted: value, got }) };
             }
         }
         Err(Error::UnknownParam(name.to_owned()))
@@ -463,11 +447,7 @@ impl Link {
 
     /// Writes all planned changes, refusing if the vehicle is armed.
     /// Returns one result per change, in order.
-    pub fn apply(
-        &mut self,
-        changes: &[PlannedChange],
-        progress: &mut dyn FnMut(&PlannedChange, &Result<f32>),
-    ) -> Result<Vec<Result<f32>>> {
+    pub fn apply(&mut self, changes: &[PlannedChange], progress: &mut dyn FnMut(&PlannedChange, &Result<f32>)) -> Result<Vec<Result<f32>>> {
         if self.refresh_armed()? {
             return Err(Error::Armed);
         }
@@ -687,11 +667,7 @@ impl Link {
             if last_rx.elapsed() > Duration::from_millis(500) {
                 stalls += 1;
                 if stalls > 10 {
-                    return Err(Error::Timeout(format!(
-                        "downloading log {} ({} of {size} bytes)",
-                        entry.id,
-                        (received * LOG_CHUNK).min(size)
-                    )));
+                    return Err(Error::Timeout(format!("downloading log {} ({} of {size} bytes)", entry.id, (received * LOG_CHUNK).min(size))));
                 }
                 request_next = true;
             }
@@ -701,10 +677,7 @@ impl Link {
             }
         }
         // Lets the vehicle resume normal logging.
-        self.send(&MavMessage::LOG_REQUEST_END(LOG_REQUEST_END_DATA {
-            target_system: self.vehicle.system_id,
-            target_component: self.vehicle.component_id,
-        }))?;
+        self.send(&MavMessage::LOG_REQUEST_END(LOG_REQUEST_END_DATA { target_system: self.vehicle.system_id, target_component: self.vehicle.component_id }))?;
         Ok(buf)
     }
 
@@ -834,11 +807,33 @@ struct RawGps {
 }
 
 fn raw_gps_int(g: &GPS_RAW_INT_DATA) -> RawGps {
-    RawGps { fix: g.fix_type, satellites: g.satellites_visible, eph: g.eph, vel: g.vel, cog: g.cog, lat: g.lat, lon: g.lon, alt: g.alt, h_acc: g.h_acc, v_acc: g.v_acc }
+    RawGps {
+        fix: g.fix_type,
+        satellites: g.satellites_visible,
+        eph: g.eph,
+        vel: g.vel,
+        cog: g.cog,
+        lat: g.lat,
+        lon: g.lon,
+        alt: g.alt,
+        h_acc: g.h_acc,
+        v_acc: g.v_acc,
+    }
 }
 
 fn raw_gps2(g: &GPS2_RAW_DATA) -> RawGps {
-    RawGps { fix: g.fix_type, satellites: g.satellites_visible, eph: g.eph, vel: g.vel, cog: g.cog, lat: g.lat, lon: g.lon, alt: g.alt, h_acc: g.h_acc, v_acc: g.v_acc }
+    RawGps {
+        fix: g.fix_type,
+        satellites: g.satellites_visible,
+        eph: g.eph,
+        vel: g.vel,
+        cog: g.cog,
+        lat: g.lat,
+        lon: g.lon,
+        alt: g.alt,
+        h_acc: g.h_acc,
+        v_acc: g.v_acc,
+    }
 }
 
 fn gps_status(instance: u8, g: RawGps) -> GpsStatus {
@@ -937,8 +932,22 @@ impl Link {
         while let Some(msg) = self.next(deadline)? {
             let MavMessage::RC_CHANNELS(rc) = msg else { continue };
             let values = [
-                rc.chan1_raw, rc.chan2_raw, rc.chan3_raw, rc.chan4_raw, rc.chan5_raw, rc.chan6_raw, rc.chan7_raw, rc.chan8_raw,
-                rc.chan9_raw, rc.chan10_raw, rc.chan11_raw, rc.chan12_raw, rc.chan13_raw, rc.chan14_raw, rc.chan15_raw, rc.chan16_raw,
+                rc.chan1_raw,
+                rc.chan2_raw,
+                rc.chan3_raw,
+                rc.chan4_raw,
+                rc.chan5_raw,
+                rc.chan6_raw,
+                rc.chan7_raw,
+                rc.chan8_raw,
+                rc.chan9_raw,
+                rc.chan10_raw,
+                rc.chan11_raw,
+                rc.chan12_raw,
+                rc.chan13_raw,
+                rc.chan14_raw,
+                rc.chan15_raw,
+                rc.chan16_raw,
             ];
             rssi = (rc.rssi != u8::MAX).then_some(rc.rssi);
             for (i, (r, v)) in ranges.iter_mut().zip(values).enumerate().take(rc.chancount as usize) {
@@ -1061,27 +1070,15 @@ impl Link {
                 MavMessage::GPS_RAW_INT(g) => upsert(&mut status.gps, gps_status(0, raw_gps_int(&g))),
                 MavMessage::GPS2_RAW(g) => upsert(&mut status.gps, gps_status(1, raw_gps2(&g))),
                 MavMessage::SYS_STATUS(s) => {
-                    status.sensors = Some((
-                        s.onboard_control_sensors_present.bits(),
-                        s.onboard_control_sensors_enabled.bits(),
-                        s.onboard_control_sensors_health.bits(),
-                    ));
+                    status.sensors =
+                        Some((s.onboard_control_sensors_present.bits(), s.onboard_control_sensors_enabled.bits(), s.onboard_control_sensors_health.bits()));
                     status.battery_v = (s.voltage_battery != u16::MAX).then_some(s.voltage_battery as f32 / 1000.0);
                 }
                 MavMessage::HEARTBEAT(hb) if hb.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID => {
                     status.custom_mode = Some(hb.custom_mode);
                 }
                 MavMessage::RC_CHANNELS(rc) => {
-                    status.rc = Some([
-                        rc.chan1_raw,
-                        rc.chan2_raw,
-                        rc.chan3_raw,
-                        rc.chan4_raw,
-                        rc.chan5_raw,
-                        rc.chan6_raw,
-                        rc.chan7_raw,
-                        rc.chan8_raw,
-                    ]);
+                    status.rc = Some([rc.chan1_raw, rc.chan2_raw, rc.chan3_raw, rc.chan4_raw, rc.chan5_raw, rc.chan6_raw, rc.chan7_raw, rc.chan8_raw]);
                 }
                 _ => {}
             }
@@ -1223,10 +1220,7 @@ impl Link {
         if self.refresh_armed()? {
             return Err(Error::Armed);
         }
-        self.send(&MavMessage::LOG_ERASE(LOG_ERASE_DATA {
-            target_system: self.vehicle.system_id,
-            target_component: self.vehicle.component_id,
-        }))?;
+        self.send(&MavMessage::LOG_ERASE(LOG_ERASE_DATA { target_system: self.vehicle.system_id, target_component: self.vehicle.component_id }))?;
         // No reply comes: poll the list (it may not answer while erasing).
         let deadline = Instant::now() + ERASE_TIMEOUT;
         while Instant::now() < deadline {
@@ -1533,11 +1527,7 @@ mod tests {
         let mut params = Params::new();
         params.insert("LOG_BITMASK".into(), p(176126.0, MavParamType::MAV_PARAM_TYPE_INT32));
         params.insert("INS_RAW_LOG_OPT".into(), p(9.0, MavParamType::MAV_PARAM_TYPE_INT8));
-        let wanted = vec![
-            ("LOG_BITMASK".to_owned(), 180223.0),
-            ("INS_RAW_LOG_OPT".to_owned(), 9.0),
-            ("NOPE".to_owned(), 1.0),
-        ];
+        let wanted = vec![("LOG_BITMASK".to_owned(), 180223.0), ("INS_RAW_LOG_OPT".to_owned(), 9.0), ("NOPE".to_owned(), 1.0)];
         let plan = plan(&params, &wanted);
         assert_eq!(plan.changes.len(), 1);
         assert_eq!(plan.changes[0].name, "LOG_BITMASK");

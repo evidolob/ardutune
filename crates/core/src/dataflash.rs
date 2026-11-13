@@ -106,16 +106,9 @@ fn parse_fmt(p: &[u8]) -> Format {
     let length = p[1] as usize;
     let name = decode_text(&p[2..6]);
     let format = decode_text(&p[6..22]);
-    let labels: Vec<String> = decode_text(&p[22..86])
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let labels: Vec<String> = decode_text(&p[22..86]).split(',').filter(|s| !s.is_empty()).map(str::to_owned).collect();
     let kinds: Option<Vec<FieldKind>> = format.chars().map(FieldKind::from_char).collect();
-    let kinds = kinds.filter(|k| {
-        k.len() == labels.len()
-            && HEADER_LEN + k.iter().map(|f| f.prim.size()).sum::<usize>() == length
-    });
+    let kinds = kinds.filter(|k| k.len() == labels.len() && HEADER_LEN + k.iter().map(|f| f.prim.size()).sum::<usize>() == length);
     Format { type_id, length, name, format, labels, kinds }
 }
 
@@ -174,9 +167,7 @@ pub fn parse(bytes: &[u8]) -> Log {
         let payload = &bytes[i + HEADER_LEN..i + fmt.length];
         match &fmt.kinds {
             Some(kinds) => {
-                let table = tables
-                    .entry(fmt.name.clone())
-                    .or_insert_with(|| Table::new(&fmt.name, &fmt.labels, kinds));
+                let table = tables.entry(fmt.name.clone()).or_insert_with(|| Table::new(&fmt.name, &fmt.labels, kinds));
                 // A name redefined with a different layout cannot share columns.
                 if table.kinds == *kinds {
                     decode_into(table, payload);

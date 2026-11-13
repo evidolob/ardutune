@@ -66,7 +66,8 @@ pub fn initial_tune(param: impl Fn(&str) -> Option<f64>, prop_in: f64, cells: Op
     add("INS_GYRO_FILTER", gyro, format!("Gyro low-pass for {size}: larger props are slower and noisier at lower frequencies"));
     // ArduPilot's AutoTune page asks for 10 Hz roll and pitch filters on
     // props of 13 inches and more; the calculator's half-gyro value is higher.
-    let (rp_filter, why) = if prop_in >= 13.0 { (10.0, "10 Hz for props of 13 inches and more (ArduPilot's AutoTune advice)") } else { (rate_filter, "half the gyro filter") };
+    let (rp_filter, why) =
+        if prop_in >= 13.0 { (10.0, "10 Hz for props of 13 inches and more (ArduPilot's AutoTune advice)") } else { (rate_filter, "half the gyro filter") };
     for axis in ["RLL", "PIT"] {
         add(&format!("ATC_RAT_{axis}_FLTD"), rp_filter, format!("D-term filter: {why}"));
         add(&format!("ATC_RAT_{axis}_FLTT"), rp_filter, format!("Target filter: {why}"));
@@ -156,14 +157,22 @@ mod tests {
             assert_eq!(value(&t, n), 10.0, "{n}");
         }
         // Re-reading the written values as 32-bit floats proposes nothing.
-        let written: std::collections::HashMap<String, f64> = m.iter().map(|(k, v)| (k.clone(), *v)).chain(t.changes.iter().map(|c| (c.name.clone(), f64::from(c.value as f32)))).collect();
+        let written: std::collections::HashMap<String, f64> =
+            m.iter().map(|(k, v)| (k.clone(), *v)).chain(t.changes.iter().map(|c| (c.name.clone(), f64::from(c.value as f32)))).collect();
         let again = initial_tune(|n| written.get(n).copied(), 15.0, Some(8), Some(Chemistry::LiIon)).unwrap();
         assert!(again.changes.is_empty(), "{:?}", again.changes);
     }
 
     #[test]
     fn nine_inch_4s_matches_mission_planner() {
-        let m = vehicle(&[("ATC_ACCEL_R_MAX", 0.0), ("ATC_ACCEL_P_MAX", 0.0), ("ATC_ACCEL_Y_MAX", 0.0), ("ACRO_YAW_P", 4.5), ("MOT_BAT_VOLT_MAX", 0.0), ("MOT_BAT_VOLT_MIN", 0.0)]);
+        let m = vehicle(&[
+            ("ATC_ACCEL_R_MAX", 0.0),
+            ("ATC_ACCEL_P_MAX", 0.0),
+            ("ATC_ACCEL_Y_MAX", 0.0),
+            ("ACRO_YAW_P", 4.5),
+            ("MOT_BAT_VOLT_MAX", 0.0),
+            ("MOT_BAT_VOLT_MIN", 0.0),
+        ]);
         let t = initial_tune(|n| m.get(n).copied(), 9.0, Some(4), Some(Chemistry::LiPo)).unwrap();
         assert_eq!(value(&t, "INS_GYRO_FILTER"), 46.0);
         assert_eq!(value(&t, "ATC_RAT_RLL_FLTD"), 23.0);

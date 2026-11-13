@@ -281,11 +281,7 @@ fn analyse_connect_download_write_and_reboot() {
     assert_eq!(flights[0]["when"], Value::Null, "no GPS fix, no date");
     assert!(data.join("logs").join(".ardutune-summaries.json").is_file(), "summaries are cached");
     let _ = std::fs::remove_file(&sample);
-    assert_eq!(
-        call("prepare_changes", json!({ "source": "pid" })).unwrap_err(),
-        "Run the PID analysis first.",
-        "results of the previous log are gone"
-    );
+    assert_eq!(call("prepare_changes", json!({ "source": "pid" })).unwrap_err(), "Run the PID analysis first.", "results of the previous log are gone");
 
     // Write the logging recommendations: planned against live values, backed up, verified.
     let plan = call("prepare_changes", json!({ "source": "readiness" })).unwrap();

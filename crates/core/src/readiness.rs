@@ -99,14 +99,8 @@ const BIT_IMU: u32 = 7;
 const BIT_RCOUT: u32 = 10;
 pub(crate) const BIT_PID: u32 = 12;
 pub(crate) const BIT_IMU_RAW: u32 = 19;
-pub(crate) const REQUIRED_LOG_BITS: [(u32, &str); 6] = [
-    (BIT_ATTITUDE_FAST, "ATTITUDE_FAST"),
-    (BIT_ATTITUDE_MED, "ATTITUDE_MED"),
-    (BIT_CTUN, "CTUN"),
-    (BIT_IMU, "IMU"),
-    (BIT_RCOUT, "RCOUT"),
-    (BIT_PID, "PID"),
-];
+pub(crate) const REQUIRED_LOG_BITS: [(u32, &str); 6] =
+    [(BIT_ATTITUDE_FAST, "ATTITUDE_FAST"), (BIT_ATTITUDE_MED, "ATTITUDE_MED"), (BIT_CTUN, "CTUN"), (BIT_IMU, "IMU"), (BIT_RCOUT, "RCOUT"), (BIT_PID, "PID")];
 
 /// INS_RAW_LOG_OPT: primary gyro only (bit 0) + pre and post filter (bit 3).
 const RAW_LOG_OPT_RECOMMENDED: f64 = 9.0;
@@ -189,13 +183,7 @@ pub fn assess(log: &Log) -> Report {
     let armed_check = check_flight(&flight, flight_source, flight_s);
     let ctx = Ctx { log, flight, flight_s };
 
-    let mut checks = vec![
-        check_firmware(log),
-        armed_check,
-        check_integrity(log),
-        check_vibration(&ctx),
-        check_clipping(&ctx),
-    ];
+    let mut checks = vec![check_firmware(log), armed_check, check_integrity(log), check_vibration(&ctx), check_clipping(&ctx)];
     let gyro = check_gyro_data(&ctx);
     let gyro_complete = gyro.status == Status::Pass;
     checks.push(gyro);
@@ -207,9 +195,7 @@ pub fn assess(log: &Log) -> Report {
 
     let not_failed = |id: &str| checks.iter().any(|c| c.id == id && c.status != Status::Fail);
     let filter_ready = ["vibration.levels", "filters.gyro_data", "filters.hover"].iter().all(|id| not_failed(id));
-    let pid_ready = ["vibration.levels", "pid.logging", "pid.excitation.roll", "pid.excitation.pitch"]
-        .iter()
-        .all(|id| not_failed(id));
+    let pid_ready = ["vibration.levels", "pid.logging", "pid.excitation.roll", "pid.excitation.pitch"].iter().all(|id| not_failed(id));
 
     let recommended_params = recommend_params(&|n| log.param(n), gyro_complete);
     let flight_plan = flight_plan(&recommended_params, filter_ready, pid_ready);
@@ -284,11 +270,8 @@ fn check_flight(flight: &[Interval], source: FlightSource, flight_s: f64) -> Che
         FlightSource::Arming => format!("Armed for {flight_s:.0} s in {} period(s)", flight.len()),
         _ => format!("Motors running for {flight_s:.0} s in {} period(s)", flight.len()),
     };
-    let mut detail = if status == Status::Pass {
-        "Enough flight time to analyse.".to_owned()
-    } else {
-        "Short flight: aim for at least 60 s in the air.".to_owned()
-    };
+    let mut detail =
+        if status == Status::Pass { "Enough flight time to analyse.".to_owned() } else { "Short flight: aim for at least 60 s in the air.".to_owned() };
     if source == FlightSource::MotorOutput {
         detail = format!("Arming isn't recorded in this log, so flight was found from motor output. {detail}");
     }
@@ -297,17 +280,11 @@ fn check_flight(flight: &[Interval], source: FlightSource, flight_s: f64) -> Che
 
 fn check_integrity(log: &Log) -> Check {
     let id = "general.integrity";
-    let dropped = log
-        .table("DSF")
-        .and_then(|t| t.num("Dp"))
-        .and_then(|v| v.iter().copied().reduce(f64::max))
-        .unwrap_or(0.0);
+    let dropped = log.table("DSF").and_then(|t| t.num("Dp")).and_then(|v| v.iter().copied().reduce(f64::max)).unwrap_or(0.0);
     let s = &log.stats;
     let mut problems = Vec::new();
     if dropped > 0.0 {
-        problems.push(format!(
-            "{dropped:.0} messages were dropped while logging (SD card too slow or log rate too high)"
-        ));
+        problems.push(format!("{dropped:.0} messages were dropped while logging (SD card too slow or log rate too high)"));
     }
     if s.skipped_bytes > 0 {
         problems.push(format!("{} corrupt bytes skipped", s.skipped_bytes));
@@ -385,12 +362,7 @@ pub fn vibration_level(log: &Log) -> Option<f64> {
 fn primary_flight_values(ctx: &Ctx, table: &Table, instance_field: &str, field: &str) -> Vec<f64> {
     let (Some(t), Some(v)) = (table.time_s(), table.num(field)) else { return Vec::new() };
     let keep = primary_imu_filter(table, instance_field);
-    t.iter()
-        .zip(v)
-        .enumerate()
-        .filter(|(i, (t, _))| keep.as_ref().is_none_or(|k| k[*i]) && in_any(&ctx.flight, **t))
-        .map(|(_, (_, v))| *v)
-        .collect()
+    t.iter().zip(v).enumerate().filter(|(i, (t, _))| keep.as_ref().is_none_or(|k| k[*i]) && in_any(&ctx.flight, **t)).map(|(_, (_, v))| *v).collect()
 }
 
 fn check_clipping(ctx: &Ctx) -> Check {
@@ -400,9 +372,7 @@ fn check_clipping(ctx: &Ctx) -> Check {
     };
     let field = ["Clip", "Clip0"].into_iter().find(|f| vibe.num(f).is_some());
     let clips = field.map(|f| primary_flight_values(ctx, vibe, "IMU", f)).unwrap_or_default();
-    let (Some(min), Some(max)) =
-        (clips.iter().copied().reduce(f64::min), clips.iter().copied().reduce(f64::max))
-    else {
+    let (Some(min), Some(max)) = (clips.iter().copied().reduce(f64::min), clips.iter().copied().reduce(f64::max)) else {
         return check(id, Area::Vibration, Status::Info, "Clipping not checked", "No clip counter in VIBE.");
     };
     let n = max - min;
@@ -428,11 +398,17 @@ fn check_gyro_data(ctx: &Ctx) -> Check {
         let opt = log.param("INS_RAW_LOG_OPT").unwrap_or(0.0) as u32;
         let pre_post = opt & (1 << RAW_LOG_OPT_PRE_POST_BIT) != 0;
         let title = format!("Raw gyro logging at {}", rate.map_or("unknown rate".to_owned(), |r| format!("{r:.0} Hz")));
-        return rate_status(id, rate, title, if pre_post {
-            "Pre- and post-filter gyro data present: ready for noise analysis and filter verification."
-        } else {
-            "Pre-filter gyro only. Set INS_RAW_LOG_OPT bit 3 to also log post-filter data for verifying filters."
-        }, pre_post);
+        return rate_status(
+            id,
+            rate,
+            title,
+            if pre_post {
+                "Pre- and post-filter gyro data present: ready for noise analysis and filter verification."
+            } else {
+                "Pre-filter gyro only. Set INS_RAW_LOG_OPT bit 3 to also log post-filter data for verifying filters."
+            },
+            pre_post,
+        );
     }
 
     if let Some(isbh) = log.table("ISBH") {
@@ -449,10 +425,7 @@ fn check_gyro_data(ctx: &Ctx) -> Check {
         if gyro_batches == 0 {
             return check(id, Area::Filters, Status::Fail, "Batch sampler logged no gyro data", "Set INS_LOG_BAT_MASK=1.");
         }
-        let title = format!(
-            "Batch-sampled gyro: {gyro_batches} batches at {}",
-            rate.map_or("unknown rate".to_owned(), |r| format!("{r:.0} Hz"))
-        );
+        let title = format!("Batch-sampled gyro: {gyro_batches} batches at {}", rate.map_or("unknown rate".to_owned(), |r| format!("{r:.0} Hz")));
         return rate_status(id, rate, title, note, pre_post);
     }
 
@@ -469,20 +442,10 @@ fn check_gyro_data(ctx: &Ctx) -> Check {
 /// Pass needs a good rate and both pre- and post-filter data.
 fn rate_status(id: &'static str, rate: Option<f64>, title: String, note: &str, pre_post: bool) -> Check {
     match rate {
-        Some(r) if r < GYRO_RATE_MIN_HZ => check(
-            id,
-            Area::Filters,
-            Status::Fail,
-            title,
-            format!("Sample rate is too low: noise above {:.0} Hz is invisible or aliased.", r / 2.0),
-        ),
-        Some(r) if r < GYRO_RATE_OK_HZ => check(
-            id,
-            Area::Filters,
-            Status::Warn,
-            title,
-            format!("Only noise below {:.0} Hz can be seen. {note}", r / 2.0),
-        ),
+        Some(r) if r < GYRO_RATE_MIN_HZ => {
+            check(id, Area::Filters, Status::Fail, title, format!("Sample rate is too low: noise above {:.0} Hz is invisible or aliased.", r / 2.0))
+        }
+        Some(r) if r < GYRO_RATE_OK_HZ => check(id, Area::Filters, Status::Warn, title, format!("Only noise below {:.0} Hz can be seen. {note}", r / 2.0)),
         _ => check(id, Area::Filters, if pre_post { Status::Pass } else { Status::Warn }, title, note),
     }
 }
@@ -507,13 +470,7 @@ fn check_hover(ctx: &Ctx) -> Check {
     } else if let Some((t, th)) = ctun.and_then(|c| ctx.flight_series(c, "ThO")) {
         (hover_from_throttle(ctx, &t, &th), "steady throttle")
     } else {
-        return check(
-            id,
-            Area::Filters,
-            Status::Warn,
-            "Hover not checked (no CTUN data)",
-            "Enable the CTUN bit in LOG_BITMASK so steady hover can be found.",
-        );
+        return check(id, Area::Filters, Status::Warn, "Hover not checked (no CTUN data)", "Enable the CTUN bit in LOG_BITMASK so steady hover can be found.");
     };
     let status = if hover_s >= HOVER_OK_S {
         Status::Pass
@@ -569,11 +526,7 @@ fn hover_from_altitude(ctx: &Ctx, t: &[f64], alt: &[f64]) -> f64 {
 fn hover_from_throttle(ctx: &Ctx, t: &[f64], th: &[f64]) -> f64 {
     ctx.windows(t, th, HOVER_BLOCK_S)
         .iter()
-        .filter(|w| {
-            w.len() >= 5
-                && stats::mean(w).is_some_and(|m| m > HOVER_MIN_THROTTLE)
-                && stats::std_dev(w).is_some_and(|s| s < HOVER_MAX_THROTTLE_STD)
-        })
+        .filter(|w| w.len() >= 5 && stats::mean(w).is_some_and(|m| m > HOVER_MIN_THROTTLE) && stats::std_dev(w).is_some_and(|s| s < HOVER_MAX_THROTTLE_STD))
         .count() as f64
         * HOVER_BLOCK_S
 }
@@ -581,9 +534,7 @@ fn hover_from_throttle(ctx: &Ctx, t: &[f64], th: &[f64]) -> f64 {
 fn check_rpm_source(ctx: &Ctx) -> Check {
     let id = "filters.rpm_source";
     let any_spinning = |table: &str, fields: &[&str]| {
-        ctx.log.table(table).is_some_and(|t| {
-            fields.iter().any(|f| ctx.flight_series(t, f).is_some_and(|(_, v)| v.iter().any(|r| *r > 0.0)))
-        })
+        ctx.log.table(table).is_some_and(|t| fields.iter().any(|f| ctx.flight_series(t, f).is_some_and(|(_, v)| v.iter().any(|r| *r > 0.0))))
     };
     if any_spinning("ESC", &["RPM"]) {
         check(
@@ -594,13 +545,7 @@ fn check_rpm_source(ctx: &Ctx) -> Check {
             "Best source for the harmonic notch (INS_HNTCH_MODE=3, ESC telemetry): tracks each motor.",
         )
     } else if any_spinning("RPM", &["rpm1", "RPM"]) {
-        check(
-            id,
-            Area::Filters,
-            Status::Pass,
-            "RPM sensor available",
-            "Harmonic notch can track motor speed (INS_HNTCH_MODE=2, RPM sensor).",
-        )
+        check(id, Area::Filters, Status::Pass, "RPM sensor available", "Harmonic notch can track motor speed (INS_HNTCH_MODE=2, RPM sensor).")
     } else {
         check(
             id,
@@ -640,13 +585,7 @@ fn check_pid_logging(ctx: &Ctx) -> Check {
     let id = "pid.logging";
     let tables: Vec<&Table> = ["PIDR", "PIDP", "PIDY"].iter().filter_map(|n| ctx.log.table(n)).collect();
     if tables.len() < 3 {
-        return check(
-            id,
-            Area::Pid,
-            Status::Fail,
-            "Rate PID messages missing (PIDR/PIDP/PIDY)",
-            "Enable the PID and ATTITUDE_FAST bits in LOG_BITMASK.",
-        );
+        return check(id, Area::Pid, Status::Fail, "Rate PID messages missing (PIDR/PIDP/PIDY)", "Enable the PID and ATTITUDE_FAST bits in LOG_BITMASK.");
     }
     let rate = tables.iter().map(|t| ctx.flight_rate(t)).fold(f64::INFINITY, f64::min);
     if rate >= PID_RATE_OK_HZ {
@@ -675,22 +614,15 @@ fn rate_target_deg_s(ctx: &Ctx, rate_field: &str, pid_table: &str) -> Option<(Ve
 }
 
 fn check_excitation(ctx: &Ctx) -> Vec<Check> {
-    const AXES: [(&str, &str, &str, &str); 3] = [
-        ("RDes", "PIDR", "pid.excitation.roll", "roll"),
-        ("PDes", "PIDP", "pid.excitation.pitch", "pitch"),
-        ("YDes", "PIDY", "pid.excitation.yaw", "yaw"),
-    ];
+    const AXES: [(&str, &str, &str, &str); 3] =
+        [("RDes", "PIDR", "pid.excitation.roll", "roll"), ("PDes", "PIDP", "pid.excitation.pitch", "pitch"), ("YDes", "PIDY", "pid.excitation.yaw", "yaw")];
     AXES.iter()
         .enumerate()
         .map(|(axis, (rate_field, pid_table, id, name))| {
             let Some((t, tar)) = rate_target_deg_s(ctx, rate_field, pid_table) else {
                 return check(id, Area::Pid, Status::Fail, format!("No {name} rate target logged"), "");
             };
-            let snaps = ctx
-                .windows(&t, &tar, 1.0)
-                .iter()
-                .filter(|w| stats::range(w).is_some_and(|r| r >= SNAP_RANGE_DEG_S[axis]))
-                .count();
+            let snaps = ctx.windows(&t, &tar, 1.0).iter().filter(|w| stats::range(w).is_some_and(|r| r >= SNAP_RANGE_DEG_S[axis])).count();
             let status = if snaps >= SNAPS_OK[axis] {
                 Status::Pass
             } else if snaps > 0 {
@@ -730,8 +662,7 @@ pub(crate) fn recommend_params(param: &dyn Fn(&str) -> Option<f64>, gyro_complet
         // The batch sampler must not run alongside IMU_RAW logging.
         mask &= !(1 << BIT_IMU_RAW);
     }
-    let missing: Vec<&str> =
-        REQUIRED_LOG_BITS.iter().filter(|(bit, _)| current_mask & (1 << bit) == 0).map(|(_, n)| *n).collect();
+    let missing: Vec<&str> = REQUIRED_LOG_BITS.iter().filter(|(bit, _)| current_mask & (1 << bit) == 0).map(|(_, n)| *n).collect();
     let reason = if missing.is_empty() {
         "Turn off IMU_RAW logging, which conflicts with the batch sampler".to_owned()
     } else {

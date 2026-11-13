@@ -30,9 +30,7 @@ pub fn parse(text: &str) -> Result<Vec<(String, f64)>, String> {
             5 => (fields[2], fields[3]),
             _ => return Err(format!("line {}: expected NAME,VALUE but found {raw:?}", n + 1)),
         };
-        let valid = !name.is_empty()
-            && name.len() <= 16
-            && name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+        let valid = !name.is_empty() && name.len() <= 16 && name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
         if !valid {
             return Err(format!("line {}: {name:?} is not a parameter name", n + 1));
         }

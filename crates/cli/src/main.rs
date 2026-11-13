@@ -365,10 +365,7 @@ fn main() -> Result<()> {
                     println!("\nApplying the {what} filter settings.");
                     let mut link = vehicle::connect(&cli.conn)?;
                     let params = vehicle::fetch_params(&mut link)?;
-                    let wanted: Vec<Wanted> = changes
-                        .iter()
-                        .map(|c| Wanted { name: c.name.clone(), value: c.value, reason: None })
-                        .collect();
+                    let wanted: Vec<Wanted> = changes.iter().map(|c| Wanted { name: c.name.clone(), value: c.value, reason: None }).collect();
                     vehicle::apply(&mut link, &params, &wanted, &(&apply_opts).into())?;
                 }
             }
@@ -395,10 +392,7 @@ fn main() -> Result<()> {
                     println!("\nApplying the {what} gains.");
                     let mut link = vehicle::connect(&cli.conn)?;
                     let params = vehicle::fetch_params(&mut link)?;
-                    let wanted: Vec<Wanted> = chosen
-                        .iter()
-                        .map(|s| Wanted { name: s.name.clone(), value: s.value, reason: Some(s.reason.clone()) })
-                        .collect();
+                    let wanted: Vec<Wanted> = chosen.iter().map(|s| Wanted { name: s.name.clone(), value: s.value, reason: Some(s.reason.clone()) }).collect();
                     vehicle::apply(&mut link, &params, &wanted, &(&apply_opts).into())?;
                 }
             }
@@ -531,12 +525,7 @@ fn main() -> Result<()> {
             eprintln!("Read {} parameters with defaults in {:.1} s", params.len(), start.elapsed().as_secs_f64());
             for p in params.iter().filter(|p| p.default.is_some_and(|d| d != p.value)) {
                 let what = ardutune_core::paramdoc::doc(&p.name).map_or("", |d| d.name.as_str());
-                println!(
-                    "{:<18} {:>12}  (default {:>10})  {what}",
-                    p.name,
-                    format_value(p.value as f64),
-                    format_value(p.default.unwrap_or(0.0) as f64)
-                );
+                println!("{:<18} {:>12}  (default {:>10})  {what}", p.name, format_value(p.value as f64), format_value(p.default.unwrap_or(0.0) as f64));
             }
         }
         Cmd::Params { out, .. } => {
@@ -637,10 +626,7 @@ fn info(log: &Log, fields: bool) {
     println!("Flight:   {:.1} s in {} period(s), from {source:?}", ardutune_core::log::total_duration(&flight), flight.len());
     println!("Params:   {}", log.params().len());
     let s = &log.stats;
-    println!(
-        "Messages: {} ({} skipped bytes, {} corrupt dropped, truncated: {})",
-        s.messages, s.skipped_bytes, s.bad_timestamps, s.truncated
-    );
+    println!("Messages: {} ({} skipped bytes, {} corrupt dropped, truncated: {})", s.messages, s.skipped_bytes, s.bad_timestamps, s.truncated);
     println!();
     for t in log.tables().filter(|t| !t.is_empty()) {
         if fields {
@@ -702,9 +688,7 @@ fn print_pid(r: &PidReport) {
     for n in &r.notes {
         println!("\nNote: {n}");
     }
-    println!(
-        "\nChange gains in small steps and test-hover after each change. Fix the filters (ardutune filters) before tuning PIDs."
-    );
+    println!("\nChange gains in small steps and test-hover after each change. Fix the filters (ardutune filters) before tuning PIDs.");
 }
 
 fn print_filters(r: &FilterReport) {
@@ -719,15 +703,8 @@ fn print_filters(r: &FilterReport) {
     }
 
     println!("\n  {:<13} {:>12}  {:>16}  Settings", "", "Noise >45 Hz", "Delay");
-    let row = |label: &str, e: &Evaluation| {
-        println!(
-            "  {label:<13} {:>8.2} °/s  {:>5.0}° {:>5.1} ms  {}",
-            e.noise_rms,
-            e.lag_deg,
-            e.delay_ms,
-            e.settings.describe()
-        )
-    };
+    let row =
+        |label: &str, e: &Evaluation| println!("  {label:<13} {:>8.2} °/s  {:>5.0}° {:>5.1} ms  {}", e.noise_rms, e.lag_deg, e.delay_ms, e.settings.describe());
     row("Current", &r.current);
     if let Some(e) = &r.recommended {
         row("Recommended", e);
@@ -821,10 +798,7 @@ fn print_noise(r: &NoiseReport) {
             Some(false) => "no",
             None => "-",
         };
-        println!(
-            "  {:>4.0} Hz  {:>6.0} dB  {:>3.0} dB  {:<5}  {what:<26}  {removed:>14}  {notched}",
-            p.freq_hz, p.prominence_db, p.level_db, p.axis
-        );
+        println!("  {:>4.0} Hz  {:>6.0} dB  {:>3.0} dB  {:<5}  {what:<26}  {removed:>14}  {notched}", p.freq_hz, p.prominence_db, p.level_db, p.axis);
     }
 
     println!("\nHarmonic notch");
@@ -896,7 +870,12 @@ fn firmware(conn: &str, check: bool, flash: Option<&Path>, install: Option<&str>
             anyhow::bail!("{what} is for board ID {} but this flight controller is board ID {id}; nothing written", apj.board_id);
         }
     }
-    println!("\nFirmware to flash: {what} ({} bytes, board ID {}{})", apj.image.len(), apj.board_id, apj.git_identity.as_deref().map_or(String::new(), |g| format!(", {g}")));
+    println!(
+        "\nFirmware to flash: {what} ({} bytes, board ID {}{})",
+        apj.image.len(),
+        apj.board_id,
+        apj.git_identity.as_deref().map_or(String::new(), |g| format!(", {g}"))
+    );
     println!("Keep USB connected until it finishes. Parameters are normally kept, but back them up first: ardutune params");
     if !vehicle::confirm("Reboot into the bootloader and flash it now?", false)? {
         println!("Nothing written.");
@@ -1163,12 +1142,7 @@ fn print_report(r: &Report) {
     println!("Firmware: {}", r.firmware.as_deref().unwrap_or("unknown"));
     println!("Log {:.0} s, flight {:.0} s", r.log_duration_s, r.flight_duration_s);
 
-    for (area, heading) in [
-        (Area::General, "General"),
-        (Area::Vibration, "Vibration"),
-        (Area::Filters, "Filters"),
-        (Area::Pid, "PID"),
-    ] {
+    for (area, heading) in [(Area::General, "General"), (Area::Vibration, "Vibration"), (Area::Filters, "Filters"), (Area::Pid, "PID")] {
         println!("\n{heading}");
         for c in r.checks.iter().filter(|c| c.area == area) {
             let tag = match c.status {

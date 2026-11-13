@@ -204,7 +204,17 @@ pub async fn firmware_flash<R: Runtime>(app: AppHandle<R>, backup: Option<bool>)
         let mut progress = crate::Reporter::new(app, "Reading parameters");
         let after = link.fetch_params(&mut |got, total| progress.update(got, total)).map_err(|e| e.to_string())?;
         let changed = diff(&before, &after);
-        let c = Connected { link, params: after, address, defaults: None, compass_cal: None, drone, last_arming: None, gps_fix: Default::default(), last_gps: None };
+        let c = Connected {
+            link,
+            params: after,
+            address,
+            defaults: None,
+            compass_cal: None,
+            drone,
+            last_arming: None,
+            gps_fix: Default::default(),
+            last_gps: None,
+        };
         let vehicle = Some(c.info());
         *slot = Some(c);
         Ok(Flashed { backup, version, reconnected: true, changed, vehicle })

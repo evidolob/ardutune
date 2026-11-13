@@ -70,7 +70,10 @@ impl Packet {
 /// An entry of a ListDirectory reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
-    File { name: String, size: u64 },
+    File {
+        name: String,
+        size: u64,
+    },
     Dir(String),
     /// An entry the vehicle couldn't describe; still counts for the offset.
     Skip,

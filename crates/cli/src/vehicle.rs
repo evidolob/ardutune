@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use ardutune_core::params::{self, format_value};
 use ardutune_core::utc::{date_time, file_stamp};
-use ardutune_link::{plan, ports, LogEntry, Link, Params};
+use ardutune_link::{plan, ports, Link, LogEntry, Params};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -74,16 +74,12 @@ pub fn fetch_params(link: &mut Link) -> Result<Params> {
 /// Saves all parameters so a change can be undone with `ardutune apply`.
 pub fn save_params(link: &mut Link, params: &Params, path: Option<&Path>) -> Result<PathBuf> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let path = path.map_or_else(
-        || PathBuf::from(format!("ardutune-backup-sys{}-{}.param", link.vehicle().system_id, file_stamp(now))),
-        Path::to_path_buf,
-    );
+    let path = path.map_or_else(|| PathBuf::from(format!("ardutune-backup-sys{}-{}.param", link.vehicle().system_id, file_stamp(now))), Path::to_path_buf);
     // Same vehicle line as the desktop app's backups, so they can tell
     // which flight controller a file came from.
     let id = link.identity().ok().filter(|i| i.uid.is_some());
-    let controller = id.map_or(String::new(), |i| {
-        format!("Flight controller: {}, ID {}\n", i.board.as_deref().unwrap_or("unknown board"), i.uid.unwrap_or_default())
-    });
+    let controller =
+        id.map_or(String::new(), |i| format!("Flight controller: {}, ID {}\n", i.board.as_deref().unwrap_or("unknown board"), i.uid.unwrap_or_default()));
     let header = format!(
         "ArduTune parameter backup, {} UTC, system {}.\n{controller}Restore with: ardutune apply {}",
         date_time(now),
@@ -159,11 +155,7 @@ pub fn apply(link: &mut Link, params: &Params, wanted: &[Wanted], opts: &ApplyOp
 
 pub fn apply_file(conn: &str, file: &Path, opts: &ApplyOptions) -> Result<()> {
     let text = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
-    let wanted: Vec<Wanted> = params::parse(&text)
-        .map_err(anyhow::Error::msg)?
-        .into_iter()
-        .map(|(name, value)| Wanted { name, value, reason: None })
-        .collect();
+    let wanted: Vec<Wanted> = params::parse(&text).map_err(anyhow::Error::msg)?.into_iter().map(|(name, value)| Wanted { name, value, reason: None }).collect();
     let mut link = connect(conn)?;
     let current = fetch_params(&mut link)?;
     apply(&mut link, &current, &wanted, opts)

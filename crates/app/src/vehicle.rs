@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, autotune, config, gps, motors, serial, paramdoc, params, rc, setup, switch, tune};
 use ardutune_core::utc::{date_time, file_stamp};
+use ardutune_core::{arming, autotune, config, gps, motors, paramdoc, params, rc, serial, setup, switch, tune};
 use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
@@ -158,12 +158,7 @@ pub struct PortView {
 pub fn list_ports() -> Vec<PortView> {
     ports::list()
         .into_iter()
-        .map(|p| PortView {
-            address: p.address(),
-            name: p.name,
-            description: p.description,
-            likely_autopilot: p.likely_autopilot,
-        })
+        .map(|p| PortView { address: p.address(), name: p.name, description: p.description, likely_autopilot: p.likely_autopilot })
         .collect()
 }
 
@@ -178,7 +173,8 @@ pub async fn connect<R: Runtime>(app: AppHandle<R>, address: String) -> CmdResul
         let mut link = Link::connect(&address, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
         let mut progress = Reporter::new(app, "Reading parameters");
         let params = link.fetch_params(&mut |got, total| progress.update(got, total)).map_err(|e| e.to_string())?;
-        let mut c = Connected { link, params, address, defaults: None, compass_cal: None, drone: None, last_arming: None, gps_fix: Default::default(), last_gps: None };
+        let mut c =
+            Connected { link, params, address, defaults: None, compass_cal: None, drone: None, last_arming: None, gps_fix: Default::default(), last_gps: None };
         c.identify(app);
         let info = c.info();
         *slot = Some(c);
@@ -373,10 +369,7 @@ pub async fn prepare_changes<R: Runtime>(
             }
             _ if source == "rc_calibration" => {
                 let captured = captured.ok_or("No radio calibration captured.")?;
-                rc::calibration(|n| c.params.get(n).map(|p| p.value as f64), &captured)?
-                    .into_iter()
-                    .map(|c| (c.name, c.value, Some(c.reason)))
-                    .collect()
+                rc::calibration(|n| c.params.get(n).map(|p| p.value as f64), &captured)?.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect()
             }
             _ if source == "motors" => {
                 let seen = observations.ok_or("No motor test results given.")?;
@@ -495,12 +488,9 @@ fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Opt
     let not_run = |what: &str| format!("Run the {what} analysis first.");
     Ok(match source {
         // Recomputed against the live values: they may have changed since the flight.
-        "readiness" => loaded
-            .readiness
-            .recommendations_for(|n| live.get(n).map(|p| p.value as f64))
-            .into_iter()
-            .map(|c| (c.name, c.value, Some(c.reason)))
-            .collect(),
+        "readiness" => {
+            loaded.readiness.recommendations_for(|n| live.get(n).map(|p| p.value as f64)).into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect()
+        }
         "filters" | "filters_quieter" => {
             let r = loaded.filters.as_ref().ok_or_else(|| not_run("filter"))?;
             let changes = if source == "filters" { &r.changes } else { &r.quieter_changes };
@@ -981,12 +971,7 @@ pub async fn param_table<R: Runtime>(app: AppHandle<R>) -> CmdResult<ParamTable>
             })
             .collect();
         let docs = paramdoc::docs();
-        Ok(ParamTable {
-            rows,
-            has_defaults: c.defaults.is_some(),
-            docs_source: docs.source.clone(),
-            docs_fetched: docs.fetched.clone(),
-        })
+        Ok(ParamTable { rows, has_defaults: c.defaults.is_some(), docs_source: docs.source.clone(), docs_fetched: docs.fetched.clone() })
     })
     .await
 }

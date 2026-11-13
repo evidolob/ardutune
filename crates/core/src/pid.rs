@@ -257,8 +257,7 @@ fn step_response(segments: &[(Uniform, Uniform)]) -> Option<StepResponse> {
         let mut start = 0;
         while start + n <= x.v.len().min(y.v.len()) {
             let xw = &x.v[start..start + n];
-            let active = xw.iter().map(|v| v.abs()).fold(0.0, f64::max) >= MIN_INPUT_DEG_S
-                && stats::std_dev(xw).is_some_and(|s| s > MIN_INPUT_DEG_S / 4.0);
+            let active = xw.iter().map(|v| v.abs()).fold(0.0, f64::max) >= MIN_INPUT_DEG_S && stats::std_dev(xw).is_some_and(|s| s > MIN_INPUT_DEG_S / 4.0);
             if active {
                 let step = window_step(xw, &y.v[start..start + n], fs, &mut planner);
                 let ss = steady(&step, fs);
@@ -398,9 +397,7 @@ pub fn analyse(log: &Log) -> Result<PidReport, String> {
     let fs = 1.0 / stats::median(&dt).ok_or("too few RATE messages")?;
     let fs = (fs / 10.0).round() * 10.0;
     if fs < 100.0 {
-        return Err(format!(
-            "RATE is logged at only {fs:.0} Hz; step-response analysis needs loop-rate logging (ATTITUDE_FAST in LOG_BITMASK)"
-        ));
+        return Err(format!("RATE is logged at only {fs:.0} Hz; step-response analysis needs loop-rate logging (ATTITUDE_FAST in LOG_BITMASK)"));
     }
     let (flight, _) = log.flight();
     let autotune = mode_intervals(log, MODE_AUTOTUNE);
@@ -412,9 +409,7 @@ pub fn analyse(log: &Log) -> Result<PidReport, String> {
     for ax in AXES {
         let (Some(des), Some(act)) = (Series::get(log, "RATE", ax.des), Series::get(log, "RATE", ax.act)) else { continue };
         let pairs = |ivs: &[Interval]| -> Vec<(Uniform, Uniform)> {
-            ivs.iter()
-                .filter_map(|iv| Some((resample(&des, *iv, fs, MAX_RATE_DEG_S)?, resample(&act, *iv, fs, MAX_RATE_DEG_S)?)))
-                .collect()
+            ivs.iter().filter_map(|iv| Some((resample(&des, *iv, fs, MAX_RATE_DEG_S)?, resample(&act, *iv, fs, MAX_RATE_DEG_S)?))).collect()
         };
         let normal_pairs = pairs(&normal);
         let (step, includes_autotune, used) = match step_response(&normal_pairs) {
@@ -426,10 +421,7 @@ pub fn analyse(log: &Log) -> Result<PidReport, String> {
         };
 
         // Oscillation in the rate error, confirmed in the measured rate.
-        let errors: Vec<Uniform> = used
-            .iter()
-            .map(|(x, y)| Uniform { t0: x.t0, fs, v: x.v.iter().zip(&y.v).map(|(a, b)| a - b).collect() })
-            .collect();
+        let errors: Vec<Uniform> = used.iter().map(|(x, y)| Uniform { t0: x.t0, fs, v: x.v.iter().zip(&y.v).map(|(a, b)| a - b).collect() }).collect();
         let oscillation = welch_1d(&errors.iter().collect::<Vec<_>>()).and_then(|(f, p)| {
             let (k, prom) = strongest_peak(&f, &p)?;
             let amplitude = band_rms(&f, &p, f[k]);
@@ -478,16 +470,9 @@ pub fn analyse(log: &Log) -> Result<PidReport, String> {
         );
     }
     let autotune = autotune_results(log);
-    let tuned: Vec<&str> = AXES
-        .iter()
-        .filter(|a| autotune.iter().any(|s| s.name == format!("ATC_RAT_{}_P", a.param)))
-        .map(|a| a.name)
-        .collect();
+    let tuned: Vec<&str> = AXES.iter().filter(|a| autotune.iter().any(|s| s.name == format!("ATC_RAT_{}_P", a.param))).map(|a| a.name).collect();
     if !tuned.is_empty() && tuned.len() < 3 {
-        notes.push(format!(
-            "AutoTune only finished {}; the other axes keep their current gains if you apply its results.",
-            tuned.join(" and ")
-        ));
+        notes.push(format!("AutoTune only finished {}; the other axes keep their current gains if you apply its results.", tuned.join(" and ")));
     }
     Ok(PidReport { sample_rate_hz: fs, axes, suggestions, autotune, notes })
 }
@@ -528,34 +513,23 @@ fn axis_findings(
 ) {
     let axis = ax.name;
     match step {
-        None => out.push(format!(
-            "Not enough sharp {axis} inputs to measure the step response; fly stick snaps on this axis."
-        )),
+        None => out.push(format!("Not enough sharp {axis} inputs to measure the step response; fly stick snaps on this axis.")),
         Some(s) => {
             let caveat = if includes_autotune { " (includes AutoTune periods)" } else { "" };
             if s.overshoot_pct > OVERSHOOT_HIGH_PCT {
                 out.push(format!("The {axis} response overshoots by {:.0}%{caveat}: the loop is under-damped.", s.overshoot_pct));
             }
             if s.steady_state < 0.85 {
-                out.push(format!(
-                    "The {axis} rate settles at {:.0}% of the target{caveat}: tracking is weak (I or FF low).",
-                    s.steady_state * 100.0
-                ));
+                out.push(format!("The {axis} rate settles at {:.0}% of the target{caveat}: tracking is weak (I or FF low).", s.steady_state * 100.0));
             }
             if s.overshoot_pct < OVERSHOOT_LOW_PCT && s.rise_ms.is_some_and(|r| r > SLOW_RISE_MS) {
-                out.push(format!(
-                    "The {axis} response is slow (rise time {:.0} ms) with no overshoot{caveat}: there is room for more P.",
-                    s.rise_ms.unwrap()
-                ));
+                out.push(format!("The {axis} response is slow (rise time {:.0} ms) with no overshoot{caveat}: there is room for more P.", s.rise_ms.unwrap()));
             }
         }
     }
     if let Some(o) = osc {
         let real = if o.in_actual { "visible in the measured rate, so the vehicle is really moving" } else { "in the error only" };
-        out.push(format!(
-            "The {axis} rate error has a {:.0} Hz oscillation ({:.1} °/s RMS, {real}).",
-            o.freq_hz, o.amplitude_deg_s
-        ));
+        out.push(format!("The {axis} rate error has a {:.0} Hz oscillation ({:.1} °/s RMS, {real}).", o.freq_hz, o.amplitude_deg_s));
     }
     if terms.d_noise_share.is_some_and(|d| d > 0.5) {
         out.push(format!(
@@ -567,10 +541,7 @@ fn axis_findings(
         ));
     }
     if terms.saturated_pct.is_some_and(|p| p > 2.0) {
-        out.push(format!(
-            "The {axis} output was at its limit {:.1}% of the time: the vehicle may lack control authority.",
-            terms.saturated_pct.unwrap()
-        ));
+        out.push(format!("The {axis} output was at its limit {:.1}% of the time: the vehicle may lack control authority.", terms.saturated_pct.unwrap()));
     }
     if terms.i_mean.is_some_and(|i| i.abs() > 0.1) {
         out.push(format!(
@@ -624,12 +595,7 @@ fn autotune_results(log: &Log) -> Vec<Suggestion> {
         let mut add = |name: String, value: Option<f64>, what: &str| {
             if let Some(v) = value {
                 found.retain(|s| s.name != name);
-                found.push(Suggestion {
-                    current: log.param(&name),
-                    name,
-                    value: v,
-                    reason: format!("{} {what} found by AutoTune", ax.name),
-                });
+                found.push(Suggestion { current: log.param(&name), name, value: v, reason: format!("{} {what} found by AutoTune", ax.name) });
             }
         };
         if body.contains("Rate:") {

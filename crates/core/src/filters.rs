@@ -138,12 +138,7 @@ impl NotchSettings {
             _ => "other",
         };
         let h: Vec<String> = self.harmonic_list().iter().map(u32::to_string).collect();
-        format!(
-            "notch {mode}, harmonics {}, bandwidth {} Hz at {} Hz",
-            h.join("+"),
-            format_value(self.bandwidth_hz),
-            format_value(self.freq_hz)
-        )
+        format!("notch {mode}, harmonics {}, bandwidth {} Hz at {} Hz", h.join("+"), format_value(self.bandwidth_hz), format_value(self.freq_hz))
     }
 }
 
@@ -295,8 +290,7 @@ impl Prepared {
         let lp = self.low_pass_gain(s.gyro_lpf_hz);
         let post: Vec<f64> = notched.iter().zip(&lp).map(|(n, g)| n * g).collect();
         let df = self.df();
-        let noise_rms =
-            self.freq_hz.iter().zip(&post).filter(|(f, _)| **f >= CONTROL_BAND_HZ).map(|(_, p)| p * df).sum::<f64>().sqrt();
+        let noise_rms = self.freq_hz.iter().zip(&post).filter(|(f, _)| **f >= CONTROL_BAND_HZ).map(|(_, p)| p * df).sum::<f64>().sqrt();
         let lag_deg = self.lag_deg(s, lag_ref);
         Evaluation {
             settings: s.clone(),
@@ -387,11 +381,9 @@ pub fn simulate(log: &Log, lag_ref_hz: f64) -> Result<FilterReport, String> {
 
     let context = |windows: &[(f64, f64)]| Context {
         motors_hz: motors.per_motor(windows).into_iter().map(|(_, f)| f).collect(),
-        rpm_sensor_hz: stats::median(
-            &windows.iter().filter_map(|(a, b)| mean_in(rpm_sensor.as_ref(), *a, *b)).collect::<Vec<_>>(),
-        )
-        .filter(|v| *v > 0.0)
-        .map(|rpm| rpm / 60.0),
+        rpm_sensor_hz: stats::median(&windows.iter().filter_map(|(a, b)| mean_in(rpm_sensor.as_ref(), *a, *b)).collect::<Vec<_>>())
+            .filter(|v| *v > 0.0)
+            .map(|rpm| rpm / 60.0),
         throttle: stats::median(&windows.iter().filter_map(|(a, b)| mean_in(throttle.as_ref(), *a, *b)).collect::<Vec<_>>()),
     };
     let prepared_batches: Vec<(Vec<f64>, Context)> = chosen

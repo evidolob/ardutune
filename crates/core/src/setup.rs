@@ -7,10 +7,7 @@ use serde::Serialize;
 
 use crate::diagnose::mode_name;
 use crate::params::format_value;
-use crate::readiness::{
-    notch_config, recommend_params, ParamChange, Status, BAT_OPT_PRE_POST_BIT, RAW_LOG_OPT_PRE_POST_BIT,
-    REQUIRED_LOG_BITS,
-};
+use crate::readiness::{notch_config, recommend_params, ParamChange, Status, BAT_OPT_PRE_POST_BIT, RAW_LOG_OPT_PRE_POST_BIT, REQUIRED_LOG_BITS};
 
 /// Live state that some checks use; all optional.
 #[derive(Debug, Clone, Default)]
@@ -68,17 +65,7 @@ const POSITION_MODES: [u32; 14] = [3, 4, 5, 6, 7, 11, 16, 17, 18, 19, 21, 23, 24
 
 pub fn assess(param: impl Fn(&str) -> Option<f64>, live: &Live) -> Guide {
     let p: Param = &param;
-    Guide {
-        steps: vec![
-            frame(p),
-            esc_telemetry(p),
-            radio(p, live),
-            failsafes(p),
-            battery(p, live),
-            sensors(p, live),
-            logging(p, live),
-        ],
-    }
+    Guide { steps: vec![frame(p), esc_telemetry(p), radio(p, live), failsafes(p), battery(p, live), sensors(p, live), logging(p, live)] }
 }
 
 pub(crate) fn item(status: Status, title: impl Into<String>, detail: impl Into<String>) -> Item {
@@ -195,9 +182,7 @@ fn frame(p: Param) -> Step {
                 ));
             }
             if let Some(n) = motor_count(c) {
-                let missing: Vec<usize> = (1..=n)
-                    .filter(|m| !(1..=16).any(|ch| p(&format!("SERVO{ch}_FUNCTION")) == Some(32.0 + *m as f64)))
-                    .collect();
+                let missing: Vec<usize> = (1..=n).filter(|m| !(1..=16).any(|ch| p(&format!("SERVO{ch}_FUNCTION")) == Some(32.0 + *m as f64))).collect();
                 if missing.is_empty() {
                     items.push(item(Status::Pass, format!("All {n} motors have an output"), "SERVOn_FUNCTION 33…"));
                 } else {
@@ -319,7 +304,13 @@ fn esc_telemetry(p: Param) -> Step {
             "Enable it (INS_HNTCH_ENABLE = 1, reboot) and set it up from a hover log with ArduTune's Noise and Filters analysis.",
         ));
     }
-    step("esc", "ESC telemetry and RPM", "Motor RPM lets the notch filter remove motor noise precisely, and ESC telemetry shows failing motors.", items, changes)
+    step(
+        "esc",
+        "ESC telemetry and RPM",
+        "Motor RPM lets the notch filter remove motor noise precisely, and ESC telemetry shows failing motors.",
+        items,
+        changes,
+    )
 }
 
 // ---------- 3. Radio ----------
@@ -349,11 +340,7 @@ fn radio(p: Param, live: &Live) -> Step {
     if p("RC1_MIN").is_none() {
         // Can't tell without the RC parameters.
     } else if defaults {
-        items.push(item(
-            Status::Fail,
-            "The radio isn't calibrated",
-            "RC1-4 still have the default 1100-1900 range. Calibrate the radio in a ground station.",
-        ));
+        items.push(item(Status::Fail, "The radio isn't calibrated", "RC1-4 still have the default 1100-1900 range. Calibrate the radio in a ground station."));
     } else {
         items.push(item(Status::Pass, "Radio calibrated", ""));
     }
@@ -460,11 +447,7 @@ fn failsafes(p: Param) -> Step {
         items.push(item(Status::Warn, "EKF failsafe is off", "FS_EKF_ACTION = 1 lands if the position estimate goes bad."));
     }
     if int(p, "FS_CRASH_CHECK") == Some(0) {
-        items.push(item(
-            Status::Warn,
-            "Crash check is off",
-            "FS_CRASH_CHECK = 1 disarms after a crash so the motors stop.",
-        ));
+        items.push(item(Status::Warn, "Crash check is off", "FS_CRASH_CHECK = 1 disarms after a crash so the motors stop."));
         changes.extend(change(p, "FS_CRASH_CHECK", 1.0, "Disarm automatically after a crash"));
     }
     step("failsafes", "Failsafes", "What the vehicle does on its own when the radio, battery or position estimate fails.", items, changes)
@@ -665,7 +648,11 @@ fn sensors(p: Param, live: &Live) -> Step {
     if p("INS_ACCOFFS_X").is_none() {
         // Can't tell without the calibration parameters.
     } else if offs.iter().all(|v| *v == 0.0) && scal.iter().all(|v| *v == 1.0) {
-        items.push(item(Status::Fail, "Accelerometer not calibrated", "Calibrate it in a ground station (six positions), with the vehicle level for the first one."));
+        items.push(item(
+            Status::Fail,
+            "Accelerometer not calibrated",
+            "Calibrate it in a ground station (six positions), with the vehicle level for the first one.",
+        ));
     } else {
         items.push(item(Status::Pass, "Accelerometer calibrated", ""));
     }
@@ -689,7 +676,11 @@ fn sensors(p: Param, live: &Live) -> Step {
             if !used {
                 items.push(item(Status::Info, format!("Compass {n} ({kind}) is not used"), ""));
             } else if ofs.iter().all(|v| *v == 0.0) {
-                items.push(item(Status::Fail, format!("Compass {n} ({kind}) not calibrated"), "Calibrate outdoors with the battery mounted, away from metal (ArduTune's Compass calibration), then reboot."));
+                items.push(item(
+                    Status::Fail,
+                    format!("Compass {n} ({kind}) not calibrated"),
+                    "Calibrate outdoors with the battery mounted, away from metal (ArduTune's Compass calibration), then reboot.",
+                ));
             } else {
                 let size = ofs.iter().map(|v| v * v).sum::<f64>().sqrt();
                 let max = p("COMPASS_OFFS_MAX").unwrap_or(1800.0);
@@ -773,7 +764,11 @@ fn logging(p: Param, live: &Live) -> Step {
     let mask = int(p, "LOG_BITMASK").unwrap_or(0) as u32;
     let missing: Vec<&str> = REQUIRED_LOG_BITS.iter().filter(|(b, _)| mask & (1 << b) == 0).map(|(_, n)| *n).collect();
     if missing.is_empty() {
-        items.push(item(Status::Pass, "LOG_BITMASK has everything PID tuning needs", "Attitude at loop rate (ATTITUDE_FAST), PID, IMU, motor outputs and throttle."));
+        items.push(item(
+            Status::Pass,
+            "LOG_BITMASK has everything PID tuning needs",
+            "Attitude at loop rate (ATTITUDE_FAST), PID, IMU, motor outputs and throttle.",
+        ));
     } else {
         items.push(item(
             Status::Fail,
@@ -783,16 +778,16 @@ fn logging(p: Param, live: &Live) -> Step {
     }
 
     let (gyro_ok, text) = gyro_logging(p);
-    items.push(item(if gyro_ok { Status::Pass } else { Status::Fail }, text, if gyro_ok { "Enough for the noise spectrum and filter simulation." } else { "Needed for the noise and filter analysis." }));
+    items.push(item(
+        if gyro_ok { Status::Pass } else { Status::Fail },
+        text,
+        if gyro_ok { "Enough for the noise spectrum and filter simulation." } else { "Needed for the noise and filter analysis." },
+    ));
     if p("INS_RAW_LOG_OPT").is_some_and(|v| v != 0.0) && p("INS_LOG_BAT_MASK").is_some_and(|v| v != 0.0) {
         items.push(item(Status::Warn, "Raw IMU logging and the batch sampler are both on", "One is enough; both make logs larger and can drop data."));
     }
     if gyro_ok {
-        items.push(item(
-            Status::Info,
-            "Turn high-rate gyro logging off when tuning is finished",
-            "It makes large logs (tens of MB per flight).",
-        ));
+        items.push(item(Status::Info, "Turn high-rate gyro logging off when tuning is finished", "It makes large logs (tens of MB per flight)."));
     }
     if p("LOG_DISARMED") == Some(1.0) {
         items.push(item(Status::Info, "Logging while disarmed is on", "Useful for setup; it fills the SD card faster."));
@@ -897,7 +892,12 @@ mod tests {
 
     #[test]
     fn kakute_setup() {
-        let live = Live { sensors: Some((1 << 16 | 1 << 24, 1 << 16 | 1 << 24, 1 << 16 | 1 << 24)), battery_v: Some(16.4), messages: vec![], rc: Some([1500, 1500, 988, 1500, 999, 999, 2011, 999]) };
+        let live = Live {
+            sensors: Some((1 << 16 | 1 << 24, 1 << 16 | 1 << 24, 1 << 16 | 1 << 24)),
+            battery_v: Some(16.4),
+            messages: vec![],
+            rc: Some([1500, 1500, 988, 1500, 999, 999, 2011, 999]),
+        };
         let mut p = kakute();
         p.push(("RC7_OPTION".to_owned(), 65.0));
         let g = assess(params(&p), &live);
