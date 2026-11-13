@@ -716,7 +716,8 @@ pub(crate) fn recommend_params(param: &dyn Fn(&str) -> Option<f64>, gyro_complet
     let mut out = Vec::new();
     let mut set = |name: &str, value: f64, reason: String| {
         let current = param(name);
-        if current != Some(value) {
+        // Compared as the vehicle stores them: 32-bit floats.
+        if current.map(|c| c as f32) != Some(value as f32) {
             out.push(ParamChange { name: name.to_owned(), current, value, reason });
         }
     };

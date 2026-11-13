@@ -108,7 +108,8 @@ fn rank(s: Status) -> u8 {
 
 pub(crate) fn change(p: Param, name: &str, value: f64, reason: impl Into<String>) -> Option<ParamChange> {
     let current = p(name)?;
-    (current != value).then(|| ParamChange { name: name.to_owned(), current: Some(current), value, reason: reason.into() })
+    // The vehicle stores 32-bit floats: 0.075 reads back as 0.07500000298.
+    (current as f32 != value as f32).then(|| ParamChange { name: name.to_owned(), current: Some(current), value, reason: reason.into() })
 }
 
 pub(crate) fn int(p: Param, name: &str) -> Option<i64> {

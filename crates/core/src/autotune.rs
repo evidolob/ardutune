@@ -419,6 +419,19 @@ mod tests {
     }
 
     #[test]
+    fn float_readback_is_not_a_change() {
+        // The vehicle stores 0.075 as a 32-bit float.
+        let mut m = params();
+        m.insert("AUTOTUNE_AGGR".into(), f64::from(0.075f32));
+        for n in ["ATC_RAT_RLL_FLTT", "ATC_RAT_RLL_FLTD", "ATC_RAT_PIT_FLTT", "ATC_RAT_PIT_FLTD"] {
+            m.insert(n.into(), 10.0);
+        }
+        let v = view(|n| m.get(n).copied(), Some(15.0), None);
+        assert!(v.recommended.is_empty(), "{:?}", v.recommended);
+        assert!(!v.checks.iter().any(|c| c.id == "large_filters"));
+    }
+
+    #[test]
     fn builtin_quiktune() {
         let mut m = params();
         m.extend([("QUIK_ENABLE".to_string(), 0.0), ("QUIK_AXES".into(), 7.0), ("QUIK_RC_FUNC".into(), 300.0), ("RC8_OPTION".into(), 300.0)]);

@@ -64,9 +64,12 @@ pub fn initial_tune(param: impl Fn(&str) -> Option<f64>, prop_in: f64, cells: Op
     let mut changes = Vec::new();
     let mut add = |name: &str, value: f64, reason: String| changes.extend(change(p, name, value, reason));
     add("INS_GYRO_FILTER", gyro, format!("Gyro low-pass for {size}: larger props are slower and noisier at lower frequencies"));
+    // ArduPilot's AutoTune page asks for 10 Hz roll and pitch filters on
+    // props of 13 inches and more; the calculator's half-gyro value is higher.
+    let (rp_filter, why) = if prop_in >= 13.0 { (10.0, "10 Hz for props of 13 inches and more (ArduPilot's AutoTune advice)") } else { (rate_filter, "half the gyro filter") };
     for axis in ["RLL", "PIT"] {
-        add(&format!("ATC_RAT_{axis}_FLTD"), rate_filter, "D-term filter at half the gyro filter".to_owned());
-        add(&format!("ATC_RAT_{axis}_FLTT"), rate_filter, "Target filter at half the gyro filter".to_owned());
+        add(&format!("ATC_RAT_{axis}_FLTD"), rp_filter, format!("D-term filter: {why}"));
+        add(&format!("ATC_RAT_{axis}_FLTT"), rp_filter, format!("Target filter: {why}"));
         add(&format!("ATC_RAT_{axis}_FLTE"), 0.0, "No error filter on roll and pitch".to_owned());
     }
     add("ATC_RAT_YAW_FLTD", 0.0, "No D-term filter on yaw".to_owned());
@@ -143,6 +146,19 @@ mod tests {
 
     fn value(t: &InitialTune, name: &str) -> f64 {
         t.changes.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("{name} not suggested")).value
+    }
+
+    #[test]
+    fn large_props_get_10_hz_roll_pitch_filters() {
+        let m = vehicle(&[]);
+        let t = initial_tune(|n| m.get(n).copied(), 15.0, Some(8), Some(Chemistry::LiIon)).unwrap();
+        for n in ["ATC_RAT_RLL_FLTD", "ATC_RAT_RLL_FLTT", "ATC_RAT_PIT_FLTD", "ATC_RAT_PIT_FLTT"] {
+            assert_eq!(value(&t, n), 10.0, "{n}");
+        }
+        // Re-reading the written values as 32-bit floats proposes nothing.
+        let written: std::collections::HashMap<String, f64> = m.iter().map(|(k, v)| (k.clone(), *v)).chain(t.changes.iter().map(|c| (c.name.clone(), f64::from(c.value as f32)))).collect();
+        let again = initial_tune(|n| written.get(n).copied(), 15.0, Some(8), Some(Chemistry::LiIon)).unwrap();
+        assert!(again.changes.is_empty(), "{:?}", again.changes);
     }
 
     #[test]
