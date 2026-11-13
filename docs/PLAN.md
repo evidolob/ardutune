@@ -413,6 +413,38 @@ Not yet:
 - reading AUTOTUNE_AXES/AGGR results per axis from ATUN messages;
 - yaw D tuning (4.4+ bit).
 
+## Revisit: log analysis UI, comparing logs
+
+The log analysis pages (Readiness, Noise, Filters, PIDs) work on one open
+log at a time. Revisit all of them so that two or more logs can be looked
+at together. A comparison tells the app much more about the drone and how it
+responds to changes than any single flight.
+
+- Open several logs at once, usually flights of the same drone from Flight
+  history (they're already grouped by drone and ordered by boot count). Mark
+  one as the reference and compare the others with it.
+- The parameter changes between the compared flights head the comparison
+  (Flight history already works them out), so each difference in response
+  sits next to what was changed.
+- Side by side or overlaid:
+  - noise spectra before and after a filter change, with the notch
+    positions;
+  - step responses before and after a PID or AutoTune change;
+  - vibration levels;
+  - hover throttle;
+  - motor output balance.
+- What changed, in words: "The filter change cut noise at 180 Hz by 12 dB
+  but added 3 ms of delay", or "AutoTune raised roll D; overshoot went from
+  18% to 6%".
+- Learning from several flights:
+  - how noise moves with throttle and battery voltage;
+  - whether a recommendation actually helped;
+  - which flight had the best response, as the one to go back to.
+- A clearer way to switch, close and add logs. The sidebar's single
+  open-log line becomes a small list of the compared logs.
+- Keep it fast with several large logs: analyse in the background and cache
+  per log (Flight history's summary cache is a start).
+
 ## Before publishing on GitHub: license
 
 Done: GPL-3.0-or-later, like ArduPilot, Mission Planner and the Methodic
