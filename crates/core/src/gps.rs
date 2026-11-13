@@ -102,6 +102,8 @@ pub struct Check {
     pub gps_switch: bool,
     /// Offer "the vehicle really is here" (forget the last known position).
     pub accept_position: bool,
+    /// The fix is on the serial ports page.
+    pub ports_link: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -224,7 +226,7 @@ pub fn distance_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 }
 
 fn check(status: Status, title: impl Into<String>, detail: impl Into<String>) -> Check {
-    Check { status, title: title.into(), detail: detail.into(), changes: vec![], gps_switch: false, accept_position: false }
+    Check { status, title: title.into(), detail: detail.into(), changes: vec![], gps_switch: false, accept_position: false, ports_link: false }
 }
 
 pub fn page(param: impl Fn(&str) -> Option<f64>, live: &Live) -> Page {
@@ -259,7 +261,7 @@ pub fn page(param: impl Fn(&str) -> Option<f64>, live: &Live) -> Page {
         };
         if fix.fix_type == 0 {
             let detail = if needs_serial(kind) && port.is_none() {
-                "No serial port is set for a GPS: set SERIALn_PROTOCOL = 5 (GPS) on the port the GPS is wired to, then reboot.".to_owned()
+                "No serial port is set for a GPS: set up the port the GPS is wired to as GPS (Serial ports), then reboot.".to_owned()
             } else {
                 format!(
                     "Nothing answers{}. Check the wiring (GPS TX to the flight controller's RX, RX to TX, 5 V and ground) and that the GPS gets power: \
@@ -267,7 +269,9 @@ pub fn page(param: impl Fn(&str) -> Option<f64>, live: &Live) -> Page {
                     port.as_ref().map(|s| format!(" on {s}")).unwrap_or_default()
                 )
             };
-            checks.push(check(Status::Fail, format!("GPS {n} isn't detected"), detail));
+            let mut c = check(Status::Fail, format!("GPS {n} isn't detected"), detail);
+            c.ports_link = true;
+            checks.push(c);
         }
         let mode = p(&names.gnss);
         if fix.fix_type >= 3 && fix.satellites.is_some_and(|s| s < 10) && global_systems(mode).is_some_and(|g| g <= 1) {
@@ -527,7 +531,7 @@ mod tests {
         m.remove("SERIAL3_PROTOCOL");
         let live = Live { gps: vec![Fix::default()], boot_s: Some(60.0), ..Default::default() };
         let pg = page(|n| m.get(n).copied(), &live);
-        assert!(pg.checks[0].title.contains("isn't detected") && pg.checks[0].detail.contains("SERIALn_PROTOCOL = 5"));
+        assert!(pg.checks[0].title.contains("isn't detected") && pg.checks[0].detail.contains("Serial ports") && pg.checks[0].ports_link);
 
         let m = params();
         let waiting = Live { gps: vec![Fix { fix_type: 1, ..Default::default() }], boot_s: Some(400.0), ..Default::default() };

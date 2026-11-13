@@ -51,6 +51,13 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   every compass with live progress and direction coverage, explains
   failures (field strength, orientation, fit, large offsets) and saves the
   result. `ardutune compass`.
+- Serial ports: what each SERIAL port does, with its UART name and the data
+  arriving on it live (ArduPilot 4.1+), the GPS fix and receiver signal on
+  their ports. Set a port up for a GPS, ExpressLRS/Crossfire receiver,
+  digital video OSD, ESC telemetry or telemetry radio in one step, or choose
+  protocol, baud and wiring options yourself. It checks for a GPS with no
+  port, a receiver or OSD on two ports, a device that sends nothing, and data
+  arriving on a port that's off.
 - RC channels: the sticks as two animated gimbals (mode 1 or 2) to check
   directions, with reversing; switches and knobs with their position now and
   what the function does low, in the middle and high; channels that haven't

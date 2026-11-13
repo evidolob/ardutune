@@ -15,7 +15,7 @@ const LOG_VIEWS = [
 /** The sidebar, in the order a build goes: set it up, configure it, tune it from flight logs, and find out what's wrong. */
 const NAV = [
   ["Initial setup", [["setup", "Setup guide"], ["firmware", "Firmware"], ["motors", "Motor test"], ["compass", "Compass calibration"], ["tune", "Initial tune"]]],
-  ["Configuration", [["rc", "RC channels"], ["gps", "GPS"], ["allparams", "Parameters"], ["params", "Backups"]]],
+  ["Configuration", [["ports", "Serial ports"], ["rc", "RC channels"], ["gps", "GPS"], ["allparams", "Parameters"], ["params", "Backups"]]],
   ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], "log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
   ["Troubleshoot", [["prearm", "Pre-arm check"], ["diagnose", "Crash diagnosis"]]],
 ];
@@ -45,6 +45,7 @@ const state = {
   setup: null, // latest setup guide
   compass: { cal: null, running: false }, // compass calibration progress
   // RC channels page; modes: staged FLTMODEn changes; seen: per channel {lo, hi, vals} since the page opened
+  serial: { view: null, polling: false }, // serial ports page (state.ports is the connection list)
   gps: { page: null, polling: false, staged: {}, showSettings: false }, // GPS page; staged: setting edits
   rc: { status: null, choices: null, polling: false, showAll: false, modes: {}, seen: {}, stickMode: Number(safeGet("ardutune.stickMode")) === 1 ? 1 : 2 },
   motors: { layout: null, propsOff: false, throttle: 7, seen: [], verdict: null, spinning: null }, // motor test
@@ -127,6 +128,7 @@ function go(view) {
   if (view === "tune" && state.vehicle && !state.tune.pack && !state.vehicleBusy) loadPack();
   if (view === "rc" && state.vehicle) pollRc();
   if (view === "gps" && state.vehicle) pollGps();
+  if (view === "ports" && state.vehicle) pollPorts();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
   if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
 }
@@ -425,6 +427,25 @@ async function writeValues(title, values) {
   } catch (e) {
     set({ modal: null });
     toast(e);
+  }
+}
+
+/** Keeps the serial ports page live while it is open. */
+async function pollPorts() {
+  if (state.serial.polling) return;
+  state.serial.polling = true;
+  try {
+    while (state.view === "ports" && state.vehicle) {
+      if (!state.vehicleBusy && !["planning", "writing"].includes(state.modal?.stage)) {
+        const view = await invoke("serial_status");
+        set({ serial: { ...state.serial, view } });
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  } catch (e) {
+    toast(e);
+  } finally {
+    state.serial.polling = false;
   }
 }
 
@@ -737,6 +758,22 @@ const actions = {
   rcRemove: (d) => writeChanges(`switch:${d.ch}:0`, `removing "${d.role}" from channel ${d.ch}`),
   rcReverse: (d) => writeValues(`channel ${d.ch} ${d.rev === "true" ? "normal" : "reversed"}`, [[`RC${d.ch}_REVERSED`, d.rev === "true" ? 0 : 1]]),
   rcShowAll: () => set({ rc: { ...state.rc, showAll: !state.rc.showAll } }),
+  portEdit: (d) => {
+    const p = state.serial.view?.ports.find((x) => x.n === Number(d.n));
+    set({ modal: { stage: "portEdit", title: `Set up SERIAL${d.n}`, n: Number(d.n), custom: false, protocol: p?.protocol ?? -1, baud: p?.baud ?? 115, options: 0 } });
+  },
+  portPick: (d) => set({ modal: { stage: "portPick", title: `Which port is the ${state.serial.view?.setups.find((s) => s.id === d.setup)?.name ?? "device"} wired to?`, setup: d.setup } }),
+  portSetup: (d) => {
+    const n = Number(d.n ?? document.getElementById("portn")?.value);
+    const name = state.serial.view?.setups.find((s) => s.id === d.setup)?.name ?? d.setup;
+    writeChanges(`serial:${n}:${d.setup}`, `SERIAL${n}: ${name.toLowerCase()}`);
+  },
+  portCustom: () => set({ modal: { ...state.modal, custom: true } }),
+  portWriteCustom: () => {
+    const m = state.modal;
+    writeValues(`SERIAL${m.n} settings`, [[`SERIAL${m.n}_PROTOCOL`, Number(m.protocol)], [`SERIAL${m.n}_BAUD`, Number(m.baud)], [`SERIAL${m.n}_OPTIONS`, Number(m.options)]]);
+  },
+  goPorts: () => go("ports"),
   gpsSettings: () => set({ gps: { ...state.gps, showSettings: !state.gps.showSettings } }),
   gpsDiscard: () => set({ gps: { ...state.gps, staged: {} } }),
   gpsWrite: () => {
@@ -851,6 +888,11 @@ document.addEventListener("change", (e) => {
       Object.assign(patch, { min: String(r.min), max: String(r.max) });
     }
     set({ modal: { ...state.modal, ...patch } });
+  }
+  if (t.dataset.pfield && state.modal) set({ modal: { ...state.modal, [t.dataset.pfield]: Number(t.value) } });
+  if (t.dataset.pbit !== undefined && state.modal) {
+    const bit = 1 << Number(t.dataset.pbit);
+    set({ modal: { ...state.modal, options: t.checked ? state.modal.options | bit : state.modal.options & ~bit } });
   }
   if (t.dataset.gset || t.dataset.gbits) {
     const name = t.dataset.gset ?? t.dataset.gbits;
@@ -1738,6 +1780,42 @@ function otherRow(c) {
   </div>`;
 }
 
+function portsView() {
+  const head = `<h1>Serial ports</h1><p class="lead">What each of the flight controller's serial ports does and what's arriving on it. Set a port up for a GPS, receiver, OSD, ESC telemetry or telemetry radio in one step. Changes take effect after a reboot.</p>`;
+  if (!state.vehicle) return head + notConnected("see its serial ports");
+  const v = state.serial.view;
+  if (!v) return head + busy("Reading the serial ports…");
+  const kind = (st) => (st === "fail" ? "fail" : st === "warn" ? "warn" : "info");
+  const checks = v.checks
+    .map((c) => {
+      const btn = c.setup && c.port === null ? `<div class="actions"><button class="btn primary" data-action="portPick" data-setup="${c.setup}">Choose the port…</button></div>` : c.port !== null ? `<div class="actions"><button class="btn" data-action="portEdit" data-n="${c.port}">Change SERIAL${c.port}…</button></div>` : "";
+      return `<div class="banner ${kind(c.status)}"><b>${esc(c.title)}</b> ${esc(c.detail)}${btn}</div>`;
+    })
+    .join("");
+  const setupName = (id) => v.setups.find((s) => s.id === id)?.name;
+  const rows = v.ports
+    .map((p) => {
+      const what = p.usb ? `USB <span class="muted">· ${esc(p.protocol_name)}</span>` : p.protocol === -1 ? `<span class="muted">Nothing</span>` : `${esc(setupName(p.setup) && p.setup !== "off" ? setupName(p.setup) : p.protocol_name)}${p.setup && setupName(p.setup) !== p.protocol_name && p.setup !== "off" ? ` <span class="muted">· ${esc(p.protocol_name)}</span>` : ""}`;
+      const opts = p.options.length ? ` <span class="muted">· ${esc(p.options.join(", "))}</span>` : "";
+      const live = p.live ? esc(p.live) : p.rx_bps === null ? "" : `<span class="muted">quiet</span>`;
+      return `<tr class="${p.protocol === -1 ? "dim" : ""}">
+        <td><b>SERIAL${p.n}</b>${p.hw ? ` <span class="muted">${esc(p.usb ? "USB" : p.hw)}</span>` : ""}</td>
+        <td>${what}${opts}</td>
+        <td class="muted">${p.usb || p.protocol === -1 ? "" : esc(p.baud_name ?? "")}</td>
+        <td>${live}</td>
+        <td class="num">${p.usb ? "" : `<button class="btn small" data-action="portEdit" data-n="${p.n}">Change</button>`}</td>
+      </tr>`;
+    })
+    .join("");
+  return `${head}
+    ${checks}
+    <div class="card">
+      <table class="ports"><tr><th>Port</th><th>Does</th><th>Baud</th><th>Live</th><th></th></tr>${rows}</table>
+      ${v.traffic ? "" : `<p class="muted">This firmware doesn't report port traffic or the hardware names (ArduPilot 4.1 and later do).</p>`}
+      <p class="muted">The board's wiring diagram shows which pads belong to which SERIAL port${v.traffic ? " (the UART name next to each port helps match them)" : ""}.</p>
+    </div>`;
+}
+
 /** A GPS setting as a form control: a list, ticks for a bitmask, or a number. */
 function gpsSetting(s) {
   const staged = state.gps.staged[s.name];
@@ -1790,6 +1868,7 @@ function gpsView() {
         c.changes.length ? `<button class="btn ${c.status === "fail" ? "primary" : ""}" data-action="write" data-source="gps:${i}" data-title="${esc(c.changes.length > 1 ? "GPS fixes" : "GPS fix")}" ${state.vehicleBusy ? "disabled" : ""}>${c.changes.some((x) => /GPS\d?_TYPE2?$/.test(x.name) && x.value === 0) ? "Turn the GPS off…" : "Fix it…"}</button>` : "",
         c.gps_switch ? `<button class="btn" data-action="askGpsSwitch" ${state.vehicleBusy ? "disabled" : ""}>Put GPS on a switch…</button>` : "",
         c.accept_position ? `<button class="btn" data-action="gpsAccept">The vehicle really is here</button>` : "",
+        c.ports_link ? `<button class="btn primary" data-action="goPorts">Serial ports…</button>` : "",
       ].join("");
       return `<div class="banner ${kind(c.status)}"><b>${esc(c.title)}</b> ${esc(c.detail)}${buttons ? `<div class="actions">${buttons}</div>` : ""}</div>`;
     })
@@ -2354,6 +2433,35 @@ function modal() {
           <p class="muted">Most functions act when the switch goes high (above 1800 µs); some use three positions. Check the function in ArduPilot's documentation before flying.</p>`;
       break;
     }
+    case "portEdit": {
+      const v = state.serial.view;
+      const port = v?.ports.find((x) => x.n === m.n);
+      if (!m.custom) {
+        body = `<p class="muted">Currently: ${esc(port?.protocol_name ?? "–")}${port && port.protocol !== -1 ? ` at ${esc(port.baud_name ?? "")}` : ""}.</p>
+          <div class="optlist setups">${(v?.setups ?? [])
+            .map((s) => `<button class="opt ${port?.setup === s.id ? "current" : ""}" data-action="portSetup" data-n="${m.n}" data-setup="${s.id}"><span><b>${esc(s.name)}</b><br><span class="muted">${esc(s.detail)}</span></span>${port?.setup === s.id ? chip("pass", "now") : ""}</button>`)
+            .join("")}</div>
+          <div class="actions"><button class="link" data-action="portCustom">Something else…</button><button class="btn" data-action="closeModal">Cancel</button></div>`;
+      } else {
+        const sel = (field, list, value) => `<select data-pfield="${field}">${list.map(([x, n]) => `<option value="${x}" ${x === value ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
+        body = `<div class="form">
+            <label>Protocol</label><div>${sel("protocol", [[-1, "Nothing"], ...(v?.protocols ?? []).filter(([x]) => x !== -1)], m.protocol)}</div>
+            <label>Baud</label><div>${sel("baud", v?.bauds ?? [], m.baud)}</div>
+            <label>Wiring</label><div class="ticksrow">${(v?.option_bits ?? []).map(([b, n]) => `<label class="tick"><input type="checkbox" data-pbit="${b}" ${(m.options & (1 << b)) !== 0 ? "checked" : ""}> ${esc(n)}</label>`).join("")}</div>
+          </div>
+          <p class="muted">InvertRX/TX for receivers that need it (SBUS on some boards), HalfDuplex for one-wire devices, SwapTXRX on F7/H7 boards when TX and RX are wired the wrong way round.</p>
+          <div class="actions"><button class="btn primary" data-action="portWriteCustom">Continue…</button><button class="btn" data-action="closeModal">Cancel</button></div>`;
+      }
+      break;
+    }
+    case "portPick": {
+      const v = state.serial.view;
+      const free = (v?.ports ?? []).filter((x) => !x.usb);
+      body = `<p>Pick the port from the board's wiring diagram. Ports that already do something are marked; choosing one replaces what it does.</p>
+        <div class="actions"><select id="portn">${free.map((x) => `<option value="${x.n}" ${x.protocol === -1 ? "" : ""}>SERIAL${x.n}${x.hw ? ` (${esc(x.hw)})` : ""} — ${x.protocol === -1 ? "free" : esc(x.protocol_name)}</option>`).join("")}</select>
+        <button class="btn primary" data-action="portSetup" data-setup="${m.setup}">Continue…</button><button class="btn" data-action="closeModal">Cancel</button></div>`;
+      break;
+    }
     case "rcSplit": {
       const opts = state.rc.choices?.options ?? [];
       const free = (state.rc.status?.view.channels ?? []).filter((c) => c.kind === "free" && c.ch > 4);
@@ -2542,6 +2650,8 @@ function content() {
       return rcView();
     case "gps":
       return gpsView();
+    case "ports":
+      return portsView();
     case "history":
       return historyView();
     case "motors":

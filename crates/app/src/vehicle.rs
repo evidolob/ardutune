@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, gps, motors, paramdoc, params, rc, setup, switch, tune};
+use ardutune_core::{arming, gps, motors, serial, paramdoc, params, rc, setup, switch, tune};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
@@ -434,6 +434,13 @@ fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Opt
         let check = i.parse::<usize>().ok().and_then(|i| page.checks.get(i)).ok_or("That GPS problem is gone: look at the page again.")?;
         return Ok(check.changes.iter().map(|ch| (ch.name.clone(), ch.value, Some(ch.reason.clone()))).collect());
     }
+    // A common serial port setup: "serial:<n>:<setup>".
+    if let Some(rest) = source.strip_prefix("serial:") {
+        let (n, id) = rest.split_once(':').ok_or("bad serial source")?;
+        let n = n.parse::<u8>().map_err(|e| e.to_string())?;
+        let changes = serial::setup(|n| live.get(n).map(|p| p.value as f64), n, id)?;
+        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
+    }
     // The reversed version of the frame layout: "frame:<FRAME_TYPE>".
     if let Some(t) = source.strip_prefix("frame:") {
         let t = t.parse::<i64>().map_err(|e| e.to_string())?;
@@ -670,6 +677,29 @@ pub async fn gps_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<gps::Page> {
         }
         c.last_gps = Some(page.clone());
         Ok(page)
+    })
+    .await
+}
+
+/// The serial ports page: each port, what's live on it and checks.
+#[tauri::command]
+pub async fn serial_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<serial::View> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let r = connected(&mut slot)?.link.uart_info();
+        let report = check(&mut slot, r)?;
+        let r = connected(&mut slot)?.link.gps_sample(Duration::from_millis(300));
+        let gps = check(&mut slot, r)?;
+        let r = connected(&mut slot)?.link.rc_sample(Duration::from_millis(200));
+        let rc = check(&mut slot, r)?;
+        let c = connected(&mut slot)?;
+        let uarts = report.map(|t| serial::parse_uarts(&t)).unwrap_or_default();
+        let live = serial::Live {
+            gps_fix: gps.gps.iter().map(|g| (g.instance, gps::fix_label(g.fix_type))).collect(),
+            rc_signal: Some(rc.last.iter().take(4).any(|v| *v > 0 && *v != u16::MAX)),
+        };
+        Ok(serial::view(|n| c.params.get(n).map(|p| p.value as f64), &uarts, &live))
     })
     .await
 }

@@ -120,6 +120,18 @@ fn analyse_connect_download_write_and_reboot() {
     mock.state().gps_motion = (0.02, 50.4501, 30.5234);
     mock.state().prearm_failures.clear();
 
+    // Serial ports: names and traffic from @SYS/uarts.txt, live GPS and
+    // receiver; a common setup proposed for a port.
+    let ports = call("serial_status", json!({})).unwrap();
+    let row = |n: u64| ports["ports"].as_array().unwrap().iter().find(|p| p["n"] == json!(n)).unwrap().clone();
+    assert_eq!((row(3)["hw"].clone(), row(3)["live"].clone()), (json!("USART3"), json!("GPS 1: 3D fix")), "{ports}");
+    assert_eq!((row(6)["live"].clone(), row(6)["setup"].clone()), (json!("receiver: signal"), json!("elrs")), "RC_OPTIONS has the 420 kbaud bit");
+    assert_eq!(row(2)["setup"], json!("osd"));
+    assert!(ports["checks"].as_array().unwrap().is_empty(), "{ports}");
+    let plan = call("prepare_changes", json!({ "source": "serial:4:esc", "label": "ESC telemetry" })).unwrap();
+    assert!(plan["rows"].as_array().unwrap().iter().any(|r| r["name"] == "SERIAL4_PROTOCOL" && r["value"] == json!(16.0)), "{plan}");
+    assert!(call("prepare_changes", json!({ "source": "serial:4:elrs", "label": "x" })).unwrap_err().contains("SERIAL6 already has it"));
+
     // GPS page: a healthy GPS on SERIAL3 whose position is remembered; then a
     // spoofed one far away, with GPS off offered and the place accepted.
     let page = call("gps_status", json!({})).unwrap();

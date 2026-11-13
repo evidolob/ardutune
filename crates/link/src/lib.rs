@@ -1382,6 +1382,16 @@ impl Link {
         result.map(|_| data)
     }
 
+    /// The serial ports' hardware names and traffic since the last read,
+    /// from ArduPilot's `@SYS/uarts.txt` (4.1+). `None` when not offered.
+    pub fn uart_info(&mut self) -> Result<Option<String>> {
+        match self.read_file("@SYS/uarts.txt", &mut |_| {}) {
+            Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+            Err(Error::Ftp(_)) | Err(Error::Timeout(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Every parameter with its default value, from ArduPilot's packed
     /// parameter file (4.1+). `None` when the firmware doesn't offer it.
     pub fn param_defaults(&mut self) -> Result<Option<Vec<ftp::PackedParam>>> {

@@ -263,6 +263,22 @@ and lets it be changed safely, instead of editing `SERIALn_*` by hand.
   RC pad, settings that need a reboot.
 - Same review / backup / verify / reboot path as other writes.
 
+Done: Serial ports page (Configuration).
+- Each port shows its protocol, baud and options, plus its UART name and live
+  traffic. Both come from ArduPilot's `@SYS/uarts.txt` over MAVFTP. It also
+  shows the GPS fix and receiver signal on their ports.
+- One-step setups: GPS, ExpressLRS or Crossfire receiver (with RSSI_TYPE and
+  RC_OPTIONS), digital video OSD (OSD_TYPE), ESC telemetry, telemetry radio,
+  MAVLink 115200, and off. A custom protocol, baud and wiring are possible
+  too.
+- Checks: a GPS that's on with no port for it, RC input or OSD on two ports,
+  nothing arriving from the GPS or receiver, and data arriving on a port
+  that's off.
+- The GPS page's "not detected" problem links here.
+
+Not yet: pad and connector names per board (only the UART name), SBUS
+setups, a CLI view.
+
 ### RC channels and switches
 
 A page with every RC channel live and what it does, and a way to put

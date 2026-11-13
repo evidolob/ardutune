@@ -15,6 +15,7 @@ pub mod pid;
 pub mod plot;
 pub mod rc;
 pub mod readiness;
+pub mod serial;
 pub mod setup;
 pub mod stats;
 pub mod switch;

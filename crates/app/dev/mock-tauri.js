@@ -198,6 +198,36 @@
       }));
       return { view: { channels, mode_channel: 6, modes, notes: [], signal: true }, ranges: channels.map((c) => [c.ch, c.value ?? 0, c.value ?? 0]), rssi_pct: 87, tuning: { TUNE: 0, TUNE_MIN: 0, TUNE_MAX: 0, ATC_RAT_RLL_P: 0.135, ATC_RAT_RLL_I: 0.135, ATC_RAT_RLL_D: 0.0036, ATC_ANG_RLL_P: 4.5, ATC_RAT_YAW_P: 0.18 } };
     },
+    serial_status: async () => {
+      await sleep(500);
+      const port = (n, hw, protocol, protocol_name, baud, setup, live, rx, tx = 0) => ({ n, hw, usb: n === 0, protocol, protocol_name, baud, baud_name: baud ? { 57: "57600", 115: "115200", 230: "230400" }[baud] : null, options: [], rx_bps: rx, tx_bps: tx, live, setup });
+      const ports = [
+        port(0, "OTG1", 2, "MAVLink2", 115, null, "receiving 30 B/s, sending 900 B/s", 30, 900),
+        port(1, "UART1", 2, "MAVLink2", 57, "radio", null, 0),
+        port(2, "USART2", 42, "DisplayPort", 115, "osd", "receiving 12 B/s, sending 1.8 kB/s", 12, 1800),
+        port(3, "USART3", 5, "GPS", 230, "gps", "GPS 1: 3D fix", 140, 12),
+        port(4, "UART4", -1, "Nothing", 57, "off", "receiving 50 B/s, sending 0 B/s", 50),
+        port(6, "UART7", 23, "RCIN", 115, "crsf", "receiver: signal", 260),
+      ];
+      return {
+        ports,
+        checks: [{ status: "info", title: "Data arrives on SERIAL4, which is off", detail: "Something sends 50 B/s to it. If you connected a device there, set the port up for it.", port: 4, setup: null }],
+        setups: [
+          { id: "gps", name: "GPS", detail: "GPS receiver (ArduPilot finds its baud rate itself)" },
+          { id: "elrs", name: "ExpressLRS receiver", detail: "CRSF at 420 kbaud, link quality as RSSI, no flight-mode messages to the radio" },
+          { id: "crsf", name: "TBS Crossfire / Tracer receiver", detail: "CRSF, link quality as RSSI" },
+          { id: "osd", name: "Digital video OSD", detail: "DJI O3/O4, Walksnail or HDZero: MSP DisplayPort OSD" },
+          { id: "esc", name: "ESC telemetry", detail: "BLHeli/AM32 telemetry wire: RPM, current, temperature" },
+          { id: "radio", name: "Telemetry radio", detail: "SiK or RFD900 radio: MAVLink at 57600" },
+          { id: "mavlink", name: "MAVLink 115200", detail: "WiFi bridge, ELRS backpack or companion computer" },
+          { id: "off", name: "Nothing", detail: "Turn the port off" },
+        ],
+        traffic: true,
+        protocols: [[-1, "None"], [1, "MAVLink1"], [2, "MAVLink2"], [5, "GPS"], [16, "ESC Telemetry"], [23, "RCIN"], [42, "DisplayPort"]],
+        bauds: [[9, "9600"], [57, "57600"], [115, "115200"], [230, "230400"], [460, "460800"], [921, "921600"]],
+        option_bits: [[0, "InvertRX"], [1, "InvertTX"], [2, "HalfDuplex"], [3, "SwapTXRX"]],
+      };
+    },
     gps_accept_position: async () => null,
     gps_status: async () => {
       await sleep(600);

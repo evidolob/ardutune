@@ -1074,6 +1074,23 @@ table.modes tr.activerow td {
   background: var(--code-bg);
 }
 
+table.ports tr.dim td {
+  opacity: 0.6;
+}
+
+table.ports td {
+  vertical-align: middle;
+}
+
+.setups .opt {
+  align-items: center;
+  gap: 12px;
+}
+
+.setups .opt.current {
+  background: var(--code-bg);
+}
+
 .gpsgrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));

@@ -143,7 +143,7 @@ impl MockState {
             params.insert(format!("COMPASS_OFS_{a}"), (0.0, MAV_PARAM_TYPE_REAL32));
         }
         // GPS, failsafes returning home, an arm switch on 5 and modes on 6.
-        for (n, v) in [("GPS1_TYPE", 1.0), ("GPS1_GNSS_MODE", 0.0), ("GPS1_RATE_MS", 200.0), ("GPS_AUTO_CONFIG", 1.0), ("GPS_HDOP_GOOD", 140.0), ("SERIAL3_PROTOCOL", 5.0), ("SERIAL3_BAUD", 230.0), ("FS_THR_ENABLE", 1.0), ("BATT_FS_LOW_ACT", 2.0), ("FLTMODE_CH", 6.0)] {
+        for (n, v) in [("GPS1_TYPE", 1.0), ("GPS1_GNSS_MODE", 0.0), ("GPS1_RATE_MS", 200.0), ("GPS_AUTO_CONFIG", 1.0), ("GPS_HDOP_GOOD", 140.0), ("SERIAL0_PROTOCOL", 2.0), ("SERIAL0_BAUD", 115.0), ("SERIAL1_PROTOCOL", 2.0), ("SERIAL1_BAUD", 57.0), ("SERIAL1_OPTIONS", 0.0), ("SERIAL2_PROTOCOL", 42.0), ("SERIAL2_BAUD", 115.0), ("SERIAL2_OPTIONS", 0.0), ("SERIAL3_PROTOCOL", 5.0), ("SERIAL3_BAUD", 230.0), ("SERIAL3_OPTIONS", 0.0), ("SERIAL4_PROTOCOL", -1.0), ("SERIAL4_BAUD", 57.0), ("SERIAL4_OPTIONS", 0.0), ("SERIAL6_PROTOCOL", 23.0), ("SERIAL6_BAUD", 115.0), ("SERIAL6_OPTIONS", 0.0), ("RSSI_TYPE", 3.0), ("RC_OPTIONS", 8704.0), ("OSD_TYPE", 5.0), ("FS_THR_ENABLE", 1.0), ("BATT_FS_LOW_ACT", 2.0), ("FLTMODE_CH", 6.0)] {
             params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_INT8));
         }
         // An uncalibrated radio: ArduPilot's default ranges.
@@ -574,6 +574,19 @@ fn handle(st: &mut MockState, msg: MavMessage, stream: &mut Option<Stream>) -> V
 }
 
 /// The packed parameter file; defaults are the values the quad started with.
+/// ArduPilot's serial port report: hardware name, bytes since the last read
+/// and the rate (×10 bytes/s). The GPS on SERIAL3 and the receiver on SERIAL6 send.
+fn uarts_txt(st: &MockState) -> String {
+    let gps = if st.gps.is_some() { 1400 } else { 0 };
+    let rc = if st.rc[2] > 0 { 2600 } else { 0 };
+    let ports = [("OTG1", 9000, 300), ("UART1", 0, 0), ("USART2", 0, 0), ("USART3", 120, gps), ("UART4", 0, 0), ("UART5", 0, 0), ("UART7", 0, rc)];
+    let mut out = String::from("UARTV1\n");
+    for (i, (name, tx, rx)) in ports.iter().enumerate() {
+        out += &format!("SERIAL{i} {name:<5} TX*={:8} RX*={:8} TXBD={tx:6} RXBD={rx:6} FlowCtrl=0\n", tx / 10, rx / 10);
+    }
+    out
+}
+
 fn param_pck(st: &MockState) -> Vec<u8> {
     let params: Vec<(String, f32, f32, u8)> = st
         .params
@@ -628,9 +641,14 @@ fn handle_ftp(st: &mut MockState, req: &Packet) -> Packet {
             reply.session = 1;
             reply
         }
+        ftp::OPEN_FILE_RO if path == "@SYS/uarts.txt" => {
+            let mut reply = Packet::reply(req, ftp::ACK, &(uarts_txt(st).len() as u32).to_le_bytes());
+            reply.session = 2;
+            reply
+        }
         ftp::OPEN_FILE_RO => nak(ftp::ERR_FILE_NOT_FOUND),
         ftp::READ_FILE => {
-            let file = param_pck(st);
+            let file = if req.session == 2 { uarts_txt(st).into_bytes() } else { param_pck(st) };
             let ofs = req.offset as usize;
             if ofs >= file.len() {
                 return nak(ftp::ERR_EOF);
