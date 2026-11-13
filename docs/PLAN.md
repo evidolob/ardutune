@@ -532,6 +532,14 @@ CI or release workflow yet.
 - Serial access notes in the README: on Linux, add the user to the `dialout`
   (or `uucp`) group; Windows 10 and later and macOS need no driver for
   ArduPilot boards.
+- CI (done): `.github/workflows/ci.yml` runs on every push to main and every
+  pull request.
+  - Formatting and clippy on Linux.
+  - The tests on Linux, macOS and Windows, plus a syntax check of the UI
+    scripts.
+- Release workflow (next, once the installers build): a version tag runs
+  the matrix build, signs where possible, and drafts a GitHub release with
+  the installers, the Flatpak and the CLI binaries.
 - Later: in-app update checks against GitHub releases (Tauri updater, which
   needs signed update files).
 
