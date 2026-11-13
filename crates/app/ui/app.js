@@ -920,7 +920,8 @@ document.addEventListener("change", (e) => {
     const bits = t.dataset.bit !== undefined;
     const value = bits ? (t.checked ? before | (1 << Number(t.dataset.bit)) : before & ~(1 << Number(t.dataset.bit))) : Number(t.value);
     const staged = { ...state[scope].staged };
-    if (value === setting?.value || (!bits && t.value === "")) delete staged[name];
+    const same = setting?.value !== null && setting?.value !== undefined && Math.abs(value - setting.value) <= Math.abs(setting.value) * 1e-6;
+    if (same || (!bits && t.value === "")) delete staged[name];
     else staged[name] = value;
     set({ [scope]: { ...state[scope], staged } });
   }
@@ -1899,7 +1900,9 @@ function formSetting(s, scope) {
     return `<select ${attrs}>${opts}</select>${reboot}${help}`;
   }
   const hint = s.options.length ? `<span class="muted">${s.options.map(([v, n]) => `${esc(n)} = ${v}`).join(", ")}</span>` : "";
-  return `<input type="number" step="any" ${attrs} value="${esc(String(value ?? ""))}" style="width:100px"> <span class="muted">${esc(s.unit)}</span> ${hint}${reboot}${help}`;
+  // Parameters are 32-bit floats: 0.1 arrives as 0.10000000149.
+  const shown = value === null || value === undefined ? "" : String(Number(Number(value).toPrecision(6)));
+  return `<input type="number" step="any" ${attrs} value="${esc(shown)}" style="width:100px"> <span class="muted">${esc(s.unit)}</span> ${hint}${reboot}${help}`;
 }
 
 function gpsUnit(u) {
