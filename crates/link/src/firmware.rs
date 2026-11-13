@@ -4,7 +4,9 @@
 
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::time::Instant;
 
 use base64::Engine;
 use serde::Deserialize;
@@ -171,6 +173,7 @@ pub fn version_from_git_file(text: &str) -> Option<Version> {
     text.lines().find_map(|l| l.strip_prefix("APMVERSION:")).and_then(Version::parse)
 }
 
+#[cfg(feature = "native")]
 fn http_get(url: &str, limit: u64) -> Result<Vec<u8>, String> {
     let response = ureq::get(url).timeout(Duration::from_secs(30)).call().map_err(|e| match e {
         ureq::Error::Status(404, _) => format!("not found: {url}"),
@@ -183,6 +186,7 @@ fn http_get(url: &str, limit: u64) -> Result<Vec<u8>, String> {
 
 /// The Copter version each channel offers for `board`; `None` where the
 /// channel has no build for it. Needs internet access.
+#[cfg(feature = "native")]
 pub fn available(board: &str) -> Vec<(Channel, Result<Option<Version>, String>)> {
     Channel::ALL
         .into_iter()
@@ -198,6 +202,7 @@ pub fn available(board: &str) -> Vec<(Channel, Result<Option<Version>, String>)>
 }
 
 /// Downloads a channel's Copter firmware for `board`.
+#[cfg(feature = "native")]
 pub fn download(channel: Channel, board: &str) -> Result<Vec<u8>, String> {
     http_get(&channel.url(board, "arducopter.apj"), 64 * 1024 * 1024)
 }

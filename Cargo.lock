@@ -143,6 +143,7 @@ dependencies = [
  "serde_json",
  "serialport",
  "ureq",
+ "web-time",
 ]
 
 [[package]]

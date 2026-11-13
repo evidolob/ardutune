@@ -1,45 +1,99 @@
 //! MAVLink link to an ArduPilot vehicle: parameters, reboot, log download and
 //! deletion.
 //!
-//! A background thread reads incoming messages into a channel so every
-//! request can wait with a timeout; another sends a GCS heartbeat once a
-//! second, which also lets UDP vehicles learn our address.
+//! A [`Link`] runs over a [`Transport`] that sends messages and waits for
+//! incoming ones with a timeout. On the desktop (feature `native`) a
+//! background thread reads the serial port or network into a channel and
+//! another sends a GCS heartbeat once a second, which also lets UDP vehicles
+//! learn our address. The web app supplies its own transport over Web Serial.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
+#[cfg(feature = "native")]
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+#[cfg(feature = "native")]
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+#[cfg(feature = "native")]
 use std::sync::Arc;
+#[cfg(feature = "native")]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+pub use time::Instant;
 
 use mavlink::dialects::ardupilotmega::{
     GpsFixType, MagCalStatus, MavAutopilot, MavCmd, MavMessage, MavModeFlag, MavParamType, MavResult, MavState, MavType, COMMAND_LONG_DATA,
     FILE_TRANSFER_PROTOCOL_DATA, GPS2_RAW_DATA, GPS_RAW_INT_DATA, HEARTBEAT_DATA, LOG_ERASE_DATA, LOG_REQUEST_DATA_DATA, LOG_REQUEST_END_DATA,
     LOG_REQUEST_LIST_DATA, PARAM_REQUEST_LIST_DATA, PARAM_REQUEST_READ_DATA, PARAM_SET_DATA,
 };
+#[cfg(feature = "native")]
 use mavlink::error::MessageReadError;
-use mavlink::{MavConnection, MavHeader};
+#[cfg(feature = "native")]
+use mavlink::MavConnection;
+pub use mavlink::MavHeader;
 use serde::Serialize;
 
 pub mod firmware;
+pub mod frames;
 pub mod ftp;
+#[cfg(feature = "native")]
 pub mod mock;
+#[cfg(feature = "native")]
 pub mod ports;
+
+/// The clock: `std` on the desktop, `performance.now()` in the browser.
+pub mod time {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use std::time::Instant;
+    #[cfg(target_arch = "wasm32")]
+    pub use web_time::Instant;
+}
 
 pub use mavlink::dialects::ardupilotmega::MavParamType as ParamType;
 
 /// Mission Planner's component id; ArduPilot treats it as a normal GCS.
-const GCS_COMPONENT_ID: u8 = 190;
-const GCS_SYSTEM_ID: u32 = 255;
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+pub const GCS_COMPONENT_ID: u8 = 190;
+pub const GCS_SYSTEM_ID: u32 = 255;
+/// How often a ground station says it's there.
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(feature = "native")]
 const POLL_SLEEP: Duration = Duration::from_millis(1);
 /// Bytes per LOG_DATA message.
 const LOG_CHUNK: usize = 90;
 
+#[cfg(feature = "native")]
 type Conn = Arc<dyn MavConnection<MavMessage> + Send + Sync>;
+#[cfg(feature = "native")]
 type Incoming = std::result::Result<(MavHeader, MavMessage), io::Error>;
+
+/// What a link runs over.
+pub trait Transport {
+    /// Sends one message (the transport numbers it and adds our GCS ids).
+    fn send(&mut self, msg: &MavMessage) -> std::result::Result<(), String>;
+    /// The next incoming message, `Ok(None)` after `timeout`, or an error
+    /// when the connection is gone. A transport without its own heartbeat
+    /// thread sends the GCS heartbeat from here.
+    fn recv(&mut self, timeout: Duration) -> std::result::Result<Option<(MavHeader, MavMessage)>, String>;
+    fn sleep(&mut self, duration: Duration);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub type BoxedTransport = Box<dyn Transport + Send>;
+#[cfg(target_arch = "wasm32")]
+pub type BoxedTransport = Box<dyn Transport>;
+
+/// The GCS heartbeat a transport sends once a second.
+pub fn gcs_heartbeat() -> MavMessage {
+    MavMessage::HEARTBEAT(HEARTBEAT_DATA {
+        custom_mode: 0,
+        mavtype: MavType::MAV_TYPE_GCS,
+        autopilot: MavAutopilot::MAV_AUTOPILOT_INVALID,
+        base_mode: MavModeFlag::empty(),
+        system_status: MavState::MAV_STATE_ACTIVE,
+        mavlink_version: 3,
+    })
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -182,40 +236,60 @@ pub fn plan(params: &Params, wanted: &[(String, f64)]) -> Plan {
 }
 
 pub struct Link {
-    conn: Conn,
-    rx: Receiver<Incoming>,
-    stop: Arc<AtomicBool>,
-    sequence: Arc<AtomicU8>,
+    transport: BoxedTransport,
     vehicle: Vehicle,
     ftp_seq: u16,
 }
 
-impl Drop for Link {
+#[cfg(feature = "native")]
+fn header(sequence: &AtomicU8) -> MavHeader {
+    MavHeader { system_id: GCS_SYSTEM_ID, component_id: GCS_COMPONENT_ID, sequence: sequence.fetch_add(1, Ordering::Relaxed) }
+}
+
+/// The desktop transport: a mavlink connection read by a background thread
+/// into a channel, with a heartbeat thread.
+#[cfg(feature = "native")]
+struct Native {
+    conn: Conn,
+    rx: Receiver<Incoming>,
+    stop: Arc<AtomicBool>,
+    sequence: Arc<AtomicU8>,
+}
+
+#[cfg(feature = "native")]
+impl Drop for Native {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
     }
 }
 
-fn header(sequence: &AtomicU8) -> MavHeader {
-    MavHeader { system_id: GCS_SYSTEM_ID, component_id: GCS_COMPONENT_ID, sequence: sequence.fetch_add(1, Ordering::Relaxed) }
+#[cfg(feature = "native")]
+impl Transport for Native {
+    fn send(&mut self, msg: &MavMessage) -> std::result::Result<(), String> {
+        self.conn.send(&header(&self.sequence), msg).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    fn recv(&mut self, timeout: Duration) -> std::result::Result<Option<(MavHeader, MavMessage)>, String> {
+        match self.rx.recv_timeout(timeout) {
+            Ok(Ok(m)) => Ok(Some(m)),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(RecvTimeoutError::Disconnected) => Err("the connection closed".to_owned()),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+        }
+    }
+
+    fn sleep(&mut self, duration: Duration) {
+        thread::sleep(duration);
+    }
 }
 
-fn gcs_heartbeat() -> MavMessage {
-    MavMessage::HEARTBEAT(HEARTBEAT_DATA {
-        custom_mode: 0,
-        mavtype: MavType::MAV_TYPE_GCS,
-        autopilot: MavAutopilot::MAV_AUTOPILOT_INVALID,
-        base_mode: MavModeFlag::empty(),
-        system_status: MavState::MAV_STATE_ACTIVE,
-        mavlink_version: 3,
-    })
-}
-
+#[cfg(feature = "native")]
 fn is_transient(e: &io::Error) -> bool {
     use io::ErrorKind::*;
     matches!(e.kind(), WouldBlock | TimedOut | Interrupted | ConnectionRefused | ConnectionReset)
 }
 
+#[cfg(feature = "native")]
 fn spawn_reader(conn: Conn, stop: Arc<AtomicBool>, tx: Sender<Incoming>) {
     thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
@@ -237,6 +311,7 @@ fn spawn_reader(conn: Conn, stop: Arc<AtomicBool>, tx: Sender<Incoming>) {
     });
 }
 
+#[cfg(feature = "native")]
 fn spawn_heartbeat(conn: Conn, stop: Arc<AtomicBool>, sequence: Arc<AtomicU8>) {
     thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
@@ -252,6 +327,7 @@ fn spawn_heartbeat(conn: Conn, stop: Arc<AtomicBool>, sequence: Arc<AtomicU8>) {
 impl Link {
     /// Opens `address` (`serial:<port>:<baud>`, `udpin:<ip>:<port>`,
     /// `udpout:…`, `tcpout:…`) and waits for an ArduPilot heartbeat.
+    #[cfg(feature = "native")]
     pub fn connect(address: &str, timeout: Duration) -> Result<Self> {
         let conn: Conn = Arc::new(mavlink::connect::<MavMessage>(address).map_err(Error::Connect)?);
         let stop = Arc::new(AtomicBool::new(false));
@@ -259,12 +335,19 @@ impl Link {
         let (tx, rx) = mpsc::channel();
         spawn_reader(conn.clone(), stop.clone(), tx);
         spawn_heartbeat(conn.clone(), stop.clone(), sequence.clone());
+        Link::open(Box::new(Native { conn, rx, stop, sequence }), timeout)
+    }
 
+    /// Waits on `transport` for an ArduPilot heartbeat.
+    pub fn open(mut transport: BoxedTransport, timeout: Duration) -> Result<Self> {
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            match rx.recv_timeout(remaining) {
-                Ok(Ok((h, MavMessage::HEARTBEAT(hb)))) if hb.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID => {
+            if remaining.is_zero() {
+                return Err(Error::NoVehicle);
+            }
+            match transport.recv(remaining) {
+                Ok(Some((h, MavMessage::HEARTBEAT(hb)))) if hb.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID => {
                     let vehicle = Vehicle {
                         system_id: h.system_id as u8,
                         component_id: h.component_id,
@@ -272,23 +355,18 @@ impl Link {
                         autopilot: hb.autopilot,
                         armed: hb.base_mode.contains(MavModeFlag::MAV_MODE_FLAG_SAFETY_ARMED),
                     };
-                    return Ok(Self { conn, rx, stop, sequence, vehicle, ftp_seq: 0 });
+                    return Ok(Self { transport, vehicle, ftp_seq: 0 });
                 }
-                Ok(Ok(_)) => {}
-                Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
-                    stop.store(true, Ordering::Relaxed);
-                    return Err(Error::Disconnected);
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    stop.store(true, Ordering::Relaxed);
-                    return Err(Error::NoVehicle);
-                }
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(Error::NoVehicle),
+                Err(_) => return Err(Error::Disconnected),
             }
         }
     }
 
     /// Reboots the vehicle and connects to it again at `address` once it is
     /// back (USB ports disappear while it restarts).
+    #[cfg(feature = "native")]
     pub fn reboot_and_reconnect(mut self, address: &str, timeout: Duration) -> Result<Self> {
         self.reboot()?;
         drop(self);
@@ -299,6 +377,7 @@ impl Link {
 
     /// Connects to `address`, retrying until `timeout` while the vehicle
     /// restarts (its USB port disappears meanwhile).
+    #[cfg(feature = "native")]
     pub fn connect_when_back(address: &str, timeout: Duration) -> Result<Self> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -314,8 +393,8 @@ impl Link {
         &self.vehicle
     }
 
-    fn send(&self, msg: &MavMessage) -> Result<()> {
-        self.conn.send(&header(&self.sequence), msg).map(|_| ()).map_err(|e| Error::Send(e.to_string()))
+    fn send(&mut self, msg: &MavMessage) -> Result<()> {
+        self.transport.send(msg).map_err(Error::Send)
     }
 
     /// Next message from our vehicle, or `None` at `deadline`. Keeps the
@@ -323,8 +402,8 @@ impl Link {
     fn next(&mut self, deadline: Instant) -> Result<Option<MavMessage>> {
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            match self.rx.recv_timeout(remaining) {
-                Ok(Ok((h, msg))) => {
+            match self.transport.recv(remaining) {
+                Ok(Some((h, msg))) => {
                     if h.system_id as u8 != self.vehicle.system_id {
                         continue;
                     }
@@ -335,8 +414,8 @@ impl Link {
                     }
                     return Ok(Some(msg));
                 }
-                Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => return Err(Error::Disconnected),
-                Err(RecvTimeoutError::Timeout) => return Ok(None),
+                Err(_) => return Err(Error::Disconnected),
+                Ok(None) => return Ok(None),
             }
         }
     }
@@ -682,7 +761,7 @@ impl Link {
     }
 
     /// Requests the first run of missing chunks; returns the chunk index it ends at.
-    fn request_range(&self, id: u16, have: &[bool], size: usize) -> Result<usize> {
+    fn request_range(&mut self, id: u16, have: &[bool], size: usize) -> Result<usize> {
         let Some(start) = have.iter().position(|h| !h) else { return Ok(have.len()) };
         let end = have[start..].iter().position(|h| *h).map_or(have.len(), |n| start + n);
         let ofs = start * LOG_CHUNK;
@@ -1092,7 +1171,7 @@ impl Link {
     }
 
     /// Sends a command without waiting for its acknowledgement.
-    fn command(&self, command: MavCmd, p: [f32; 7]) -> Result<()> {
+    fn command(&mut self, command: MavCmd, p: [f32; 7]) -> Result<()> {
         self.send(&MavMessage::COMMAND_LONG(COMMAND_LONG_DATA {
             command,
             param1: p[0],
@@ -1224,7 +1303,7 @@ impl Link {
         // No reply comes: poll the list (it may not answer while erasing).
         let deadline = Instant::now() + ERASE_TIMEOUT;
         while Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(500));
+            self.transport.sleep(Duration::from_millis(500));
             match self.list_logs() {
                 Ok(logs) if logs.iter().all(|l| l.size == 0) => return Ok(()),
                 Ok(_) | Err(Error::Timeout(_)) => {}
@@ -1398,6 +1477,7 @@ impl Link {
 }
 
 const AUTOPILOT_VERSION_ID: f32 = 148.0;
+#[cfg(feature = "native")]
 const BOOTLOADER_SEARCH: Duration = Duration::from_secs(25);
 
 impl Link {
@@ -1477,6 +1557,7 @@ impl Link {
 
 /// Finds the bootloader on a USB port (after [`Link::reboot_to_bootloader`])
 /// and flashes `apj` with it. Returns the bootloader's port.
+#[cfg(feature = "native")]
 pub fn flash_firmware(apj: &firmware::Apj, progress: &mut dyn FnMut(firmware::Stage)) -> std::result::Result<String, String> {
     let deadline = Instant::now() + BOOTLOADER_SEARCH;
     loop {

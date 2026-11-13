@@ -5,12 +5,21 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["native"]
+# Serial ports, UDP/TCP, firmware downloads and the simulated vehicle: the
+# desktop app and the CLI. The web app runs the link over Web Serial without it.
+native = ["dep:serialport", "dep:ureq", "mavlink/transport-tcp", "mavlink/transport-udp", "mavlink/transport-direct-serial"]
+
 [dependencies]
-mavlink = { version = "0.21", default-features = false, features = ["std", "transport-tcp", "transport-udp", "transport-direct-serial", "dialect-ardupilotmega", "format-generated-code", "mav2-message-extensions"] }
-serialport = "4"
+mavlink = { version = "0.21", default-features = false, features = ["std", "dialect-ardupilotmega", "format-generated-code", "mav2-message-extensions"] }
+serialport = { version = "4", optional = true }
 ardutune-core.workspace = true
 base64 = "0.22"
 flate2 = "1"
 serde.workspace = true
 serde_json.workspace = true
-ureq = "2"
+ureq = { version = "2", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1"
