@@ -3,7 +3,7 @@
 #   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.evidolob.ArduTune.yml
 id: io.github.evidolob.ArduTune
 runtime: org.gnome.Platform
-runtime-version: '48'
+runtime-version: '51'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable

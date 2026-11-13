@@ -226,6 +226,13 @@ fn reads_firmware_info_and_reboots_to_bootloader() {
     assert!(started.elapsed() < Duration::from_secs(1), "identity returns early");
 
     mock.state().armed = true;
+    // The mock announces it in its next heartbeat (every 200 ms): wait until
+    // the link has seen it, or the vehicle itself refuses first.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !link.refresh_armed().unwrap() {
+        assert!(std::time::Instant::now() < deadline, "the link never saw the vehicle armed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     let link = match link.reboot_to_bootloader() {
         Err(Error::Armed) => connect(&mock),
         other => panic!("armed reboot not refused: {other:?}"),
