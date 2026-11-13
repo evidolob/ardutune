@@ -1,0 +1,45 @@
+# Flatpak build of the ArduTune desktop app. Built in CI (release workflow)
+# with flatpak-builder; locally:
+#   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.evidolob.ArduTune.yml
+id: io.github.evidolob.ArduTune
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: ardutune-app
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # USB serial ports of flight controllers (/dev/ttyACM*, /dev/ttyUSB*).
+  - --device=all
+  # UDP/TCP telemetry links and firmware downloads.
+  - --share=network
+  # Documents/ArduTune: backups, downloaded logs, drone names.
+  - --filesystem=xdg-documents
+modules:
+  - name: ardutune
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      # Crates are fetched while building (not allowed on Flathub, which
+      # would need vendored sources).
+      build-args:
+        - --share=network
+      env:
+        CARGO_HOME: /run/build/ardutune/cargo
+    build-commands:
+      - cargo build --release --locked -p ardutune-app
+      - install -Dm755 target/release/ardutune-app /app/bin/ardutune-app
+      - install -Dm644 crates/app/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.github.evidolob.ArduTune.png
+      - install -Dm644 crates/app/icons/icon.png /app/share/icons/hicolor/512x512/apps/io.github.evidolob.ArduTune.png
+      - install -Dm644 packaging/flatpak/io.github.evidolob.ArduTune.desktop /app/share/applications/io.github.evidolob.ArduTune.desktop
+      - install -Dm644 packaging/flatpak/io.github.evidolob.ArduTune.metainfo.xml /app/share/metainfo/io.github.evidolob.ArduTune.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - logs

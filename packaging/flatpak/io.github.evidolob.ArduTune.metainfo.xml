@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.evidolob.ArduTune</id>
+  <name>ArduTune</name>
+  <summary>Set up, diagnose and tune ArduPilot multicopters</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.evidolob">
+    <name>Yevhen Vydolob</name>
+  </developer>
+  <description>
+    <p>ArduTune helps set up, diagnose and tune ArduPilot multicopters, offline.</p>
+    <ul>
+      <li>Setup guide, frame and hardware, motor test and compass calibration</li>
+      <li>Serial ports, RC channels, GPS status and spoofing checks</li>
+      <li>AutoTune preparation and an initial tune from the prop size</li>
+      <li>Filter and PID recommendations from flight logs, flight history per drone</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.evidolob.ArduTune.desktop</launchable>
+  <url type="homepage">https://github.com/evidolob/ardutune</url>
+  <url type="bugtracker">https://github.com/evidolob/ardutune/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-13"/>
+  </releases>
+</component>

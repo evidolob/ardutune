@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ArduTune
+Comment=Set up, diagnose and tune ArduPilot multicopters
+Exec=ardutune-app
+Icon=io.github.evidolob.ArduTune
+Terminal=false
+Categories=Utility;Development;
+Keywords=ArduPilot;drone;multicopter;quadcopter;PID;tuning;MAVLink;

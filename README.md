@@ -151,6 +151,33 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
 - `crates/app`: desktop app. Rust commands in `src/`, frontend in `ui/`
   (plain HTML, CSS and JavaScript: no Node or build step).
 
+## Install
+
+Download the installer for your system from
+[Releases](https://github.com/evidolob/ardutune/releases).
+
+- **Windows:** `ArduTune_<version>_x64-setup.exe` (installs for your user),
+  or the `.msi`. The installers aren't signed yet: if SmartScreen says
+  "Windows protected your PC", click **More info**, then **Run anyway**.
+- **macOS** (Apple Silicon and Intel): `ArduTune_<version>_universal.dmg`.
+  Open it and drag ArduTune to Applications. It isn't signed by Apple yet,
+  so macOS blocks the first start: open **System Settings > Privacy &
+  Security** and click **Open Anyway**, or run
+  `xattr -dr com.apple.quarantine /Applications/ArduTune.app`.
+- **Linux:** either
+  - the AppImage: `chmod +x ArduTune_<version>_amd64.AppImage`, then run
+    it;
+  - or the Flatpak: `flatpak install --user ArduTune.flatpak` (it needs the
+    GNOME runtime from Flathub), then start ArduTune from the menu.
+
+  To open the flight controller's USB port without root, add yourself to
+  the `dialout` group (`uucp` on Arch), then log out and back in:
+  `sudo usermod -aG dialout $USER`.
+- **Command-line tool:** `ardutune-cli-<system>` archives on the same page.
+
+Windows 10 and later and macOS need no driver for ArduPilot flight
+controllers.
+
 ## Desktop app
 
 ```bash
@@ -158,9 +185,24 @@ cargo run --release -p ardutune-app
 ```
 
 Downloaded logs go to `Documents/ArduTune/logs`, parameter backups to
-`Documents/ArduTune/backups`, vehicle names to `Documents/ArduTune/drones.json`. Building an installer (`.app`/`.dmg`, `.msi`,
-`.deb`) needs the Tauri CLI: `cargo install tauri-cli`, then
-`cargo tauri build` in `crates/app`.
+`Documents/ArduTune/backups`, vehicle names to `Documents/ArduTune/drones.json`.
+
+To build the installers yourself, use the Tauri CLI in `crates/app`
+(`cargo install tauri-cli`, then `cargo tauri build`). For the Flatpak, see
+`packaging/flatpak/`.
+
+## Releases
+
+Push a version tag matching `version` in `Cargo.toml` (e.g. `v0.1.0`). The
+Release workflow then builds:
+- the Windows installers;
+- the universal macOS `.dmg`;
+- the Linux AppImage and Flatpak;
+- the command-line tool for each system.
+
+It attaches them all to a draft GitHub release, which you publish by hand.
+Running the workflow from the Actions tab builds the same files as workflow
+artifacts, without a release.
 
 ## Command line
 

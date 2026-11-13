@@ -537,9 +537,19 @@ CI or release workflow yet.
   - Formatting and clippy on Linux.
   - The tests on Linux, macOS and Windows, plus a syntax check of the UI
     scripts.
-- Release workflow (next, once the installers build): a version tag runs
-  the matrix build, signs where possible, and drafts a GitHub release with
-  the installers, the Flatpak and the CLI binaries.
+- Release workflow (`.github/workflows/release.yml`):
+  - A version tag `vX.Y.Z` (checked against Cargo.toml) builds:
+    - the NSIS `.exe` and the `.msi`;
+    - the universal `.dmg`;
+    - the AppImage (on ubuntu-22.04 for older glibc);
+    - the Flatpak, built in the GNOME SDK container from
+      `packaging/flatpak/`;
+    - the CLI for each system.
+  - It drafts a GitHub release with all of them. Running it by hand builds
+    the same files as artifacts only.
+  - Unsigned for now. Next: Apple notarization and Windows signing once
+    there are certificates, then Flathub (needs vendored crate sources
+    instead of network access during the build).
 - Later: in-app update checks against GitHub releases (Tauri updater, which
   needs signed update files).
 
