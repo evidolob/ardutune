@@ -9,7 +9,7 @@ license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 ardutune-core = { path = "crates/core" }
-ardutune-link = { path = "crates/link" }
+ardutune-link = { path = "crates/link", default-features = false }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

@@ -407,75 +407,13 @@ pub async fn prepare_changes<R: Runtime>(
     .await
 }
 
-type Wanted = (String, f64, Option<String>);
+use ardutune_core::sources::{self, Wanted};
 
 fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Option<String>) -> CmdResult<Vec<Wanted>> {
     let live = &c.params;
-    // Fixes from the latest pre-arm check, for one area ("prearm:GPS").
-    if let Some(area) = source.strip_prefix("prearm:") {
-        let report = c.last_arming.as_ref().ok_or("Run the pre-arm check first.")?;
-        return Ok(report
-            .problems
-            .iter()
-            .filter(|p| p.area == area)
-            .flat_map(|p| p.changes.iter().map(|ch| (ch.name.clone(), ch.value, Some(ch.reason.clone()))))
-            .collect());
-    }
-    // Fixes from the GPS page, by check: "gps:<index>".
-    if let Some(i) = source.strip_prefix("gps:") {
-        let page = c.last_gps.as_ref().ok_or("Open the GPS page first.")?;
-        let check = i.parse::<usize>().ok().and_then(|i| page.checks.get(i)).ok_or("That GPS problem is gone: look at the page again.")?;
-        return Ok(check.changes.iter().map(|ch| (ch.name.clone(), ch.value, Some(ch.reason.clone()))).collect());
-    }
-    // AutoTune page changes: "autotune:<part>:<prop inches>", part being a
-    // check id, "recommended", "quiktune" or "after".
-    if let Some(rest) = source.strip_prefix("autotune:") {
-        let (part, prop) = rest.split_once(':').unwrap_or((rest, ""));
-        let v = autotune::view(|n| live.get(n).map(|p| p.value as f64), prop.parse().ok(), None);
-        let changes = match part {
-            "recommended" => v.recommended,
-            "quiktune" => v.quiktune.changes,
-            "after" => v.after,
-            id => v.checks.into_iter().find(|c| c.id == id).map(|c| c.changes).ok_or("That AutoTune check no longer applies: look at the page again.")?,
-        };
-        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
-    }
-    // A common serial port setup: "serial:<n>:<setup>".
-    if let Some(rest) = source.strip_prefix("serial:") {
-        let (n, id) = rest.split_once(':').ok_or("bad serial source")?;
-        let n = n.parse::<u8>().map_err(|e| e.to_string())?;
-        let changes = serial::setup(|n| live.get(n).map(|p| p.value as f64), n, id)?;
-        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
-    }
-    // The reversed version of the frame layout: "frame:<FRAME_TYPE>".
-    if let Some(t) = source.strip_prefix("frame:") {
-        let t = t.parse::<i64>().map_err(|e| e.to_string())?;
-        let changes = motors::frame_change(|n| live.get(n).map(|p| p.value as f64), t)?;
-        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
-    }
-    // A function on a switch: "switch:<channel>:<RCn_OPTION>".
-    if let Some(rest) = source.strip_prefix("switch:") {
-        let (ch, option) = rest.split_once(':').ok_or("bad switch source")?;
-        let (ch, option) = (ch.parse::<u8>().map_err(|e| e.to_string())?, option.parse::<f64>().map_err(|e| e.to_string())?);
-        let changes = switch::assign(|n| live.get(n).map(|p| p.value as f64), ch, option)?;
-        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
-    }
-    // Two functions on one three-position switch: "split:<a>:<up>:<b>:<down>".
-    if let Some(rest) = source.strip_prefix("split:") {
-        let n: Vec<f64> = rest.split(':').map(|x| x.parse::<f64>().map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
-        let [a, up, b, down] = n[..] else { return Err("bad split source".into()) };
-        let changes = switch::split(|n| live.get(n).map(|p| p.value as f64), (a as u8, up), (b as u8, down))?;
-        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
-    }
-    // A tuning knob: "knob:<channel>:<TUNE>:<min>:<max>".
-    if let Some(rest) = source.strip_prefix("knob:") {
-        let n: Vec<f64> = rest.split(':').map(|x| x.parse::<f64>().map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
-        let [ch, tune, min, max] = n[..] else { return Err("bad knob source".into()) };
-        let changes = rc::tuning_knob(|n| live.get(n).map(|p| p.value as f64), ch as u8, tune, min, max)?;
-        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
-    }
-    if let Some(step) = source.strip_prefix("setup:") {
-        return setup_changes(live, step);
+    let ctx = sources::Context { last_arming: c.last_arming.as_ref(), last_gps: c.last_gps.as_ref() };
+    if let Some(r) = sources::from_params(|n| live.get(n).map(|p| p.value as f64), source, &ctx) {
+        return r;
     }
     if source == "file" {
         let path = path.ok_or("No parameter file given.")?;
@@ -503,13 +441,6 @@ fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Opt
         }
         other => return Err(format!("unknown change source {other}")),
     })
-}
-
-/// Changes a setup guide step proposes, worked out from the live values.
-fn setup_changes(live: &Params, step: &str) -> CmdResult<Vec<Wanted>> {
-    let guide = setup::assess(|n| live.get(n).map(|p| p.value as f64), &setup::Live::default());
-    let step = guide.steps.into_iter().find(|s| s.id == step).ok_or(format!("unknown setup step {step}"))?;
-    Ok(step.changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect())
 }
 
 /// Prop size and battery for the initial tune; cells and chemistry default

@@ -11,7 +11,15 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ardutune-core.workspace = true
+ardutune-link.workspace = true
+mavlink = { version = "0.21", default-features = false, features = ["std", "dialect-ardupilotmega", "format-generated-code", "mav2-message-extensions"] }
 serde.workspace = true
 serde_json.workspace = true
 # Must match the wasm-bindgen CLI that generates the JavaScript glue.
 wasm-bindgen = "=0.2.130"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+
+[dev-dependencies]
+ardutune-link = { workspace = true, features = ["native"] }

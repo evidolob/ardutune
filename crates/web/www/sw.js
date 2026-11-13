@@ -31,6 +31,17 @@ self.addEventListener("activate", (e) => {
   );
 });
 
+// Cross-origin isolation (SharedArrayBuffer for the serial link): GitHub
+// Pages can't set these headers, so every response gets them here.
+function isolated(response) {
+  if (!response || response.status === 0) return response;
+  const headers = new Headers(response.headers);
+  headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  headers.set("Cross-Origin-Embedder-Policy", "require-corp");
+  headers.set("Cross-Origin-Resource-Policy", "same-origin");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET" || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
@@ -42,7 +53,7 @@ self.addEventListener("fetch", (e) => {
           return r;
         })
         .catch(() => cached);
-      return cached ?? fresh;
+      return isolated(cached ?? (await fresh));
     }),
   );
 });

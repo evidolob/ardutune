@@ -594,6 +594,27 @@ Steps:
    covers parameters, setup, RC, motors, compass, pre-arm, logs from the
    vehicle and MAVFTP. The app-side commands move too (vehicle, backups,
    history, drones).
+   Done:
+   - The link runs over a pluggable Transport; the native parts (serial
+     ports, UDP/TCP, firmware downloads, simulated vehicle) sit behind a
+     feature.
+   - In the browser, the page reads Web Serial into a SharedArrayBuffer ring
+     that the worker's transport waits on with `Atomics.wait`, so the
+     desktop link's blocking code runs unchanged. Cross-origin isolation
+     comes from the service worker's headers.
+   - `crates/web/src/vehicle.rs` gives the desktop commands the same names
+     and shapes. The parameter-based change sources are shared in
+     `core::sources`.
+   - Covered: connect, status, parameter list, prepare/apply, reboot, frame
+     and hardware, AutoTune, initial tune, motor test, RC and switch
+     detection, GPS, serial ports, pre-arm, setup guide.
+
+   Not yet in the web version:
+   - logs from the vehicle (to a browser download);
+   - compass calibration;
+   - backups and drone names (step 3);
+   - unifying the desktop and web command layers into one shared session.
+
 3. Storage in the browser: backups, drone names and flight history in
    IndexedDB or OPFS, or a folder the user picks once (File System Access, in
    Chrome) such as `Documents/ArduTune`.

@@ -151,6 +151,9 @@ name = "ardutune-web"
 version = "0.1.0"
 dependencies = [
  "ardutune-core",
+ "ardutune-link",
+ "js-sys",
+ "mavlink",
  "serde",
  "serde_json",
  "wasm-bindgen",

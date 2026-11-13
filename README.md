@@ -184,8 +184,14 @@ controllers.
 log analysis in the browser: readiness, noise, filters, PIDs and crash
 diagnosis. Open a `.bin` or drop it on the page; nothing is uploaded, the
 analysis runs on your computer (WebAssembly). It works offline once loaded,
-and Chrome or Edge can install it as an app. Connecting to a vehicle needs
-the desktop app for now.
+and Chrome or Edge can install it as an app.
+
+It also connects to the vehicle over USB (Web Serial: Chrome, Edge or Opera
+on a computer, or Firefox 151+). That covers the setup guide, frame and
+hardware, motor test, serial ports, RC channels, GPS, AutoTune, the initial
+tune, pre-arm checks and the parameter list, all writing through the usual
+review. Backups, downloading logs from the vehicle, firmware, compass
+calibration and network telemetry need the desktop app for now.
 
 To build it (needs `rustup target add wasm32-unknown-unknown` and
 `cargo install wasm-bindgen-cli` at the version `crates/web/Cargo.toml`
@@ -196,8 +202,11 @@ tools/build-web.sh
 ```
 
 ```bash
-python3 -m http.server -d dist/web 8080
+tools/serve-web.py
 ```
+
+(It sends the cross-origin isolation headers the serial link needs; on
+GitHub Pages the service worker adds them.)
 
 ## Desktop app
 

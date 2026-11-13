@@ -1,5 +1,6 @@
-// Runs ArduTune's log analysis (WebAssembly) off the page's thread, so big
-// logs don't freeze the page.
+// Runs ArduTune (WebAssembly) off the page's thread: log analysis, so big
+// logs don't freeze the page, and the vehicle link, which waits for the
+// serial bytes the page shares (Atomics.wait is allowed in workers).
 import init, * as ardutune from "./pkg/ardutune_web.js";
 
 const ready = init();
@@ -21,6 +22,17 @@ self.onmessage = async ({ data: { id, cmd, args, bytes } }) => {
       case "close_log":
         ardutune.close_log();
         value = null;
+        break;
+      case "vehicle_connect":
+        value = ardutune.vehicle_connect(
+          args.ctrl,
+          args.data,
+          (bytes) => self.postMessage({ type: "write", bytes }),
+          (done, total) => self.postMessage({ type: "event", name: "progress", payload: { task: "Reading parameters", done, total } }),
+        );
+        break;
+      case "vehicle":
+        value = ardutune.vehicle_call(args.cmd, JSON.stringify(args.args ?? {}));
         break;
       default:
         throw new Error(`unknown command ${cmd}`);

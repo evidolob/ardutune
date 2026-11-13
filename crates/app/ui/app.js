@@ -3,8 +3,10 @@
 
 const tauri = window.__TAURI__;
 const invoke = (cmd, args = {}) => tauri.core.invoke(cmd, args);
-/** The web app (`crates/web`): log analysis only, no vehicle or files yet. */
+/** The web app (`crates/web`): log analysis, and the vehicle over Web Serial. */
 const WEB = !!window.ARDUTUNE_WEB;
+/** Pages the web app can't offer yet: they need the computer's files or firmware downloads. */
+const WEB_DESKTOP_ONLY = new Set(["firmware", "compass", "vlogs", "history", "params"]);
 const DESKTOP_URL = "https://github.com/evidolob/ardutune/releases";
 
 /** Views that analyse the open log. */
@@ -888,10 +890,7 @@ const actions = {
   askDelete: (d) => askDelete(d.id),
   askErase,
   confirmDelete,
-  write: (d) =>
-    WEB
-      ? toast("The web version can't reach the vehicle yet: set these values in your ground station (Mission Planner, QGroundControl) or with the ArduTune desktop app.", "info")
-      : writeChanges(d.source, d.title),
+  write: (d) => (WEB && !state.vehicle ? toast("Connect to the vehicle first (Connect, at the top of the sidebar).", "info") : writeChanges(d.source, d.title)),
   confirmWrite: () => confirmWrite(false),
   backupAndWrite: () => confirmWrite(true),
   closeModal: () => {
@@ -1038,7 +1037,7 @@ function header() {
 function nav() {
   const needsLog = (id) => LOG_VIEWS.some(([v]) => v === id);
   const item = ([id, label]) => {
-    const desktopOnly = WEB && !needsLog(id);
+    const desktopOnly = WEB && WEB_DESKTOP_ONLY.has(id);
     const off = desktopOnly || (needsLog(id) && !state.log);
     const why = desktopOnly ? "Needs the desktop app for now" : "Open a flight log first";
     return `<button data-action="go" data-view="${id}" class="${state.view === id ? "active" : ""}" ${off ? `disabled title="${why}"` : ""}>${esc(label)}${badge(id)}</button>`;
@@ -1049,9 +1048,7 @@ function nav() {
         <div class="navlogacts"><button class="link" data-action="pickLog">Open another</button> · <button class="link" data-action="closeLog">Close</button></div></div>`
     : `<div class="navlog muted">No log open: <button class="link" data-action="pickLog">open one</button> or pick one from <button class="link" data-action="go" data-view="history">Flight history</button></div>`;
   const v = state.vehicle;
-  const connection = WEB
-    ? `<a class="navconn webnote" href="${DESKTOP_URL}" target="_blank" rel="noopener" title="Connecting to a vehicle needs the desktop app for now">Web version · get the desktop app</a>`
-    : `<button data-action="go" data-view="connection" class="navconn ${state.view === "connection" ? "active" : ""}" title="${esc(v?.label ?? "Connect to a vehicle")}"><span><span class="dot ${v ? (v.armed ? "armed" : "on") : ""}"></span> ${v ? esc(v.label ?? "Vehicle") : "Connect"}</span></button>`;
+  const connection = `<button data-action="go" data-view="connection" class="navconn ${state.view === "connection" ? "active" : ""}" title="${esc(v?.label ?? "Connect to a vehicle")}"><span><span class="dot ${v ? (v.armed ? "armed" : "on") : ""}"></span> ${v ? esc(v.label ?? "Vehicle") : "Connect"}</span></button>`;
   return (
     connection +
     NAV.map(([title, items]) => `<h3>${esc(title)}</h3>${items.map((i) => (i === "log" ? log : item(i))).join("")}`).join("")
@@ -1076,11 +1073,9 @@ function welcome() {
     <p class="lead">Open a DataFlash log from a test flight. ArduTune checks whether it has the data needed for tuning,
       explains crashes, analyses gyro noise and recommends filter and PID changes it can write straight to the vehicle.</p>
     <div class="card" data-action="pickLog"><h2>Open a flight log</h2><div class="muted">A <code>.bin</code> file from the SD card or a download.</div></div>
-    ${
-      WEB
-        ? `<a class="card" href="${DESKTOP_URL}" target="_blank" rel="noopener"><h2>Connect to the vehicle</h2><div class="muted">Setting up, tuning and writing parameters need the desktop app for now (Windows, macOS, Linux). This web version analyses logs, offline, in your browser.</div></a>`
-        : `<div class="card" data-action="go" data-view="connection"><h2>Connect to the vehicle</h2><div class="muted">Over USB or telemetry: download logs, back up and write parameters.</div></div>`
-    }
+    <div class="card" data-action="go" data-view="connection"><h2>Connect to the vehicle</h2><div class="muted">${
+      WEB ? "Over USB, from Chrome, Edge or Opera: set up, check and write parameters." : "Over USB or telemetry: download logs, back up and write parameters."
+    }</div></div>
     <div class="card" data-action="openSample"><h2>Try a sample flight</h2><div class="muted">A synthetic log with hover and stick snaps, to explore the app.</div></div>
   </div>`;
 }
@@ -1465,7 +1460,7 @@ function connectionView() {
     return `
       <h1>${esc(v.name ?? "Vehicle")}</h1>
       <p class="lead">Connected over <code>${esc(v.address)}</code>.</p>
-      ${nameCard(v)}
+      ${WEB ? "" : nameCard(v)}
       <div class="stats">
         ${stat("Type", esc(v.kind), v.ardupilot ? "ArduPilot" : "not ArduPilot")}
         ${v.uid ? stat("Flight controller", esc(v.board ?? "unknown board"), `ID …${esc(shortId(v.uid))}`) : ""}
@@ -1476,11 +1471,25 @@ function connectionView() {
       ${v.armed ? `<div class="banner fail">The vehicle is armed. Parameters can only be written while disarmed.</div>` : ""}
       ${state.vehicleBusy ? busy(state.vehicleBusy) : ""}
       <div class="actions">
-        <button class="btn" data-action="go" data-view="vlogs">Logs on vehicle</button>
+        ${WEB ? "" : `<button class="btn" data-action="go" data-view="vlogs">Logs on vehicle</button>`}
         <button class="btn" data-action="refreshStatus">Refresh state</button>
         <button class="btn" data-action="reboot" ${v.armed ? "disabled" : ""}>Reboot</button>
         <button class="btn danger" data-action="disconnect">Disconnect</button>
       </div>`;
+
+  if (WEB) {
+    const supported = "serial" in navigator;
+    return `
+    <h1>Connect to the vehicle</h1>
+    <p class="lead">Over USB, straight from the browser. ArduTune reads all parameters on connect and never writes without showing you the changes first.</p>
+    ${supported ? "" : `<div class="banner warn"><b>This browser can't open USB ports.</b> Use Chrome, Edge or Opera on a computer (or Firefox 151 and later). Phones and Safari can't.</div>`}
+    <div class="card">
+      <h2>USB</h2>
+      <p class="muted">Plug the flight controller in, click Connect and choose it in the list the browser shows (often "STM32" or the board's name). Close other programs using it first: Mission Planner, QGroundControl, the desktop app.</p>
+      <div class="actions"><button class="btn primary" data-action="connect" ${state.connecting || !supported ? "disabled" : ""}>${state.connecting ? "Connecting…" : "Connect"}</button></div>
+    </div>
+    <p class="muted">Telemetry radios over the network, firmware updates, compass calibration, backups and downloading logs from the vehicle need the <a href="${DESKTOP_URL}" target="_blank" rel="noopener">desktop app</a> for now.</p>`;
+  }
 
   const ports = state.ports;
   const portList = !ports
@@ -2816,12 +2825,13 @@ function modal() {
           ${
             p.rows.length
               ? `<button class="btn primary" data-action="confirmWrite" ${p.armed || !n ? "disabled" : ""}>Write ${n} parameter${n === 1 ? "" : "s"}</button>
-                 <button class="btn" data-action="backupAndWrite" ${p.armed || !n ? "disabled" : ""}>Back up and write</button>`
+                 ${WEB ? "" : `<button class="btn" data-action="backupAndWrite" ${p.armed || !n ? "disabled" : ""}>Back up and write</button>`}`
               : ""
           }
           <button class="btn" data-action="closeModal">${p.rows.length ? "Cancel" : "Close"}</button>
         </div>
-        ${p.rows.length ? `<p class="muted" style="margin-bottom:0">${backupAdvice(m, n)}</p>` : ""}`;
+        ${p.rows.length && !WEB ? `<p class="muted" style="margin-bottom:0">${backupAdvice(m, n)}</p>` : ""}
+        ${p.rows.length && WEB ? `<p class="muted" style="margin-bottom:0">The web version can't make backups yet: use the desktop app or your ground station to save the parameters first if you want to be able to undo this.</p>` : ""}`;
       break;
     }
     case "writing":

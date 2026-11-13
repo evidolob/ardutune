@@ -20,6 +20,7 @@ pub mod rc;
 pub mod readiness;
 pub mod serial;
 pub mod setup;
+pub mod sources;
 pub mod stats;
 pub mod switch;
 pub mod synth;
