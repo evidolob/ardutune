@@ -96,6 +96,24 @@ pub fn vehicle_connect(ctrl: js_sys::Int32Array, data: js_sys::Uint8Array, write
     Ok(info)
 }
 
+/// Downloads log `id` from the vehicle; `progress(done, total)` in bytes.
+/// Returns `{ name, bytes }`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn vehicle_download_log(id: u16, progress: js_sys::Function) -> Result<js_sys::Object, JsError> {
+    let (name, bytes) = VEHICLE
+        .with(|v| {
+            vehicle::download_log(&mut v.borrow_mut(), id, &mut |done, total| {
+                let _ = progress.call2(&JsValue::NULL, &(done as u32).into(), &(total as u32).into());
+            })
+        })
+        .map_err(|e| JsError::new(&e))?;
+    let out = js_sys::Object::new();
+    js_sys::Reflect::set(&out, &"name".into(), &name.into()).map_err(|_| JsError::new("result"))?;
+    js_sys::Reflect::set(&out, &"bytes".into(), &js_sys::Uint8Array::from(&bytes[..])).map_err(|_| JsError::new("result"))?;
+    Ok(out)
+}
+
 /// Runs a vehicle command (`args` as JSON); the result as JSON.
 #[wasm_bindgen]
 pub fn vehicle_call(cmd: &str, args: &str) -> Result<String, JsError> {

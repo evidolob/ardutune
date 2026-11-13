@@ -295,12 +295,76 @@ fn run(s: &mut Session, cmd: &str, args: &Value, log: Option<&Loaded>) -> Result
             s.last_arming = Some(report.clone());
             to_value(report)?
         }
+        "list_vehicle_logs" => log_list(s)?,
+        "erase_vehicle_logs" => {
+            s.link.erase_all_logs()?;
+            log_list(s)?
+        }
+        "delete_vehicle_log" => {
+            // The newest log stays open on the vehicle until a reboot; the
+            // web version can't reconnect by itself after one.
+            if arg::<Option<bool>>(args, "rebootFirst")?.unwrap_or(false) {
+                return Err(Failure::Other(
+                    "The newest log is still open on the vehicle: reboot it (Connection page), connect again, then delete it.".to_owned(),
+                ));
+            }
+            s.link.delete_log(arg(args, "id")?, false)?;
+            log_list(s)?
+        }
         "setup_guide" => {
             let status = s.link.arming_status(SETUP_LISTEN)?;
             to_value(setup::assess(s.p(), &status.setup_live()))?
         }
         other => return Err(Failure::Other(format!("{other} needs the ArduTune desktop app for now."))),
     })
+}
+
+/// Seconds since 1970, from the computer's clock.
+pub fn now() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    return (js_sys::Date::now() / 1000.0) as u64;
+    #[cfg(not(target_arch = "wasm32"))]
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The vehicle's logs, newest last; dates only when the vehicle's clock
+/// could be right (it is set by GPS).
+fn log_list(s: &mut Session) -> Result<Value, Failure> {
+    let now = now();
+    let logs: Vec<Value> = s
+        .link
+        .list_logs()?
+        .iter()
+        .filter(|e| e.size > 0)
+        .map(|e| {
+            let date = ardutune_core::history::plausible_time(i64::from(e.time_utc), now as i64).then(|| ardutune_core::utc::date_time(u64::from(e.time_utc)));
+            json!({ "id": e.id, "size_mb": e.size as f64 / 1e6, "date": date })
+        })
+        .collect();
+    Ok(json!(logs))
+}
+
+/// Downloads log `id`: its file name and bytes. The name has the vehicle's
+/// power-up count (the clock is only right after a GPS fix), like the
+/// desktop app's.
+pub fn download_log(session: &mut Option<Session>, id: u16, progress: &mut dyn FnMut(usize, usize)) -> Result<(String, Vec<u8>), String> {
+    let s = session.as_mut().ok_or("Not connected to a vehicle.")?;
+    let result = (|| -> Result<(String, Vec<u8>), Failure> {
+        let entry = s.link.list_logs()?.into_iter().find(|e| e.id == id).ok_or(format!("The vehicle has no log {id}."))?;
+        let data = s.link.download_log(&entry, progress)?;
+        let boot = ardutune_core::log::Log::from_bytes(&data).param("STAT_BOOTCNT").filter(|b| *b > 0.0);
+        let who = s.board.as_deref().zip(s.uid.as_deref()).map(|(b, u)| format!("_{b}-{}", &u[u.len().saturating_sub(6)..])).unwrap_or_default();
+        let name = match boot {
+            Some(b) => format!("log_{}_boot{}{who}.bin", entry.id, b as u32),
+            None => format!("log_{}_downloaded-{}{who}.bin", entry.id, ardutune_core::utc::file_stamp(now())),
+        };
+        Ok((name, data))
+    })();
+    match result {
+        Ok(v) => Ok(v),
+        Err(Failure::Link(e)) => Err(gone(session, e).err().unwrap_or_default()),
+        Err(Failure::Other(e)) => Err(e),
+    }
 }
 
 /// Works out what writing a set of recommendations would change and keeps
@@ -380,7 +444,8 @@ mod tests {
     /// transport: the same session code the browser runs.
     #[test]
     fn commands_against_the_simulated_vehicle() {
-        let mock = MockVehicle::start(MockState::quad(Vec::new())).unwrap();
+        let mock =
+            MockVehicle::start(MockState::quad(vec![ardutune_core::synth::sample_flight(ardutune_core::synth::Preset::Ready)[..20_000].to_vec()])).unwrap();
         let mut link = Link::connect(mock.client_address(), Duration::from_secs(5)).unwrap();
         let params = link.fetch_params(&mut |_, _| {}).unwrap();
         let mut session = Some(Session::new(link, params));
@@ -396,7 +461,12 @@ mod tests {
         assert_eq!(mock.state().params["SERIAL4_PROTOCOL"].0, 16.0);
         let table = call(&mut session, "param_table", &none, None).unwrap();
         assert!(table["rows"].as_array().unwrap().len() > 100);
-        assert!(call(&mut session, "list_vehicle_logs", &none, None).unwrap_err().contains("desktop app"));
+        assert!(call(&mut session, "compass_cal_start", &none, None).unwrap_err().contains("desktop app"));
+        let logs = call(&mut session, "list_vehicle_logs", &none, None).unwrap();
+        let first = logs[0]["id"].as_u64().expect("the mock has logs") as u16;
+        let (name, bytes) = download_log(&mut session, first, &mut |_, _| {}).unwrap();
+        assert!(name.starts_with(&format!("log_{first}_")) && name.ends_with(".bin"), "{name}");
+        assert!(!bytes.is_empty());
         call(&mut session, "disconnect", &none, None).unwrap();
         assert!(call(&mut session, "vehicle_status", &none, None).unwrap().is_null());
     }

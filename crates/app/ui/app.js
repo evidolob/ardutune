@@ -6,7 +6,7 @@ const invoke = (cmd, args = {}) => tauri.core.invoke(cmd, args);
 /** The web app (`crates/web`): log analysis, and the vehicle over Web Serial. */
 const WEB = !!window.ARDUTUNE_WEB;
 /** Pages the web app can't offer yet: they need the computer's files or firmware downloads. */
-const WEB_DESKTOP_ONLY = new Set(["firmware", "compass", "vlogs", "history", "params"]);
+const WEB_DESKTOP_ONLY = new Set(["firmware", "compass", "history", "params"]);
 const DESKTOP_URL = "https://github.com/evidolob/ardutune/releases";
 
 /** Views that analyse the open log. */
@@ -200,7 +200,7 @@ async function refreshVehicleLogs() {
 async function downloadLog(id) {
   const path = await vehicleTask(`Downloading log ${id}…`, () => invoke("download_vehicle_log", { id: Number(id) }));
   if (path) {
-    toast(`Saved to ${path}`, "info");
+    toast(WEB ? `Downloaded ${path.split("/").pop()} (in your browser's downloads). Opening it…` : `Saved to ${path}`, "info");
     await openLog(path);
   }
 }
@@ -1471,7 +1471,7 @@ function connectionView() {
       ${v.armed ? `<div class="banner fail">The vehicle is armed. Parameters can only be written while disarmed.</div>` : ""}
       ${state.vehicleBusy ? busy(state.vehicleBusy) : ""}
       <div class="actions">
-        ${WEB ? "" : `<button class="btn" data-action="go" data-view="vlogs">Logs on vehicle</button>`}
+        <button class="btn" data-action="go" data-view="vlogs">Logs on vehicle</button>
         <button class="btn" data-action="refreshStatus">Refresh state</button>
         <button class="btn" data-action="reboot" ${v.armed ? "disabled" : ""}>Reboot</button>
         <button class="btn danger" data-action="disconnect">Disconnect</button>
@@ -1488,7 +1488,7 @@ function connectionView() {
       <p class="muted">Plug the flight controller in, click Connect and choose it in the list the browser shows (often "STM32" or the board's name). Close other programs using it first: Mission Planner, QGroundControl, the desktop app.</p>
       <div class="actions"><button class="btn primary" data-action="connect" ${state.connecting || !supported ? "disabled" : ""}>${state.connecting ? "Connecting…" : "Connect"}</button></div>
     </div>
-    <p class="muted">Telemetry radios over the network, firmware updates, compass calibration, backups and downloading logs from the vehicle need the <a href="${DESKTOP_URL}" target="_blank" rel="noopener">desktop app</a> for now.</p>`;
+    <p class="muted">Telemetry radios over the network, firmware updates, compass calibration and backups need the <a href="${DESKTOP_URL}" target="_blank" rel="noopener">desktop app</a> for now.</p>`;
   }
 
   const ports = state.ports;
@@ -1521,7 +1521,9 @@ function notConnected(what) {
 }
 
 function vehicleLogsView() {
-  const head = `<h1>Logs on the vehicle</h1><p class="lead">Download a log from the flight controller's SD card and analyse it. Logs are saved in Documents/ArduTune/logs.</p>`;
+  const head = `<h1>Logs on the vehicle</h1><p class="lead">Download a log from the flight controller's SD card and analyse it. ${
+    WEB ? "Each download is also saved to your browser's downloads. Over USB a big log takes a few minutes." : "Logs are saved in Documents/ArduTune/logs."
+  }</p>`;
   if (!state.vehicle) return head + notConnected("download its logs");
   const logs = state.vehicleLogs;
   return `${head}

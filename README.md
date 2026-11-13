@@ -190,8 +190,9 @@ It also connects to the vehicle over USB (Web Serial: Chrome, Edge or Opera
 on a computer, or Firefox 151+). That covers the setup guide, frame and
 hardware, motor test, serial ports, RC channels, GPS, AutoTune, the initial
 tune, pre-arm checks and the parameter list, all writing through the usual
-review. Backups, downloading logs from the vehicle, firmware, compass
-calibration and network telemetry need the desktop app for now.
+review, plus downloading logs from the vehicle (saved to your downloads and
+opened for analysis). Backups, firmware, compass calibration and network
+telemetry need the desktop app for now.
 
 To build it (needs `rustup target add wasm32-unknown-unknown` and
 `cargo install wasm-bindgen-cli` at the version `crates/web/Cargo.toml`

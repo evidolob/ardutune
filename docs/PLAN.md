@@ -609,8 +609,11 @@ Steps:
      and hardware, AutoTune, initial tune, motor test, RC and switch
      detection, GPS, serial ports, pre-arm, setup guide.
 
+   - Logs on the vehicle: list, download (saved to the browser's downloads
+     and opened for analysis), erase all, delete (not the newest, which
+     needs a reboot first).
+
    Not yet in the web version:
-   - logs from the vehicle (to a browser download);
    - compass calibration;
    - backups and drone names (step 3);
    - unifying the desktop and web command layers into one shared session.

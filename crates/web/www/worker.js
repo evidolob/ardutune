@@ -31,6 +31,11 @@ self.onmessage = async ({ data: { id, cmd, args, bytes } }) => {
           (done, total) => self.postMessage({ type: "event", name: "progress", payload: { task: "Reading parameters", done, total } }),
         );
         break;
+      case "vehicle_download_log":
+        value = ardutune.vehicle_download_log(args.id, (done, total) =>
+          self.postMessage({ type: "event", name: "progress", payload: { task: "Downloading log", done, total } }),
+        );
+        break;
       case "vehicle":
         value = ardutune.vehicle_call(args.cmd, JSON.stringify(args.args ?? {}));
         break;

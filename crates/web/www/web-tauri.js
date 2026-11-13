@@ -95,8 +95,19 @@
   const VEHICLE = new Set([
     "list_ports", "vehicle_status", "param_table", "prepare_changes", "apply_changes", "reboot", "vehicle_config", "autotune_status",
     "vehicle_pack", "initial_tune", "motor_layout", "motor_test", "motor_check", "rc_status", "rc_choices", "detect_switch", "gps_status",
-    "serial_status", "arming_check", "setup_guide",
+    "serial_status", "arming_check", "setup_guide", "list_vehicle_logs", "erase_vehicle_logs", "delete_vehicle_log",
   ]);
+
+  // A file for the user to keep, through the browser's downloads.
+  function save(file) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(file);
+    a.download = file.name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+  }
 
   // Files the page was given (picked or dropped), by the "path" the UI uses.
   const files = new Map();
@@ -135,6 +146,13 @@
         return call("close_log");
       case "connect":
         return connectSerial();
+      case "download_vehicle_log": {
+        // Downloaded in the worker, saved for the user, then opened like a picked file.
+        const { name, bytes } = await call("vehicle_download_log", { id: args.id });
+        const file = new File([bytes], name, { type: "application/octet-stream" });
+        save(file);
+        return keep(file);
+      }
       case "disconnect":
         await call("vehicle", { cmd: "disconnect", args: {} }).catch(() => {});
         return closeSerial();
