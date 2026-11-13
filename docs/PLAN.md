@@ -445,6 +445,57 @@ responds to changes than any single flight.
 - Keep it fast with several large logs: analyse in the background and cache
   per log (Flight history's summary cache is a start).
 
+## MCP server and a Claude extension
+
+Put an MCP (Model Context Protocol) server in the desktop app, and package a
+Claude extension that uses it. Claude, or any other AI assistant that speaks
+MCP, can then help set up, tune and troubleshoot the drone through what
+ArduTune already knows: the parameters and their docs, the checks, and the
+log analyses.
+
+- **Where it runs:** inside the desktop app, because the app owns the serial
+  link and only one program can hold the port.
+  - Either the app serves MCP over HTTP on localhost, with a per-session
+    token;
+  - or `ardutune mcp` (in the CLI) is a stdio server that forwards to the
+    running app.
+  - Without the app running, the CLI could still serve the offline parts:
+    logs and parameter docs.
+- **Tools (read):**
+  - vehicle status and identity, parameters with their docs and defaults;
+  - the setup guide, pre-arm explanation, GPS, serial ports, RC and frame
+    and hardware views;
+  - flight history and per-drone backups;
+  - the vehicle's logs: list, download, analyse;
+  - the analyses of a log: readiness, noise, filters, PIDs, crash
+    diagnosis.
+- **Tools (change):** the AI only proposes changes.
+  - A proposal opens the app's usual review: the user sees each change and
+    its reason, then confirms in the app, with backup and read-back as
+    always.
+  - Nothing is written, armed, spun or flashed from the AI side alone.
+  - Motor test, compass calibration, reboot and firmware stay in-app
+    actions the user starts.
+- **Resources and prompts:**
+  - ArduPilot parameter docs, the open log's summary, and the drone's
+    history as resources;
+  - prompts for common jobs: "Why won't it arm?", "Tune the filters from
+    this log", "Prepare for AutoTune", "What changed between these
+    flights?".
+- **The extension:**
+  - a Claude Desktop extension (MCP bundle) and a Claude Code plugin that
+    install the connection to the app, with a short skill describing the
+    tuning workflow and the safety rules;
+  - plain MCP config instructions for other clients.
+- **Safety and privacy:**
+  - off by default, turned on in the app;
+  - the app shows when an AI client is connected and what it asked for;
+  - data stays on the computer except what the user's AI client sends to
+    its own model;
+  - a read-only mode.
+- **Before building:** make the app's commands callable from one place, so
+  the UI and MCP share them. The Tauri commands are already that layer.
+
 ## Before publishing on GitHub: license
 
 Done: GPL-3.0-or-later, like ArduPilot, Mission Planner and the Methodic
