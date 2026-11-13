@@ -136,7 +136,7 @@ impl MockState {
             params.insert(n.to_owned(), (v, t));
         }
         // A BetaFlight X quad with DShot600, motors 1-4 on outputs 1-4.
-        for (n, v) in [("FRAME_CLASS", 1.0), ("FRAME_TYPE", 18.0), ("MOT_PWM_TYPE", 6.0), ("SERVO_BLH_RVMASK", 0.0)] {
+        for (n, v) in [("FRAME_CLASS", 1.0), ("FRAME_TYPE", 12.0), ("MOT_PWM_TYPE", 6.0), ("SERVO_BLH_RVMASK", 0.0)] {
             params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_INT8));
         }
         for a in ["X", "Y", "Z"] {

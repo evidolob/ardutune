@@ -2108,12 +2108,18 @@ function motorsView() {
     <div class="card">
       <h2>${esc(l.frame)}</h2>
       ${
-        l.reversed
+        l.reversed && !l.warning
           ? `<p class="muted">The diagram shows FRAME_TYPE ${l.frame_type} (${esc(l.frame)}). If your motors turn the other way (props in vs props out), the frame type must match, or ArduPilot steers yaw backwards and the vehicle spins on take-off.
               <button class="link" data-action="write" data-source="frame:${l.reversed[0]}" data-title="frame type ${esc(l.reversed[1])}">Switch to ${esc(l.reversed[1])}…</button></p>`
           : ""
       }
-      ${l.known ? "" : `<p class="muted">ArduTune knows the expected layout for quads only. Tests still go clockwise from the front: compare with the motor order diagram for your frame in the ArduPilot documentation.</p>`}
+      ${
+        l.warning
+          ? `<div class="banner fail"><b>Wrong frame type.</b> ${esc(l.warning)}
+              ${l.reversed ? `<div class="actions"><button class="btn primary" data-action="write" data-source="frame:${l.reversed[0]}" data-title="frame type ${esc(l.reversed[1])}">Switch to ${esc(l.reversed[1])}…</button></div>` : ""}</div>`
+          : ""
+      }
+      ${l.known || l.warning ? "" : `<p class="muted">ArduTune knows the expected layout for quads only. Tests still go clockwise from the front: compare with the motor order diagram for your frame in the ArduPilot documentation.</p>`}
       <div class="motors">
         ${l.known ? motorDiagram(l, m.spinning) : ""}
         <div>

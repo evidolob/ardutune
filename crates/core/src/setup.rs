@@ -135,13 +135,16 @@ pub(crate) fn frame_type_name(t: i64) -> &'static str {
         4 => "V-Tail",
         5 => "A-Tail",
         10 => "Y6B",
-        12 => "DJI X",
-        13 => "Clockwise X",
-        14 => "I",
+        6 => "Plus reversed",
+        11 => "Y6F",
+        12 => "BetaFlight X",
+        13 => "DJI X",
+        14 => "Clockwise X",
+        15 => "I",
         16 => "NYT Plus",
         17 => "NYT X",
-        18 => "BetaFlight X",
-        19 => "BetaFlight X reversed",
+        18 => "BetaFlight X reversed",
+        19 => "Y4",
         _ => "other",
     }
 }
@@ -149,9 +152,11 @@ pub(crate) fn frame_type_name(t: i64) -> &'static str {
 pub(crate) fn motor_count(class: i64) -> Option<usize> {
     match class {
         1 => Some(4),
-        2 | 3 => Some(6),
-        4 | 5 => Some(8),
+        2 | 5 => Some(6),
+        3 | 4 => Some(8),
         7 => Some(3),
+        12 => Some(12),
+        14 => Some(10),
         _ => None,
     }
 }
@@ -181,6 +186,13 @@ fn frame(p: Param) -> Step {
                 format!("{class_name}, {} layout (FRAME_CLASS {c}, FRAME_TYPE {t})", frame_type_name(t)),
                 "Check the layout matches the motor order diagram for this frame type; ArduTune's Motor test confirms order and direction.",
             ));
+            if c == 1 && t == 19 {
+                items.push(item(
+                    Status::Fail,
+                    "FRAME_TYPE 19 is Y4, not an X quad",
+                    "Y4 has two motors at the front and two stacked at the back. An earlier ArduTune offered 19 as \"BetaFlight X reversed\" by mistake: that is 18. Set the frame type that matches your quad (Motor test offers the switch), reboot, and test the motors again.",
+                ));
+            }
             if let Some(n) = motor_count(c) {
                 let missing: Vec<usize> = (1..=n)
                     .filter(|m| !(1..=16).any(|ch| p(&format!("SERVO{ch}_FUNCTION")) == Some(32.0 + *m as f64)))

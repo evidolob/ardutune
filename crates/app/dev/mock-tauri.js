@@ -66,6 +66,9 @@
     frame: "Quad BetaFlight X",
     known: true,
     dshot: true,
+    frame_type: 12,
+    reversed: [18, "BetaFlight X reversed (props out)"],
+    warning: null,
     positions: [
       { letter: "A", motor: 2, name: "front right", angle: 45, spin: "ccw", output: 2 },
       { letter: "B", motor: 1, name: "back right", angle: 135, spin: "cw", output: 1 },

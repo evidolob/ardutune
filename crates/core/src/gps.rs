@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::form::{setting, Group, Setting};
 use crate::paramdoc;
 use crate::readiness::{ParamChange, Status};
 use crate::setup::{change, Param};
@@ -104,23 +105,6 @@ pub struct Check {
     pub accept_position: bool,
     /// The fix is on the serial ports page.
     pub ports_link: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Setting {
-    pub name: String,
-    pub label: &'static str,
-    pub value: Option<f64>,
-    /// "select", "bits" or "number".
-    pub kind: &'static str,
-    pub options: Vec<(f64, String)>,
-    pub unit: &'static str,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Group {
-    pub title: String,
-    pub settings: Vec<Setting>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -413,22 +397,6 @@ pub fn page(param: impl Fn(&str) -> Option<f64>, live: &Live) -> Page {
         && !spoofed
         && !far;
     Page { settings: settings(p), units, ekf, checks, messages: live.messages.clone(), trusted }
-}
-
-fn setting(p: Param, name: &str, label: &'static str, unit: &'static str) -> Option<Setting> {
-    let value = p(name);
-    value?;
-    let doc = paramdoc::doc(name);
-    let bits = doc.map(|d| d.bits.iter().map(|(b, n)| (f64::from(*b), n.clone())).collect::<Vec<_>>()).unwrap_or_default();
-    let values = doc.map(|d| d.values.clone()).unwrap_or_default();
-    let (kind, options) = if !bits.is_empty() {
-        ("bits", bits)
-    } else if !values.is_empty() && unit.is_empty() {
-        ("select", values)
-    } else {
-        ("number", values)
-    };
-    Some(Setting { name: name.to_owned(), label, value, kind, options, unit })
 }
 
 fn settings(p: Param) -> Vec<Group> {

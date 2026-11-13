@@ -189,9 +189,9 @@ fn analyse_connect_download_write_and_reboot() {
     let plan = call("prepare_changes", json!({ "source": "motors", "label": "writing motor fixes", "inputs": { "observations": seen } })).unwrap();
     assert_eq!(plan["rows"][0]["value"], json!(4.0), "{plan}");
     // Props out: the reversed layout is one change of frame type.
-    assert_eq!(layout["reversed"][0], json!(19));
-    let plan = call("prepare_changes", json!({ "source": "frame:19", "label": "props out" })).unwrap();
-    assert_eq!((plan["rows"][0]["name"].clone(), plan["rows"][0]["value"].clone()), (json!("FRAME_TYPE"), json!(19.0)));
+    assert_eq!(layout["reversed"][0], json!(18));
+    let plan = call("prepare_changes", json!({ "source": "frame:18", "label": "props out" })).unwrap();
+    assert_eq!((plan["rows"][0]["name"].clone(), plan["rows"][0]["value"].clone()), (json!("FRAME_TYPE"), json!(18.0)));
 
     // Compass calibration: started, followed to the end, saved.
     assert!(call("compass_cal_poll", json!({})).unwrap_err().contains("No compass calibration"));

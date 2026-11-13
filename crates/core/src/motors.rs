@@ -63,24 +63,35 @@ pub struct Layout {
     /// The same layout with every motor reversed (props in vs props out),
     /// when ArduPilot has one: (FRAME_TYPE, name).
     pub reversed: Option<(i64, &'static str)>,
+    /// A frame type that is probably a mistake for this frame.
+    pub warning: Option<String>,
 }
 
-/// The FRAME_TYPE with every motor turning the other way.
+/// The FRAME_TYPE with every motor turning the other way (ArduPilot's
+/// AP_Motors frame types: 0 plus, 1 X, 3 H, 6 plus reversed, 12 BetaFlight
+/// X, 13 DJI X, 14 clockwise X, 18 BetaFlight X reversed, 19 Y4).
 pub fn reversed_frame(frame_type: i64) -> Option<(i64, &'static str)> {
     match frame_type {
+        0 => Some((6, "Plus reversed")),
+        6 => Some((0, "Plus")),
         1 => Some((3, "H (X with every motor reversed)")),
         3 => Some((1, "X")),
-        18 => Some((19, "BetaFlight X reversed (props out)")),
-        19 => Some((18, "BetaFlight X (props in)")),
+        12 => Some((18, "BetaFlight X reversed (props out)")),
+        18 => Some((12, "BetaFlight X (props in)")),
         _ => None,
     }
 }
+
+/// Y4 (two front motors and two stacked at the back) on a quad: an earlier
+/// ArduTune offered 19 as "BetaFlight X reversed".
+const Y4: i64 = 19;
 
 /// Switching to another FRAME_TYPE of the same class.
 pub fn frame_change(param: impl Fn(&str) -> Option<f64>, frame_type: i64) -> Result<Vec<ParamChange>, String> {
     let p: Param = &param;
     let now = int(p, "FRAME_TYPE").ok_or("This vehicle has no FRAME_TYPE.")?;
-    let Some((to, name)) = reversed_frame(now).filter(|(t, _)| *t == frame_type) else {
+    let target = if now == Y4 { Some((18, "BetaFlight X reversed (props out)")) } else { reversed_frame(now) };
+    let Some((to, name)) = target.filter(|(t, _)| *t == frame_type) else {
         return Err(format!("ArduTune only switches between a layout and its reversed version (FRAME_TYPE {now} has none as {frame_type})."));
     };
     Ok(change(p, "FRAME_TYPE", to as f64, format!("{name}: matches motors that turn the other way (takes effect after a reboot)")).into_iter().collect())
@@ -103,10 +114,11 @@ fn quad(frame_type: i64) -> Option<Quad> {
         0 => PLUS,
         1 => X,
         3 => reverse(X),
-        12 => DJI_X,
-        13 => CW_X,
-        18 => BF_X,
-        19 => reverse(BF_X),
+        6 => reverse(PLUS),
+        12 => BF_X,
+        13 => DJI_X,
+        14 => CW_X,
+        18 => reverse(BF_X),
         _ => return None,
     })
 }
@@ -160,8 +172,21 @@ pub fn layout(param: impl Fn(&str) -> Option<f64>) -> Result<Layout, String> {
             .collect(),
     };
     let class_name = if class == 1 { "Quad" } else { "Multirotor" };
-    let reversed = if expected.is_some() { reversed_frame(frame_type) } else { None };
-    Ok(Layout { frame: format!("{class_name} {}", frame_type_name(frame_type)), positions, known: expected.is_some(), dshot, frame_type, reversed })
+    let y4 = class == 1 && frame_type == Y4;
+    let reversed = if y4 {
+        Some((18, "BetaFlight X reversed (props out)"))
+    } else if expected.is_some() {
+        reversed_frame(frame_type)
+    } else {
+        None
+    };
+    let warning = y4.then(|| {
+        "FRAME_TYPE 19 is Y4: two motors at the front and two stacked at the back, mixed differently from an X. A quad with four arms flown \
+         like this can flip or spin on take-off. Earlier ArduTune versions offered 19 as \"BetaFlight X reversed\" by mistake: that is 18. \
+         Switch to the frame type that matches your quad, reboot, and run the motor test again."
+            .to_owned()
+    });
+    Ok(Layout { frame: format!("{class_name} {}", frame_type_name(frame_type)), positions, known: expected.is_some(), dshot, frame_type, reversed, warning })
 }
 
 /// What the pilot saw when test letter `index` ran: which position (index
@@ -312,7 +337,7 @@ mod tests {
     /// The KakuteH7: BetaFlight X, motors 1-4 on outputs 1-4, DShot600.
     fn kakute() -> HashMap<String, f64> {
         let mut m: HashMap<String, f64> =
-            [("FRAME_CLASS", 1.0), ("FRAME_TYPE", 18.0), ("MOT_PWM_TYPE", 6.0), ("SERVO_BLH_RVMASK", 0.0)].iter().map(|(k, v)| (k.to_string(), *v)).collect();
+            [("FRAME_CLASS", 1.0), ("FRAME_TYPE", 12.0), ("MOT_PWM_TYPE", 6.0), ("SERVO_BLH_RVMASK", 0.0)].iter().map(|(k, v)| (k.to_string(), *v)).collect();
         for o in 1..=4 {
             m.insert(format!("SERVO{o}_FUNCTION"), 32.0 + o as f64);
         }
@@ -363,12 +388,41 @@ mod tests {
         let v = check(|n| m.get(n).copied(), &obs(&[(0, Spin::Cw), (1, Spin::Ccw), (2, Spin::Cw), (3, Spin::Ccw)])).unwrap();
         assert!(!v.ok && v.needs_reboot);
         let changes: Vec<(&str, f64)> = v.changes.iter().map(|c| (c.name.as_str(), c.value)).collect();
-        assert_eq!(changes, [("FRAME_TYPE", 19.0)], "the frame, not four reversals");
+        assert_eq!(changes, [("FRAME_TYPE", 18.0)], "the frame, not four reversals");
         assert_eq!(v.items.iter().filter(|i| i.status == Status::Fail).count(), 1, "{:?}", v.items);
         let l = layout(|n| m.get(n).copied()).unwrap();
-        assert_eq!(l.reversed.map(|r| r.0), Some(19));
-        assert_eq!(frame_change(|n| m.get(n).copied(), 19).unwrap()[0].value, 19.0);
-        assert!(frame_change(|n| m.get(n).copied(), 12).is_err());
+        assert_eq!(l.reversed.map(|r| r.0), Some(18));
+        assert_eq!(frame_change(|n| m.get(n).copied(), 18).unwrap()[0].value, 18.0);
+        assert!(frame_change(|n| m.get(n).copied(), 19).is_err(), "19 is Y4, never offered");
+    }
+
+    #[test]
+    fn frame_type_numbers_match_ardupilot() {
+        // AP_Motors: 12 BetaFlight X, 13 DJI X, 14 clockwise X, 18 BetaFlight X reversed.
+        let first = |t: f64| {
+            let mut m = kakute();
+            m.insert("FRAME_TYPE".into(), t);
+            let l = layout(|n| m.get(n).copied()).unwrap();
+            (l.positions[0].motor, l.positions[0].spin, l.frame)
+        };
+        assert_eq!(first(12.0), (2, Some(Spin::Ccw), "Quad BetaFlight X".to_owned()));
+        assert_eq!(first(18.0), (2, Some(Spin::Cw), "Quad BetaFlight X reversed".to_owned()));
+        assert_eq!(first(13.0).0, 1);
+        assert_eq!(first(14.0).0, 1);
+        // The docs agree with the names.
+        let doc = crate::paramdoc::doc("FRAME_TYPE").unwrap();
+        let named = |v: f64| doc.values.iter().find(|(x, _)| *x == v).map(|(_, n)| n.as_str());
+        assert_eq!((named(12.0), named(18.0), named(19.0)), (Some("BetaFlightX"), Some("BetaFlightXReversed"), Some("Y4")));
+    }
+
+    #[test]
+    fn y4_on_a_quad_is_flagged() {
+        let mut m = kakute();
+        m.insert("FRAME_TYPE".into(), 19.0);
+        let l = layout(|n| m.get(n).copied()).unwrap();
+        assert!(!l.known && l.warning.unwrap().contains("Y4"));
+        assert_eq!(l.reversed.map(|r| r.0), Some(18));
+        assert_eq!(frame_change(|n| m.get(n).copied(), 18).unwrap()[0].value, 18.0);
     }
 
     #[test]
