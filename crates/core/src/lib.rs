@@ -25,6 +25,7 @@ pub mod switch;
 pub mod synth;
 pub mod tune;
 pub mod utc;
+pub mod views;
 
 pub use log::{Firmware, FlightSource, Interval, Log, Table, Vehicle};
 pub use readiness::{assess, Report};

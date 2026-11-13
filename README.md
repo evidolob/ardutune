@@ -178,6 +178,27 @@ Download the installer for your system from
 Windows 10 and later and macOS need no driver for ArduPilot flight
 controllers.
 
+## Web app
+
+[evidolob.github.io/ardutune](https://evidolob.github.io/ardutune/) runs the
+log analysis in the browser: readiness, noise, filters, PIDs and crash
+diagnosis. Open a `.bin` or drop it on the page; nothing is uploaded, the
+analysis runs on your computer (WebAssembly). It works offline once loaded,
+and Chrome or Edge can install it as an app. Connecting to a vehicle needs
+the desktop app for now.
+
+To build it (needs `rustup target add wasm32-unknown-unknown` and
+`cargo install wasm-bindgen-cli` at the version `crates/web/Cargo.toml`
+pins):
+
+```bash
+tools/build-web.sh
+```
+
+```bash
+python3 -m http.server -d dist/web 8080
+```
+
 ## Desktop app
 
 ```bash

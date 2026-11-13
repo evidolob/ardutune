@@ -3,6 +3,9 @@
 
 const tauri = window.__TAURI__;
 const invoke = (cmd, args = {}) => tauri.core.invoke(cmd, args);
+/** The web app (`crates/web`): log analysis only, no vehicle or files yet. */
+const WEB = !!window.ARDUTUNE_WEB;
+const DESKTOP_URL = "https://github.com/evidolob/ardutune/releases";
 
 /** Views that analyse the open log. */
 const LOG_VIEWS = [
@@ -885,7 +888,10 @@ const actions = {
   askDelete: (d) => askDelete(d.id),
   askErase,
   confirmDelete,
-  write: (d) => writeChanges(d.source, d.title),
+  write: (d) =>
+    WEB
+      ? toast("The web version can't reach the vehicle yet: set these values in your ground station (Mission Planner, QGroundControl) or with the ArduTune desktop app.", "info")
+      : writeChanges(d.source, d.title),
   confirmWrite: () => confirmWrite(false),
   backupAndWrite: () => confirmWrite(true),
   closeModal: () => {
@@ -1032,8 +1038,10 @@ function header() {
 function nav() {
   const needsLog = (id) => LOG_VIEWS.some(([v]) => v === id);
   const item = ([id, label]) => {
-    const off = needsLog(id) && !state.log;
-    return `<button data-action="go" data-view="${id}" class="${state.view === id ? "active" : ""}" ${off ? 'disabled title="Open a flight log first"' : ""}>${esc(label)}${badge(id)}</button>`;
+    const desktopOnly = WEB && !needsLog(id);
+    const off = desktopOnly || (needsLog(id) && !state.log);
+    const why = desktopOnly ? "Needs the desktop app for now" : "Open a flight log first";
+    return `<button data-action="go" data-view="${id}" class="${state.view === id ? "active" : ""}" ${off ? `disabled title="${why}"` : ""}>${esc(label)}${badge(id)}</button>`;
   };
   // Which log the analyses below it work on.
   const log = state.log
@@ -1041,7 +1049,9 @@ function nav() {
         <div class="navlogacts"><button class="link" data-action="pickLog">Open another</button> · <button class="link" data-action="closeLog">Close</button></div></div>`
     : `<div class="navlog muted">No log open: <button class="link" data-action="pickLog">open one</button> or pick one from <button class="link" data-action="go" data-view="history">Flight history</button></div>`;
   const v = state.vehicle;
-  const connection = `<button data-action="go" data-view="connection" class="navconn ${state.view === "connection" ? "active" : ""}" title="${esc(v?.label ?? "Connect to a vehicle")}"><span><span class="dot ${v ? (v.armed ? "armed" : "on") : ""}"></span> ${v ? esc(v.label ?? "Vehicle") : "Connect"}</span></button>`;
+  const connection = WEB
+    ? `<a class="navconn webnote" href="${DESKTOP_URL}" target="_blank" rel="noopener" title="Connecting to a vehicle needs the desktop app for now">Web version · get the desktop app</a>`
+    : `<button data-action="go" data-view="connection" class="navconn ${state.view === "connection" ? "active" : ""}" title="${esc(v?.label ?? "Connect to a vehicle")}"><span><span class="dot ${v ? (v.armed ? "armed" : "on") : ""}"></span> ${v ? esc(v.label ?? "Vehicle") : "Connect"}</span></button>`;
   return (
     connection +
     NAV.map(([title, items]) => `<h3>${esc(title)}</h3>${items.map((i) => (i === "log" ? log : item(i))).join("")}`).join("")
@@ -1066,7 +1076,11 @@ function welcome() {
     <p class="lead">Open a DataFlash log from a test flight. ArduTune checks whether it has the data needed for tuning,
       explains crashes, analyses gyro noise and recommends filter and PID changes it can write straight to the vehicle.</p>
     <div class="card" data-action="pickLog"><h2>Open a flight log</h2><div class="muted">A <code>.bin</code> file from the SD card or a download.</div></div>
-    <div class="card" data-action="go" data-view="connection"><h2>Connect to the vehicle</h2><div class="muted">Over USB or telemetry: download logs, back up and write parameters.</div></div>
+    ${
+      WEB
+        ? `<a class="card" href="${DESKTOP_URL}" target="_blank" rel="noopener"><h2>Connect to the vehicle</h2><div class="muted">Setting up, tuning and writing parameters need the desktop app for now (Windows, macOS, Linux). This web version analyses logs, offline, in your browser.</div></a>`
+        : `<div class="card" data-action="go" data-view="connection"><h2>Connect to the vehicle</h2><div class="muted">Over USB or telemetry: download logs, back up and write parameters.</div></div>`
+    }
     <div class="card" data-action="openSample"><h2>Try a sample flight</h2><div class="muted">A synthetic log with hover and stick snaps, to explore the app.</div></div>
   </div>`;
 }
@@ -2938,5 +2952,8 @@ function render() {
     modal() + (t ? `<div class="toast" data-action="closeToast" style="${t.kind === "info" ? "background:var(--info-bg);color:var(--info)" : ""}">${esc(t.text)}</div>` : ""),
   );
 }
+
+// The web app opens dropped files through this.
+if (WEB) window.ardutuneOpenLog = openLog;
 
 render();

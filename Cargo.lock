@@ -146,6 +146,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ardutune-web"
+version = "0.1.0"
+dependencies = [
+ "ardutune-core",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -580,6 +580,15 @@ Steps:
    unchanged: it already talks to the backend through named commands (as
    `dev/mock-tauri.js` shows), so a web build answers them from WebAssembly
    instead of Tauri.
+   Done:
+   - `crates/web` compiles the log analysis to WebAssembly. The views are
+     shared with the desktop app in `core::views`.
+   - `crates/web/www` holds the web stand-in for Tauri (`web-tauri.js`), a
+     Web Worker, a service worker for offline use and a manifest for
+     installing.
+   - In the UI's web mode, the vehicle pages point to the desktop app.
+   - `tools/build-web.sh` builds it, and the Web app workflow publishes it
+     to GitHub Pages.
 2. The vehicle over Web Serial: the `link` crate's blocking serial loop
    becomes async over a byte transport, with MAVLink parsing kept. This
    covers parameters, setup, RC, motors, compass, pre-arm, logs from the
