@@ -1,8 +1,17 @@
 # ArduTune
 
-Desktop, offline tool that diagnoses ArduPilot multicopters from test-flight
-DataFlash logs and helps tune gyro filters and rate PIDs. See
-[docs/PLAN.md](docs/PLAN.md) for the research and roadmap.
+Sets up, diagnoses and tunes ArduPilot multicopters, offline: from the
+vehicle over USB and from test-flight DataFlash logs (gyro filters, rate
+PIDs, AutoTune). See [docs/PLAN.md](docs/PLAN.md) for the research and
+roadmap.
+
+**Try it in the browser: [evidolob.github.io/ardutune](https://evidolob.github.io/ardutune/)**,
+nothing to install. Open a flight log, or connect the flight controller
+over USB from Chrome, Edge or Opera. It works offline once loaded and can be
+installed as an app. For everything (backups, firmware, compass
+calibration, telemetry radios), use the
+[desktop app](https://github.com/evidolob/ardutune/releases) for Windows,
+macOS and Linux.
 
 ## Status
 
@@ -153,7 +162,8 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
 
 ## Install
 
-Download the installer for your system from
+Or skip installing and use the [web app](https://evidolob.github.io/ardutune/).
+For the desktop app, download the installer for your system from
 [Releases](https://github.com/evidolob/ardutune/releases).
 
 - **Windows:** `ArduTune_<version>_x64-setup.exe` (installs for your user),
