@@ -1,6 +1,7 @@
 //! ArduTune core: ArduPilot DataFlash log parsing and tuning analysis.
 
 pub mod arming;
+pub mod config;
 pub mod dataflash;
 pub mod diagnose;
 pub mod filters;

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, gps, motors, serial, paramdoc, params, rc, setup, switch, tune};
+use ardutune_core::{arming, config, gps, motors, serial, paramdoc, params, rc, setup, switch, tune};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
@@ -677,6 +677,18 @@ pub async fn gps_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<gps::Page> {
         }
         c.last_gps = Some(page.clone());
         Ok(page)
+    })
+    .await
+}
+
+/// The basic configuration page: frame, ESCs, board and battery settings.
+#[tauri::command]
+pub async fn vehicle_config<R: Runtime>(app: AppHandle<R>) -> CmdResult<config::View> {
+    blocking(app, |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let c = connected(&mut slot)?;
+        Ok(config::view(|n| c.params.get(n).map(|p| p.value as f64)))
     })
     .await
 }

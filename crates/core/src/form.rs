@@ -17,6 +17,8 @@ pub struct Setting {
     pub unit: &'static str,
     /// A line of advice under the control; empty for none.
     pub help: &'static str,
+    /// Takes effect after a reboot.
+    pub reboot: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,7 +43,7 @@ pub fn setting(p: Param, name: &str, label: &'static str, unit: &'static str) ->
     } else {
         ("number", values)
     };
-    Some(Setting { name: name.to_owned(), label, value, kind, options, unit, help: "" })
+    Some(Setting { name: name.to_owned(), label, value, kind, options, unit, help: "", reboot: doc.is_some_and(|d| d.reboot) })
 }
 
 impl Setting {

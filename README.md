@@ -74,6 +74,12 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   HDOP above what arming needs, and EKF glitches. It offers GPS off or a GPS
   switch where needed. Edit the receiver type, satellite systems, rate,
   antenna offset and HDOP limit.
+- Frame and hardware: frame and layout (with a diagram of the chosen quad
+  layout), ESC protocol and firmware, bidirectional DShot, motor poles, spin
+  armed/minimum, board orientation and battery monitor on one page, with
+  advice for each. It checks for an unset frame, Y4 on a quad, motors without
+  an output, DShot settings that don't fit together, and spin armed not below
+  spin minimum.
 - Initial tune: starting filter, acceleration-limit, thrust-curve and battery
   values for a new build from its prop size and pack (the formulas of
   ArduPilot's initial tune parameters calculator, with ArduCopter 4.7 names),

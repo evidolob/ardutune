@@ -189,6 +189,21 @@ pub fn layout(param: impl Fn(&str) -> Option<f64>) -> Result<Layout, String> {
     Ok(Layout { frame: format!("{class_name} {}", frame_type_name(frame_type)), positions, known: expected.is_some(), dshot, frame_type, reversed, warning })
 }
 
+/// The expected quad layout for a frame type, for a diagram before the
+/// frame is written; `None` for frames ArduTune doesn't draw.
+pub fn preview(class: i64, frame_type: i64) -> Option<Vec<Position>> {
+    let q = if class == 1 { quad(frame_type)? } else { return None };
+    Some(
+        q.iter()
+            .enumerate()
+            .map(|(i, &(motor, angle, spin))| Position { letter: letter(i), motor, name: place(angle).to_owned(), angle: Some(angle), spin: Some(spin), output: None })
+            .collect(),
+    )
+}
+
+/// Quad frame types ArduTune can draw.
+pub const QUAD_TYPES: [i64; 8] = [0, 1, 3, 6, 12, 13, 14, 18];
+
 /// What the pilot saw when test letter `index` ran: which position (index
 /// into the layout) spun, if any, and which way.
 #[derive(Debug, Clone, Deserialize)]

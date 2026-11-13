@@ -201,6 +201,40 @@
       }));
       return { view: { channels, mode_channel: 6, modes, notes: [], signal: true }, ranges: channels.map((c) => [c.ch, c.value ?? 0, c.value ?? 0]), rssi_pct: 87, tuning: { TUNE: 0, TUNE_MIN: 0, TUNE_MAX: 0, ATC_RAT_RLL_P: 0.135, ATC_RAT_RLL_I: 0.135, ATC_RAT_RLL_D: 0.0036, ATC_ANG_RLL_P: 4.5, ATC_RAT_YAW_P: 0.18 } };
     },
+    vehicle_config: async () => {
+      await sleep(200);
+      const place = { 0: "front", 45: "front right", 90: "right", 135: "back right", 180: "back", "-135": "back left", "-90": "left", "-45": "front left" };
+      const quad = (rows) => rows.map(([motor, angle, spin], i) => ({ letter: "ABCD"[i], motor, name: place[angle], angle, spin, output: null }));
+      const rev = (rows) => rows.map(([m, a, s]) => [m, a, s === "cw" ? "ccw" : "cw"]);
+      const X = [[1, 45, "ccw"], [4, 135, "cw"], [2, -135, "ccw"], [3, -45, "cw"]];
+      const BF = [[2, 45, "ccw"], [1, 135, "cw"], [3, -135, "ccw"], [4, -45, "cw"]];
+      const PLUS = [[3, 0, "cw"], [1, 90, "ccw"], [4, 180, "cw"], [2, -90, "ccw"]];
+      const set = (name, label, value, kind, options, extra = {}) => ({ name, label, value, kind, options, unit: "", help: "", reboot: false, ...extra });
+      return {
+        groups: [
+          { title: "Frame", settings: [
+            set("FRAME_CLASS", "Frame", 1, "select", [[0, "Not set"], [1, "Quad"], [2, "Hexa"], [3, "Octa"], [4, "OctaQuad (X8)"], [5, "Y6"], [7, "Tri"]], { reboot: true }),
+            set("FRAME_TYPE", "Layout", 18, "select", [[0, "Plus"], [1, "X (props in)"], [3, "H (X, props out)"], [12, "BetaFlight X (props in)"], [13, "DJI X"], [14, "Clockwise X"], [18, "BetaFlight X reversed (props out)"], [19, "Y4"]], { reboot: true, help: "Props in: the front motors spin towards each other at the top. Props out: away from each other. The motor test confirms it." }),
+          ] },
+          { title: "ESCs and motors", settings: [
+            set("MOT_PWM_TYPE", "ESC protocol", 6, "select", [[0, "Normal"], [1, "OneShot"], [2, "OneShot125"], [4, "DShot150"], [5, "DShot300"], [6, "DShot600"], [7, "DShot1200"]], { reboot: true, help: "DShot600 for current BLHeli_32, AM32 and Bluejay ESCs; Normal PWM for older ones." }),
+            set("SERVO_DSHOT_ESC", "ESC firmware", 1, "select", [[0, "None"], [1, "BLHeli32/Kiss/AM32"], [2, "BLHeli_S/BlueJay"], [3, "BLHeli32/AM32/Kiss+EDT"], [4, "BLHeli_S/BlueJay+EDT"]], { help: "Lets ArduPilot reverse motors in software and read extended telemetry (EDT)." }),
+            set("SERVO_BLH_BDMASK", "Bidirectional DShot", 15, "select", [[0, "Off"], [15, "On, motor outputs 1, 2, 3, 4"]], { reboot: true, help: "The ESCs report RPM on the signal wire, so the noise filter follows the motor speed." }),
+            set("SERVO_BLH_POLES", "Motor poles", 14, "number", [], { unit: "magnets", reboot: true, help: "Count the magnets in the bell: 14 on most 5-inch motors, 24-28 on large ones." }),
+            set("MOT_SPIN_ARM", "Spin when armed", 0.1, "number", [[0, "Low"], [0.1, "Default"], [0.2, "High"]], { unit: "0-1", help: "Throttle the motors idle at once armed. Must be below Spin minimum." }),
+            set("MOT_SPIN_MIN", "Spin minimum", 0.13, "number", [[0, "Low"], [0.15, "Default"], [0.25, "High"]], { unit: "0-1", help: "Lowest throttle in flight. About 0.03 above Spin when armed." }),
+          ] },
+          { title: "Board", settings: [set("AHRS_ORIENTATION", "Board orientation", 0, "select", [[0, "None"], [1, "Yaw45"], [2, "Yaw90"], [4, "Yaw180"], [6, "Yaw270"], [8, "Roll180"]], { help: "None when its arrow points forward and it's the right way up." })] },
+          { title: "Battery", settings: [
+            set("BATT_MONITOR", "Battery monitor", 4, "select", [[0, "Disabled"], [3, "Analog Voltage Only"], [4, "Analog Voltage and Current"], [9, "ESC"]], { reboot: true }),
+            set("BATT_CAPACITY", "Capacity", 1500, "number", [], { unit: "mAh" }),
+          ] },
+        ],
+        checks: [],
+        previews: [[0, quad(PLUS)], [1, quad(X)], [3, quad(rev(X))], [6, quad(rev(PLUS))], [12, quad(BF)], [18, quad(rev(BF))]],
+        motor_mask: 15,
+      };
+    },
     serial_status: async () => {
       await sleep(500);
       const port = (n, hw, protocol, protocol_name, baud, setup, live, rx, tx = 0) => ({ n, hw, usb: n === 0, protocol, protocol_name, baud, baud_name: baud ? { 57: "57600", 115: "115200", 230: "230400" }[baud] : null, options: [], rx_bps: rx, tx_bps: tx, live, setup });

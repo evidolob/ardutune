@@ -120,6 +120,12 @@ fn analyse_connect_download_write_and_reboot() {
     mock.state().gps_motion = (0.02, 50.4501, 30.5234);
     mock.state().prearm_failures.clear();
 
+    // Basic configuration: settings by group, no problems on the simulated quad.
+    let cfg = call("vehicle_config", json!({})).unwrap();
+    assert_eq!(cfg["groups"][0]["title"], json!("Frame"), "{cfg}");
+    assert_eq!(cfg["motor_mask"], json!(15));
+    assert!(cfg["checks"].as_array().unwrap().is_empty(), "{cfg}");
+
     // Serial ports: names and traffic from @SYS/uarts.txt, live GPS and
     // receiver; a common setup proposed for a port.
     let ports = call("serial_status", json!({})).unwrap();

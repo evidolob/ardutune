@@ -14,7 +14,7 @@ const LOG_VIEWS = [
 ];
 /** The sidebar, in the order a build goes: set it up, configure it, tune it from flight logs, and find out what's wrong. */
 const NAV = [
-  ["Initial setup", [["setup", "Setup guide"], ["firmware", "Firmware"], ["motors", "Motor test"], ["compass", "Compass calibration"], ["tune", "Initial tune"]]],
+  ["Initial setup", [["setup", "Setup guide"], ["firmware", "Firmware"], ["config", "Frame and hardware"], ["motors", "Motor test"], ["compass", "Compass calibration"], ["tune", "Initial tune"]]],
   ["Configuration", [["ports", "Serial ports"], ["rc", "RC channels"], ["gps", "GPS"], ["allparams", "Parameters"], ["params", "Backups"]]],
   ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], "log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
   ["Troubleshoot", [["prearm", "Pre-arm check"], ["diagnose", "Crash diagnosis"]]],
@@ -45,6 +45,7 @@ const state = {
   setup: null, // latest setup guide
   compass: { cal: null, running: false }, // compass calibration progress
   // RC channels page; modes: staged FLTMODEn changes; seen: per channel {lo, hi, vals} since the page opened
+  config: { view: null, staged: {} }, // frame and hardware page; staged: setting edits
   serial: { view: null, polling: false }, // serial ports page (state.ports is the connection list)
   gps: { page: null, polling: false, staged: {}, showSettings: false }, // GPS page; staged: setting edits
   rc: { status: null, choices: null, polling: false, showAll: false, modes: {}, seen: {}, stickMode: Number(safeGet("ardutune.stickMode")) === 1 ? 1 : 2 },
@@ -129,6 +130,7 @@ function go(view) {
   if (view === "rc" && state.vehicle) pollRc();
   if (view === "gps" && state.vehicle) pollGps();
   if (view === "ports" && state.vehicle) pollPorts();
+  if (view === "config" && state.vehicle) loadConfig();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
   if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
 }
@@ -426,6 +428,14 @@ async function writeValues(title, values) {
     set({ modal: { stage: "confirm", title, source: "edits", plan, selected: new Set(plan.rows.map((r) => r.name)) } });
   } catch (e) {
     set({ modal: null });
+    toast(e);
+  }
+}
+
+async function loadConfig() {
+  try {
+    set({ config: { ...state.config, view: await invoke("vehicle_config") } });
+  } catch (e) {
     toast(e);
   }
 }
@@ -863,7 +873,15 @@ const actions = {
   write: (d) => writeChanges(d.source, d.title),
   confirmWrite: () => confirmWrite(false),
   backupAndWrite: () => confirmWrite(true),
-  closeModal: () => set({ modal: null }),
+  closeModal: () => {
+    set({ modal: null });
+    if (state.view === "config" && state.vehicle) loadConfig();
+  },
+  configWrite: () => {
+    writeValues("frame and hardware settings", Object.entries(state.config.staged).map(([n, v]) => [n, Number(v)]));
+    set({ config: { ...state.config, staged: {} } });
+  },
+  configDiscard: () => set({ config: { ...state.config, staged: {} } }),
   closeToast: () => set({ toast: null }),
   retry: (d) => {
     delete state.analyses[d.kind];
@@ -894,15 +912,17 @@ document.addEventListener("change", (e) => {
     const bit = 1 << Number(t.dataset.pbit);
     set({ modal: { ...state.modal, options: t.checked ? state.modal.options | bit : state.modal.options & ~bit } });
   }
-  if (t.dataset.gset || t.dataset.gbits) {
-    const name = t.dataset.gset ?? t.dataset.gbits;
-    const setting = state.gps.page?.settings.flatMap((g) => g.settings).find((s) => s.name === name);
-    const before = state.gps.staged[name] ?? setting?.value ?? 0;
-    const value = t.dataset.gbits ? (t.checked ? before | (1 << Number(t.dataset.bit)) : before & ~(1 << Number(t.dataset.bit))) : Number(t.value);
-    const staged = { ...state.gps.staged };
-    if (value === setting?.value || (t.dataset.gset && t.value === "")) delete staged[name];
+  if (t.dataset.scope && t.dataset.sname) {
+    const scope = t.dataset.scope;
+    const name = t.dataset.sname;
+    const setting = formSettings(scope).find((s) => s.name === name);
+    const before = state[scope].staged[name] ?? setting?.value ?? 0;
+    const bits = t.dataset.bit !== undefined;
+    const value = bits ? (t.checked ? before | (1 << Number(t.dataset.bit)) : before & ~(1 << Number(t.dataset.bit))) : Number(t.value);
+    const staged = { ...state[scope].staged };
+    if (value === setting?.value || (!bits && t.value === "")) delete staged[name];
     else staged[name] = value;
-    set({ gps: { ...state.gps, staged } });
+    set({ [scope]: { ...state[scope], staged } });
   }
   if (t.dataset.fltmode) set({ rc: { ...state.rc, modes: { ...state.rc.modes, [t.dataset.fltmode]: t.value } } });
   if (t.id === "propsOff") set({ motors: { ...state.motors, propsOff: t.checked } });
@@ -1780,6 +1800,47 @@ function otherRow(c) {
   </div>`;
 }
 
+function configView() {
+  const head = `<h1>Frame and hardware</h1><p class="lead">The settings every build needs: frame and motor layout, ESC protocol and motors, how the flight controller is mounted, and the battery monitor. Change what doesn't match your build, then write it all at once.</p>`;
+  if (!state.vehicle) return head + notConnected("see its configuration");
+  const v = state.config.view;
+  if (!v) return head + busy("Reading the configuration…");
+  const kind = (st) => (st === "fail" ? "fail" : st === "warn" ? "warn" : "info");
+  const staged = state.config.staged;
+  const n = Object.keys(staged).length;
+  const value = (name) => staged[name] ?? formSettings("config").find((s) => s.name === name)?.value;
+  const cls = value("FRAME_CLASS");
+  const type = value("FRAME_TYPE");
+  const preview = cls === 1 ? v.previews.find(([t]) => t === type)?.[1] : null;
+  const typeName = formSettings("config").find((s) => s.name === "FRAME_TYPE")?.options.find(([x]) => x === type)?.[1];
+  const frameChanged = "FRAME_CLASS" in staged || "FRAME_TYPE" in staged;
+  const reboot = Object.keys(staged).some((name) => formSettings("config").find((s) => s.name === name)?.reboot);
+  const groups = v.groups
+    .map((g) => `<div class="card"><h2>${esc(g.title)}</h2><div class="form gpsform">${g.settings.map((s) => `<label>${esc(s.label)}</label><div>${formSetting(s, "config")}</div>`).join("")}</div></div>`)
+    .join("");
+  const diagram = preview
+    ? `<div class="card"><h2>${esc(typeName ?? "Layout")}</h2>${motorDiagram({ positions: preview }, null)}
+        <p class="muted">Seen from above. Letters are the motor test order, M1-M4 the motor numbers, arrows the spin direction.${frameChanged ? " Run the motor test after writing and rebooting." : ""}</p>
+        <div class="actions"><button class="btn" data-action="go" data-view="motors">Motor test</button></div></div>`
+    : cls && cls !== 1
+      ? `<div class="card"><h2>Layout</h2><p class="muted">ArduTune draws quad layouts only: compare with the motor order diagram for this frame in the ArduPilot documentation, then run the motor test.</p></div>`
+      : "";
+  return `${head}
+    ${v.checks.map((c) => `<div class="banner ${kind(c.status)}"><b>${esc(c.title)}</b> ${esc(c.detail)}</div>`).join("")}
+    <div class="configgrid">
+      <div>${groups}</div>
+      <div>${diagram}
+        <div class="card"><h2>Battery voltages</h2><p class="muted">Cell count and low/critical voltages come from the pack: set them on Initial tune, which also sets the starting filters from the prop size.</p>
+          <div class="actions"><button class="btn" data-action="go" data-view="tune">Initial tune</button></div></div>
+      </div>
+    </div>
+    <div class="savebar">
+      <span class="muted">${n ? `${n} change${n === 1 ? "" : "s"} staged${reboot ? "; some take effect after a reboot" : ""}` : "No changes"}</span>
+      <button class="btn primary" data-action="configWrite" ${n && !state.vehicleBusy ? "" : "disabled"}>Write ${n || ""} change${n === 1 ? "" : "s"}…</button>
+      ${n ? `<button class="link" data-action="configDiscard">discard</button>` : ""}
+    </div>`;
+}
+
 function portsView() {
   const head = `<h1>Serial ports</h1><p class="lead">What each of the flight controller's serial ports does and what's arriving on it. Set a port up for a GPS, receiver, OSD, ESC telemetry or telemetry radio in one step. Changes take effect after a reboot.</p>`;
   if (!state.vehicle) return head + notConnected("see its serial ports");
@@ -1816,23 +1877,29 @@ function portsView() {
     </div>`;
 }
 
-/** A GPS setting as a form control: a list, ticks for a bitmask, or a number. */
-function gpsSetting(s) {
-  const staged = state.gps.staged[s.name];
+/** The settings of a page ("gps", "config") with their staged edits. */
+const formSettings = (scope) => (scope === "gps" ? state.gps.page?.settings : state.config.view?.groups)?.flatMap((g) => g.settings) ?? [];
+
+/** A setting as a form control: a list, ticks for a bitmask, or a number; edits are staged on state[scope]. */
+function formSetting(s, scope) {
+  const staged = state[scope].staged[s.name];
   const value = staged !== undefined ? staged : s.value;
+  const attrs = `data-scope="${scope}" data-sname="${esc(s.name)}"`;
+  const help = s.help ? `<div class="muted fhelp">${esc(s.help)}</div>` : "";
+  const reboot = s.reboot && staged !== undefined ? ` <span class="chip info">reboot</span>` : "";
   if (s.kind === "bits") {
     const ticks = s.options
-      .map(([bit, name]) => `<label class="tick"><input type="checkbox" data-gbits="${esc(s.name)}" data-bit="${bit}" ${(value & (1 << bit)) !== 0 ? "checked" : ""}> ${esc(name)}</label>`)
+      .map(([bit, name]) => `<label class="tick"><input type="checkbox" ${attrs} data-bit="${bit}" ${(value & (1 << bit)) !== 0 ? "checked" : ""}> ${esc(name)}</label>`)
       .join("");
-    return `<div class="ticksrow">${ticks}</div><div class="muted" style="font-size:12px;margin-top:2px">None ticked: the receiver's own default.</div>`;
+    return `<div class="ticksrow">${ticks}</div>${scope === "gps" ? `<div class="muted fhelp">None ticked: the receiver's own default.</div>` : ""}${help}`;
   }
   if (s.kind === "select") {
     const known = s.options.some(([v]) => v === value);
     const opts = (known ? s.options : [[value, `${value}`], ...s.options]).map(([v, n]) => `<option value="${v}" ${v === value ? "selected" : ""}>${esc(n)}</option>`).join("");
-    return `<select data-gset="${esc(s.name)}">${opts}</select>`;
+    return `<select ${attrs}>${opts}</select>${reboot}${help}`;
   }
   const hint = s.options.length ? `<span class="muted">${s.options.map(([v, n]) => `${esc(n)} = ${v}`).join(", ")}</span>` : "";
-  return `<input type="number" step="any" data-gset="${esc(s.name)}" value="${esc(String(value ?? ""))}" style="width:100px"> <span class="muted">${esc(s.unit)}</span> ${hint}`;
+  return `<input type="number" step="any" ${attrs} value="${esc(String(value ?? ""))}" style="width:100px"> <span class="muted">${esc(s.unit)}</span> ${hint}${reboot}${help}`;
 }
 
 function gpsUnit(u) {
@@ -1881,7 +1948,7 @@ function gpsView() {
   };
   const staged = Object.keys(state.gps.staged).length;
   const settings = pg.settings
-    .map((g) => `<h3>${esc(g.title)}</h3><div class="form gpsform">${g.settings.map((s) => `<label>${esc(s.label)}</label><div>${gpsSetting(s)}</div>`).join("")}</div>`)
+    .map((g) => `<h3>${esc(g.title)}</h3><div class="form gpsform">${g.settings.map((s) => `<label>${esc(s.label)}</label><div>${formSetting(s, "gps")}</div>`).join("")}</div>`)
     .join("");
   return `${head}
     <div class="stats">
@@ -2658,6 +2725,8 @@ function content() {
       return gpsView();
     case "ports":
       return portsView();
+    case "config":
+      return configView();
     case "history":
       return historyView();
     case "motors":

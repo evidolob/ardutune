@@ -326,6 +326,22 @@ battery.
 - Shows which changes need a reboot, and links to the setup guide steps it
   satisfies.
 
+Done: Frame and hardware page (Initial setup).
+- Frame and layout, with a diagram of the chosen quad layout.
+- ESC protocol and firmware, bidirectional DShot on the motor outputs,
+  motor poles, spin armed/minimum.
+- Board orientation, battery monitor and capacity. Battery voltages stay on
+  Initial tune.
+- Advice under each setting and a reboot mark on staged changes that need
+  one; everything is written at once.
+- Checks: frame not set, Y4 on a quad, motors without an output,
+  bidirectional DShot without DShot or not on every motor, ESC firmware
+  unset, spin armed not below spin minimum, no battery monitor or capacity.
+
+While building it, frame type numbers were found wrong in the motor test:
+ArduPilot has 12 BetaFlight X, 13 DJI X, 14 clockwise X, 18 BetaFlight X
+reversed and 19 Y4. Now fixed, and a quad on Y4 is flagged.
+
 ### GPS configuration and status
 
 A page for the GPS: what it sees now, whether it can be trusted, and its
