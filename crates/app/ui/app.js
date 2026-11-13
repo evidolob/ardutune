@@ -16,7 +16,7 @@ const LOG_VIEWS = [
 const NAV = [
   ["Initial setup", [["setup", "Setup guide"], ["firmware", "Firmware"], ["config", "Frame and hardware"], ["motors", "Motor test"], ["compass", "Compass calibration"], ["tune", "Initial tune"]]],
   ["Configuration", [["ports", "Serial ports"], ["rc", "RC channels"], ["gps", "GPS"], ["allparams", "Parameters"], ["params", "Backups"]]],
-  ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], "log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
+  ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], ["autotune", "AutoTune"], "log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
   ["Troubleshoot", [["prearm", "Pre-arm check"], ["diagnose", "Crash diagnosis"]]],
 ];
 /** Rows shown at once in the parameter list; refine the search for more. */
@@ -45,6 +45,7 @@ const state = {
   setup: null, // latest setup guide
   compass: { cal: null, running: false }, // compass calibration progress
   // RC channels page; modes: staged FLTMODEn changes; seen: per channel {lo, hi, vals} since the page opened
+  autotune: { view: null, prop: "" }, // AutoTune page; prop: inches as typed
   config: { view: null, staged: {} }, // frame and hardware page; staged: setting edits
   serial: { view: null, polling: false }, // serial ports page (state.ports is the connection list)
   gps: { page: null, polling: false, staged: {}, showSettings: false }, // GPS page; staged: setting edits
@@ -131,6 +132,7 @@ function go(view) {
   if (view === "gps" && state.vehicle) pollGps();
   if (view === "ports" && state.vehicle) pollPorts();
   if (view === "config" && state.vehicle) loadConfig();
+  if (view === "autotune" && state.vehicle) loadAutotune();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
   if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
 }
@@ -428,6 +430,17 @@ async function writeValues(title, values) {
     set({ modal: { stage: "confirm", title, source: "edits", plan, selected: new Set(plan.rows.map((r) => r.name)) } });
   } catch (e) {
     set({ modal: null });
+    toast(e);
+  }
+}
+
+async function loadAutotune() {
+  const a = state.autotune;
+  const prop = a.prop || state.tune.prop || "";
+  try {
+    const view = await invoke("autotune_status", { propIn: prop === "" ? null : Number(prop) });
+    set({ autotune: { ...state.autotune, prop, view } });
+  } catch (e) {
     toast(e);
   }
 }
@@ -756,7 +769,8 @@ const actions = {
   askNameDrone: (d) =>
     set({ modal: { stage: "nameDrone", title: d.name ? `Rename ${d.name}` : "Name this vehicle", uid: d.uid, name: d.name ?? "", fromLog: d.fromLog === "true", board: d.board ?? null } }),
   refreshHistory,
-  rcAssign: (d) => set({ modal: { stage: "rcAssign", title: "Put a function on a switch", ch: d.ch ? Number(d.ch) : null, option: null, query: "", error: null } }),
+  rcAssign: (d) =>
+    set({ modal: { stage: "rcAssign", title: d.option ? `Put "${d.oname}" on a switch` : "Put a function on a switch", ch: d.ch ? Number(d.ch) : null, option: d.option ? [Number(d.option), d.oname] : null, query: "", error: null } }),
   rcPick: (d) => set({ modal: { ...state.modal, option: [Number(d.value), d.name], error: null } }),
   rcUnpick: () => set({ modal: { ...state.modal, option: null } }),
   rcAssignChannel: (d) => {
@@ -876,6 +890,7 @@ const actions = {
   closeModal: () => {
     set({ modal: null });
     if (state.view === "config" && state.vehicle) loadConfig();
+    if (state.view === "autotune" && state.vehicle) loadAutotune();
   },
   configWrite: () => {
     writeValues("frame and hardware settings", Object.entries(state.config.staged).map(([n, v]) => [n, Number(v)]));
@@ -946,6 +961,11 @@ document.addEventListener("change", (e) => {
 document.addEventListener("input", (e) => {
   if (e.target.id === "address") state.address = e.target.value;
   if (e.target.id === "rcq" && state.modal) set({ modal: { ...state.modal, query: e.target.value } });
+  if (e.target.id === "atprop") {
+    state.autotune.prop = e.target.value;
+    clearTimeout(loadAutotune.timer);
+    loadAutotune.timer = setTimeout(loadAutotune, 400);
+  }
   if (e.target.id === "tprop") set({ tune: { ...state.tune, prop: e.target.value, result: null } });
   if (e.target.id === "psearch") set({ pfilter: { ...state.pfilter, text: e.target.value }, popen: null });
 });
@@ -1799,6 +1819,99 @@ function otherRow(c) {
     <div class="rcrole">${role}</div>
     <div class="rcact">${actions}</div>
   </div>`;
+}
+
+function autotuneView() {
+  const head = `<h1>AutoTune</h1><p class="lead">Gets the vehicle ready for ArduPilot's AutoTune: what to do before it, settings that suit the vehicle's size, the switches it needs, an optional QuikTune first, and how to fly, test and save the tune.</p>`;
+  if (!state.vehicle) return head + notConnected("prepare its AutoTune");
+  const a = state.autotune;
+  const v = a.view;
+  const prop = `<div class="form-inline"><label>Prop size <input type="number" id="atprop" min="2" max="40" step="0.5" value="${esc(a.prop)}" style="width:80px"> inches</label>
+    <span class="muted">Settings below suit the vehicle's size.</span></div>`;
+  if (!v) return head + prop + busy("Reading the vehicle…");
+  const busyOff = state.vehicleBusy ? "disabled" : "";
+  const pr = v.prop_in ?? "";
+  const kind = (st) => (st === "fail" ? "fail" : st === "warn" ? "warn" : "info");
+  const stateChip = { done: chip("pass", "done"), todo: chip("warn", "to do"), optional: chip("info", "optional"), unknown: chip("info", "?") };
+  const steps = `<ol class="steps">${v.steps
+    .map((s) => `<li class="${s.state}"><div class="stepname">${esc(s.title)} ${stateChip[s.state] ?? ""}</div><div class="muted">${esc(s.detail)}</div>${s.view !== "autotune" ? `<button class="link" data-action="go" data-view="${s.view}">Open</button>` : ""}</li>`)
+    .join("")}</ol>`;
+  const optionName = { 17: "AUTOTUNE Mode", 180: "Test autotuned gains", 300: "Scripting1 (QuikTune)" };
+  const switchBtn = (opt, label) => `<button class="btn" data-action="rcAssign" data-option="${opt}" data-oname="${esc(optionName[opt] ?? `option ${opt}`)}" ${busyOff}>${label}</button>`;
+  const checks = v.checks
+    .map((c) => {
+      const btns = [
+        c.changes.length ? `<button class="btn primary" data-action="write" data-source="autotune:${c.id}:${pr}" data-title="${esc(c.title.toLowerCase())}" ${busyOff}>Fix it…</button>` : "",
+        c.switch ? switchBtn(c.switch, "Put it on a switch…") : "",
+        c.view ? `<button class="btn" data-action="go" data-view="${c.view}">Open ${esc(NAV.flatMap(([, i]) => i).find((i) => i[0] === c.view)?.[1] ?? c.view)}</button>` : "",
+      ].join("");
+      return `<div class="banner ${kind(c.status)}"><b>${esc(c.title)}</b> ${esc(c.detail)}${btns ? `<div class="actions">${btns}</div>` : ""}</div>`;
+    })
+    .join("");
+  const sw = v.switches;
+  const start = sw.autotune ? `flip channel ${sw.autotune} high` : sw.autotune_mode.length ? `switch to AutoTune (mode position ${sw.autotune_mode[0]})` : "turn AutoTune on (put it on a switch first)";
+  const stop = sw.autotune ? `channel ${sw.autotune} low` : "switch out of AutoTune";
+  const althold = sw.althold.length ? `AltHold (mode position ${sw.althold.join(" or ")})` : "AltHold";
+  const field = `<div class="card"><h2>On the field</h2>
+    <ol class="fieldlist">
+      <li>A calm day and a big open space. Transmitter trims at zero, otherwise the sticks never count as centred and nothing happens.</li>
+      <li>Take off and climb to a comfortable height in <b>${esc(althold)}</b>. Never start AutoTune from Stabilize: it starts from any mode the moment it's switched on.</li>
+      <li>Turn the vehicle side-on to the wind (nose into the wind for roll), then <b>${esc(start)}</b>.</li>
+      <li>It twitches left and right for a few minutes, then forward and back, then yaw. Moving the sticks pauses it and flies on the old gains; let go and it carries on. Keep it from drifting away with small corrections between twitches.</li>
+      <li>To stop at any time and get the old gains back: <b>${esc(stop)}</b>.</li>
+      <li>When it's done it flies on the old gains again. Flip ${sw.autotune ? `channel ${sw.autotune}` : "the switch"} low and high again to try the new ones.</li>
+      <li><b>To keep them: land with ${sw.autotune ? `channel ${sw.autotune}` : "AutoTune"} still high and disarm.</b> Low before disarming throws the tune away.</li>
+    </ol>
+    <p class="muted">${sw.test_gains ? `Channel ${sw.test_gains} switches between the new and old gains in any mode after the tune; its position at the next disarm decides which are kept.` : "Optional: a switch to compare the new and old gains in any flight mode after the tune."}</p>
+    ${sw.test_gains ? "" : `<div class="actions">${switchBtn(180, "Add a test-gains switch…")}</div>`}
+  </div>`;
+  const rec = `<div class="card"><h2>AutoTune settings${v.prop_in ? ` for ${v.prop_in}-inch props` : ""}</h2>
+    <p class="muted">${esc(v.recommended_note)}</p>
+    ${v.recommended.length ? `${changesTable(v.recommended, true)}<div class="actions"><button class="btn primary" data-action="write" data-source="autotune:recommended:${pr}" data-title="AutoTune settings" ${busyOff}>Write…</button></div>` : v.prop_in ? `<p>${chip("pass", "set")} The vehicle already has them.</p>` : ""}
+  </div>`;
+  const q = v.quiktune;
+  const quikFly = `<ol class="fieldlist">
+      <li>Switch low. Take off and hover about 3 m up in Loiter over open ground (AltHold if the GPS can't be trusted; then hold the position yourself).</li>
+      <li>Switch to the middle: QuikTune raises each gain until it oscillates, then backs off. Moving the sticks pauses it.</li>
+      <li>High saves the gains; low cancels and brings the old ones back. Land and disarm.</li>
+    </ol>`;
+  const quikBody = {
+    builtin: `<p>${q.enabled ? chip("pass", "on") : chip("info", "off")} This firmware has QuikTune.${q.channel ? ` It's on channel ${q.channel}.` : ""}</p>
+      ${q.changes.length ? `${changesTable(q.changes, true)}` : ""}
+      <div class="actions">${q.changes.length ? `<button class="btn primary" data-action="write" data-source="autotune:quiktune:${pr}" data-title="QuikTune" ${busyOff}>Turn QuikTune on…</button>` : ""}${q.channel ? "" : switchBtn(q.function, "Put it on a 3-position switch…")}</div>
+      ${quikFly}`,
+    script: `<p>Scripting is on. QuikTune is ArduPilot's <code>VTOL-quicktune.lua</code> script (in the ArduPilot repository under <code>libraries/AP_Scripting/applets</code>): copy it to <code>APM/scripts</code> on the flight controller's SD card, reboot, and open this page again to set it up.</p>`,
+    scripting_off: `<p>QuikTune is a Lua script. Turn scripting on, reboot, then copy <code>VTOL-quicktune.lua</code> (ArduPilot repository, <code>libraries/AP_Scripting/applets</code>) to <code>APM/scripts</code> on the SD card and reboot again.</p>
+      ${changesTable(q.changes, true)}<div class="actions"><button class="btn" data-action="write" data-source="autotune:quiktune:${pr}" data-title="Lua scripting" ${busyOff}>Turn scripting on…</button></div>`,
+    unsupported: `<p class="muted">This flight controller can't run Lua scripts (not enough memory), so QuikTune isn't available. Go straight to AutoTune.</p>`,
+  }[q.availability];
+  const quik = `<div class="card"><h2>QuikTune ${chip("info", "optional")}</h2>
+    <p class="muted">A quick first tune of the rate gains while hovering in place, before the noise filter and AutoTune. Useful when the vehicle isn't stable enough in AltHold yet.</p>${quikBody}</div>`;
+  const lr = v.log;
+  const after = `<div class="card"><h2>After the flight</h2>
+    ${
+      lr
+        ? lr.ran
+          ? `<p>${lr.saved.length ? `${chip("pass", "saved")} Gains saved for <b>${esc(lr.saved.join(", "))}</b>.` : `${chip("warn", "not saved")} The open log shows AutoTune ran, but no gains were saved (switched low or disarmed in another mode before landing).`}${lr.completed.length ? ` Finished: ${esc(lr.completed.join(", "))}.` : ""}</p>
+            ${lr.messages.length ? `<ul class="plain">${lr.messages.map((m) => `<li><code>${esc(m)}</code></li>`).join("")}</ul>` : ""}
+            <div class="actions"><button class="btn" data-action="go" data-view="pid">Step response (PIDs)</button></div>`
+          : `<p class="muted">The open log has no AutoTune in it. Open the log of the AutoTune flight.</p>`
+        : `<p class="muted">Download and open the log of the AutoTune flight to see what was saved and compare the step response before and after.</p>`
+    }
+    <div class="actions"><button class="btn" data-action="go" data-view="vlogs">Logs on vehicle</button></div>
+    ${
+      v.after.length
+        ? `<h3>Optional changes after a tune</h3><p class="muted">From ArduPilot's AutoTune page: softer gains if the tune feels too stiff, and less pitch overshoot on large props.</p>${changesTable(v.after, true)}
+          <div class="actions"><button class="btn" data-action="write" data-source="autotune:after:${pr}" data-title="after-tune changes" ${busyOff}>Write…</button></div>`
+        : ""
+    }
+  </div>`;
+  return `${head}${prop}${steps}
+    ${checks || `<div class="banner pass"><b>Ready for AutoTune.</b> The vehicle passes the checks ArduTune can make; the rest is on the field.</div>`}
+    <div class="configgrid wide">
+      <div>${rec}${field}</div>
+      <div>${quik}${after}</div>
+    </div>`;
 }
 
 function configView() {
@@ -2730,6 +2843,8 @@ function content() {
       return portsView();
     case "config":
       return configView();
+    case "autotune":
+      return autotuneView();
     case "history":
       return historyView();
     case "motors":

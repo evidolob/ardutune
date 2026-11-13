@@ -1087,6 +1087,59 @@ table.modes tr.activerow td {
   }
 }
 
+.configgrid.wide {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+@media (max-width: 1000px) {
+  .configgrid.wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+ol.steps {
+  list-style: none;
+  counter-reset: step;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  padding: 0;
+  margin: 14px 0;
+}
+
+ol.steps li {
+  counter-increment: step;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+ol.steps li.done {
+  border-color: color-mix(in srgb, var(--pass) 45%, var(--border));
+}
+
+ol.steps .stepname {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+ol.steps .stepname::before {
+  content: counter(step) ". ";
+  color: var(--muted);
+}
+
+ol.fieldlist {
+  padding-left: 20px;
+  line-height: 1.6;
+}
+
+ol.fieldlist li {
+  margin-bottom: 6px;
+}
+
 .fhelp {
   font-size: 12px;
   margin-top: 3px;

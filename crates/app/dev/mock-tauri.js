@@ -201,6 +201,34 @@
       }));
       return { view: { channels, mode_channel: 6, modes, notes: [], signal: true }, ranges: channels.map((c) => [c.ch, c.value ?? 0, c.value ?? 0]), rssi_pct: 87, tuning: { TUNE: 0, TUNE_MIN: 0, TUNE_MAX: 0, ATC_RAT_RLL_P: 0.135, ATC_RAT_RLL_I: 0.135, ATC_RAT_RLL_D: 0.0036, ATC_ANG_RLL_P: 4.5, ATC_RAT_YAW_P: 0.18 } };
     },
+    autotune_status: async ({ propIn }) => {
+      await sleep(250);
+      const large = (propIn ?? 0) >= 13;
+      const ch = (name, current, value, reason) => ({ name, current, value, reason });
+      return {
+        prop_in: propIn,
+        steps: [
+          { id: "initial", title: "Starting values", state: propIn ? "done" : "unknown", detail: propIn ? `The vehicle has the starting values for ${propIn}-inch props.` : "Enter the prop size to compare with the starting values.", view: "tune" },
+          { id: "notch", title: "Noise filter", state: "todo", detail: "Fly a hover, open its log and set the harmonic notch from it (Filters).", view: "filters" },
+          { id: "quiktune", title: "QuikTune", state: "optional", detail: "Optional: a quick first tune of the rate gains while hovering, before AutoTune.", view: "autotune" },
+          { id: "autotune", title: "AutoTune", state: "todo", detail: "Put AltHold and AutoTune on switches (checks below).", view: "autotune" },
+          { id: "log", title: "Check the result", state: "todo", detail: "Open the AutoTune flight's log: what was saved, and the step response before and after (PIDs).", view: "pid" },
+        ],
+        checks: [
+          { id: "switch", status: "fail", title: "AutoTune isn't on a switch", detail: "Put AutoTune on a two- or three-position switch: high starts the tune, low stops it and brings back the old gains.", changes: [], switch: 17, view: null },
+          { id: "notch", status: "warn", title: "The harmonic notch filter is off", detail: "AutoTune pushes the gains as high as the noise allows. Set it from a hover log first.", changes: [], switch: null, view: "filters" },
+          ...(large ? [{ id: "large_filters", status: "warn", title: "Rate filters are above 10 Hz for large props", detail: "ArduPilot's AutoTune page asks for 10 Hz roll and pitch target and D filters on props of 13 inches and more.", changes: ["ATC_RAT_RLL_FLTT", "ATC_RAT_RLL_FLTD", "ATC_RAT_PIT_FLTT", "ATC_RAT_PIT_FLTD"].map((n) => ch(n, 20, 10, "10 Hz for props of 13 inches and more")), switch: null, view: null }] : []),
+        ],
+        recommended: large ? [ch("AUTOTUNE_AGGR", 0.1, 0.075, "0.075 for a large, more flexible frame")] : [],
+        recommended_note: large
+          ? "Large props: a gentler AutoTune (0.075), and the tune may need more than one pack. If a pack doesn't last the whole tune, tune one axis per flight: set Axes to Roll, fly and save, then Pitch, then Yaw."
+          : propIn ? "ArduPilot's defaults suit this size: full aggressiveness and all three axes in one flight (about 5-10 minutes of twitching)." : "Enter the prop size for settings that suit the vehicle.",
+        quiktune: { availability: "scripting_off", enabled: false, channel: null, function: 300, changes: [ch("SCR_ENABLE", 0, 1, "Turn Lua scripting on (after a reboot), to run the QuikTune script")] },
+        switches: { autotune: null, test_gains: null, mode_channel: 6, althold: [4], autotune_mode: [] },
+        log: null,
+        after: large ? [ch("ATC_THR_MIX_MAX", 0.5, 0.9, "Less pitch overshoot in AltHold on large props, after a good tune")] : [],
+      };
+    },
     vehicle_config: async () => {
       await sleep(200);
       const place = { 0: "front", 45: "front right", 90: "right", 135: "back right", 180: "back", "-135": "back left", "-90": "left", "-45": "front left" };

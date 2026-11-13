@@ -136,11 +136,14 @@ impl MockState {
             params.insert(n.to_owned(), (v, t));
         }
         // A BetaFlight X quad with DShot600, motors 1-4 on outputs 1-4.
-        for (n, v) in [("FRAME_CLASS", 1.0), ("FRAME_TYPE", 12.0), ("MOT_PWM_TYPE", 6.0), ("SERVO_DSHOT_ESC", 1.0), ("SERVO_BLH_BDMASK", 15.0), ("SERVO_BLH_POLES", 14.0), ("MOT_SPIN_ARM", 0.1), ("MOT_SPIN_MIN", 0.13), ("AHRS_ORIENTATION", 0.0), ("BATT_MONITOR", 4.0), ("BATT_CAPACITY", 1500.0), ("SERVO_BLH_RVMASK", 0.0)] {
+        for (n, v) in [("FRAME_CLASS", 1.0), ("FRAME_TYPE", 12.0), ("MOT_PWM_TYPE", 6.0), ("SERVO_DSHOT_ESC", 1.0), ("AUTOTUNE_AXES", 7.0), ("INS_HNTCH_ENABLE", 0.0), ("SCR_ENABLE", 0.0), ("SERVO_BLH_BDMASK", 15.0), ("SERVO_BLH_POLES", 14.0), ("AHRS_ORIENTATION", 0.0), ("BATT_MONITOR", 4.0), ("BATT_CAPACITY", 1500.0), ("SERVO_BLH_RVMASK", 0.0)] {
             params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_INT8));
         }
         for a in ["X", "Y", "Z"] {
             params.insert(format!("COMPASS_OFS_{a}"), (0.0, MAV_PARAM_TYPE_REAL32));
+        }
+        for (n, v) in [("AUTOTUNE_AGGR", 0.1), ("MOT_SPIN_ARM", 0.1), ("MOT_SPIN_MIN", 0.13)] {
+            params.insert(n.to_owned(), (v, MAV_PARAM_TYPE_REAL32));
         }
         // GPS, failsafes returning home, an arm switch on 5 and modes on 6.
         for (n, v) in [("GPS1_TYPE", 1.0), ("GPS1_GNSS_MODE", 0.0), ("GPS1_RATE_MS", 200.0), ("GPS_AUTO_CONFIG", 1.0), ("GPS_HDOP_GOOD", 140.0), ("SERIAL0_PROTOCOL", 2.0), ("SERIAL0_BAUD", 115.0), ("SERIAL1_PROTOCOL", 2.0), ("SERIAL1_BAUD", 57.0), ("SERIAL1_OPTIONS", 0.0), ("SERIAL2_PROTOCOL", 42.0), ("SERIAL2_BAUD", 115.0), ("SERIAL2_OPTIONS", 0.0), ("SERIAL3_PROTOCOL", 5.0), ("SERIAL3_BAUD", 230.0), ("SERIAL3_OPTIONS", 0.0), ("SERIAL4_PROTOCOL", -1.0), ("SERIAL4_BAUD", 57.0), ("SERIAL4_OPTIONS", 0.0), ("SERIAL6_PROTOCOL", 23.0), ("SERIAL6_BAUD", 115.0), ("SERIAL6_OPTIONS", 0.0), ("RSSI_TYPE", 3.0), ("RC_OPTIONS", 8704.0), ("OSD_TYPE", 5.0), ("FS_THR_ENABLE", 1.0), ("BATT_FS_LOW_ACT", 2.0), ("FLTMODE_CH", 6.0)] {

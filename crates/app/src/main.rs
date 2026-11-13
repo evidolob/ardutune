@@ -133,6 +133,7 @@ fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         vehicle::gps_accept_position,
         vehicle::serial_status,
         vehicle::vehicle_config,
+        vehicle::autotune_status,
         vehicle::compass_cal_start,
         vehicle::compass_cal_poll,
         vehicle::compass_cal_finish,

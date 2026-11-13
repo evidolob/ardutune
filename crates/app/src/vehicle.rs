@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ardutune_core::{arming, config, gps, motors, serial, paramdoc, params, rc, setup, switch, tune};
+use ardutune_core::{arming, autotune, config, gps, motors, serial, paramdoc, params, rc, setup, switch, tune};
 use ardutune_core::utc::{date_time, file_stamp};
 use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
@@ -434,6 +434,19 @@ fn wanted<R: Runtime>(app: &AppHandle<R>, c: &Connected, source: &str, path: Opt
         let check = i.parse::<usize>().ok().and_then(|i| page.checks.get(i)).ok_or("That GPS problem is gone: look at the page again.")?;
         return Ok(check.changes.iter().map(|ch| (ch.name.clone(), ch.value, Some(ch.reason.clone()))).collect());
     }
+    // AutoTune page changes: "autotune:<part>:<prop inches>", part being a
+    // check id, "recommended", "quiktune" or "after".
+    if let Some(rest) = source.strip_prefix("autotune:") {
+        let (part, prop) = rest.split_once(':').unwrap_or((rest, ""));
+        let v = autotune::view(|n| live.get(n).map(|p| p.value as f64), prop.parse().ok(), None);
+        let changes = match part {
+            "recommended" => v.recommended,
+            "quiktune" => v.quiktune.changes,
+            "after" => v.after,
+            id => v.checks.into_iter().find(|c| c.id == id).map(|c| c.changes).ok_or("That AutoTune check no longer applies: look at the page again.")?,
+        };
+        return Ok(changes.into_iter().map(|c| (c.name, c.value, Some(c.reason))).collect());
+    }
     // A common serial port setup: "serial:<n>:<setup>".
     if let Some(rest) = source.strip_prefix("serial:") {
         let (n, id) = rest.split_once(':').ok_or("bad serial source")?;
@@ -681,6 +694,20 @@ pub async fn gps_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<gps::Page> {
     .await
 }
 
+/// The AutoTune page: tuning steps, checks, settings for the prop size,
+/// QuikTune setup, and what the open log says AutoTune saved.
+#[tauri::command]
+pub async fn autotune_status<R: Runtime>(app: AppHandle<R>, prop_in: Option<f64>) -> CmdResult<autotune::View> {
+    blocking(app, move |app| {
+        let state = app.state::<AppState>();
+        let log = lock(&state.log).as_ref().map(|l| l.log.clone());
+        let mut slot = lock(&state.vehicle);
+        let c = connected(&mut slot)?;
+        Ok(autotune::view(|n| c.params.get(n).map(|p| p.value as f64), prop_in, log.as_deref()))
+    })
+    .await
+}
+
 /// The basic configuration page: frame, ESCs, board and battery settings.
 #[tauri::command]
 pub async fn vehicle_config<R: Runtime>(app: AppHandle<R>) -> CmdResult<config::View> {
@@ -703,7 +730,7 @@ pub async fn serial_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<serial::V
         let report = check(&mut slot, r)?;
         let r = connected(&mut slot)?.link.gps_sample(Duration::from_millis(300));
         let gps = check(&mut slot, r)?;
-        let r = connected(&mut slot)?.link.rc_sample(Duration::from_millis(200));
+        let r = connected(&mut slot)?.link.rc_sample(Duration::from_millis(450));
         let rc = check(&mut slot, r)?;
         let c = connected(&mut slot)?;
         let uarts = report.map(|t| serial::parse_uarts(&t)).unwrap_or_default();

@@ -84,6 +84,15 @@ DataFlash logs and helps tune gyro filters and rate PIDs. See
   values for a new build from its prop size and pack (the formulas of
   ArduPilot's initial tune parameters calculator, with ArduCopter 4.7 names),
   plus what to set after the first hover. `ardutune tune --prop 5 [--apply]`.
+- AutoTune: prepares ArduPilot's AutoTune.
+  - The steps before it, from starting values and the noise filter to
+    QuikTune.
+  - Checks: AltHold and AutoTune on switches, the notch, voltage
+    compensation, thrust curve, spin minimum, and 10 Hz filters on large
+    props.
+  - Settings for the prop size, and QuikTune setup.
+  - A field checklist for starting, testing, saving or discarding the tune.
+  - What the flight's log saved, with optional changes after the tune.
 - Pre-arm check: asks the vehicle to run its pre-arm checks, collects what it
   says (also while you try to arm), and explains each problem in fix order
   with advice: compass, attitude, radio, logging, GPS (live fix, satellites,

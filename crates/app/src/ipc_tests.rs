@@ -120,6 +120,13 @@ fn analyse_connect_download_write_and_reboot() {
     mock.state().gps_motion = (0.02, 50.4501, 30.5234);
     mock.state().prearm_failures.clear();
 
+    // AutoTune: checks for a 15-inch, settings for its size, writable.
+    let at = call("autotune_status", json!({ "propIn": 15.0 })).unwrap();
+    assert_eq!(at["recommended"][0]["name"], json!("AUTOTUNE_AGGR"), "{at}");
+    assert_eq!(at["steps"].as_array().unwrap().len(), 5);
+    let plan = call("prepare_changes", json!({ "source": "autotune:recommended:15", "label": "AutoTune settings" })).unwrap();
+    assert!(plan["rows"].as_array().unwrap().iter().any(|r| r["name"] == "AUTOTUNE_AGGR" && r["value"] == json!(0.075)), "{plan}");
+
     // Basic configuration: settings by group, no problems on the simulated quad.
     let cfg = call("vehicle_config", json!({})).unwrap();
     assert_eq!(cfg["groups"][0]["title"], json!("Frame"), "{cfg}");

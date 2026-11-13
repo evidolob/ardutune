@@ -383,6 +383,36 @@ Not yet:
 - GPS for yaw;
 - a CLI view.
 
+### AutoTune
+
+Done: AutoTune page (Tuning), following ArduPilot's AutoTune and QuikTune
+documentation.
+- The path: starting values (compared with Initial tune for the prop
+  size), harmonic notch, QuikTune (optional), AutoTune, then checking the
+  log.
+- Checks before flying:
+  - AltHold on the mode switch, and AutoTune on a switch (or as a mode),
+    with flip-to-assign;
+  - the notch is on;
+  - battery voltage compensation and thrust curve are set;
+  - spin minimum isn't too low;
+  - 10 Hz rate filters for props of 13 inches and more.
+- Settings by size:
+  - AUTOTUNE_AGGR 0.1, or 0.075 for 13 inches and up (ArduTune's own
+    suggestion; the docs give 0.05-0.1);
+  - all axes, with one axis per flight suggested for large copters.
+- QuikTune: built in (QUIK_* parameters), the script, scripting off, or not
+  supported, with setup and a switch.
+- A field checklist using the vehicle's own channels: start, pause, test
+  and save, discard, plus an optional test-gains switch (option 180).
+- After the flight: which axes the open log saved, and the docs' optional
+  changes (softer gains if too stiff, ATC_THR_MIX_MAX 0.9 on large props).
+
+Not yet:
+- uploading the QuikTune script over MAVFTP;
+- reading AUTOTUNE_AXES/AGGR results per axis from ATUN messages;
+- yaw D tuning (4.4+ bit).
+
 ## Before publishing on GitHub: license
 
 Done: GPL-3.0-or-later, like ArduPilot, Mission Planner and the Methodic
