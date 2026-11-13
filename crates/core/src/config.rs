@@ -87,6 +87,15 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
     esc.extend(setting(p, "MOT_SPIN_ARM", "Spin when armed", "0-1").map(|s| s.help("Throttle the motors idle at once armed. Must be below Spin minimum.")));
     esc.extend(setting(p, "MOT_SPIN_MIN", "Spin minimum", "0-1").map(|s| s.help("Lowest throttle in flight: high enough that no motor stops or stutters. About 0.03 above Spin when armed.")));
 
+    // ESC configuration passthrough: AM32, Bluejay and BLHeli tools reach the
+    // ESCs through the flight controller's USB port.
+    let mut passthrough = Vec::new();
+    passthrough.extend(setting(p, "SERVO_BLH_AUTO", "ESC passthrough", "").map(|s| {
+        s.choices(vec![(0.0, "Off".to_owned()), (1.0, "On for the motor outputs".to_owned())])
+            .help("Lets ESC configuration tools (AM32 Configurator, esc-configurator.com for Bluejay, BLHeliSuite32) talk to the ESCs through the flight controller. Needs DShot.")
+    }));
+    passthrough.extend(setting(p, "SERVO_BLH_PORT", "Passthrough connection", "").map(|s| s.help("Console is the USB port. A telemetry radio's MAVLink channel only if you configure the ESCs over the radio.")));
+
     let mut board = Vec::new();
     board.extend(setting(p, "AHRS_ORIENTATION", "Board orientation", "").map(|s| {
         s.help("How the flight controller is mounted: None when its arrow points forward and it's the right way up. Recalibrate the accelerometer after changing it.")
@@ -96,7 +105,7 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
     battery.extend(setting(p, "BATT_MONITOR", "Battery monitor", "").map(|s| s.help("Analog Voltage and Current for most flight controllers with a current sensor.")));
     battery.extend(setting(p, "BATT_CAPACITY", "Capacity", "mAh"));
 
-    let groups: Vec<Group> = [("Frame", frame), ("ESCs and motors", esc), ("Board", board), ("Battery", battery)]
+    let groups: Vec<Group> = [("Frame", frame), ("ESCs and motors", esc), ("ESC configuration", passthrough), ("Board", board), ("Battery", battery)]
         .into_iter()
         .filter(|(_, s)| !s.is_empty())
         .map(|(t, settings)| Group { title: t.to_owned(), settings })
@@ -141,6 +150,13 @@ pub fn view(param: impl Fn(&str) -> Option<f64>) -> View {
             Status::Info,
             "ESC firmware not set",
             "With it set, ArduPilot can reverse motor directions in software (no re-soldering) and read extended telemetry.",
+        ));
+    }
+    if p("SERVO_BLH_AUTO") == Some(1.0) && !dshot {
+        checks.push(check(
+            Status::Warn,
+            "ESC passthrough is on without DShot",
+            "ESC configuration tools only reach the ESCs when the flight controller drives them with DShot.",
         ));
     }
     if let (Some(arm), Some(min)) = (p("MOT_SPIN_ARM"), p("MOT_SPIN_MIN")) {
@@ -193,6 +209,8 @@ mod tests {
             ("AHRS_ORIENTATION", 0.0),
             ("BATT_MONITOR", 4.0),
             ("BATT_CAPACITY", 1500.0),
+            ("SERVO_BLH_AUTO", 1.0),
+            ("SERVO_BLH_PORT", 0.0),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), *v))
@@ -210,7 +228,7 @@ mod tests {
         assert!(v.checks.is_empty(), "{:?}", v.checks);
         assert_eq!(v.motor_mask, 15);
         let titles: Vec<&str> = v.groups.iter().map(|g| g.title.as_str()).collect();
-        assert_eq!(titles, ["Frame", "ESCs and motors", "Board", "Battery"]);
+        assert_eq!(titles, ["Frame", "ESCs and motors", "ESC configuration", "Board", "Battery"]);
         let bd = v.groups[1].settings.iter().find(|s| s.name == "SERVO_BLH_BDMASK").unwrap();
         assert_eq!(bd.options[1], (15.0, "On, motor outputs 1, 2, 3, 4".to_owned()));
         assert!(v.groups[0].settings[0].reboot, "frame changes need a reboot");
@@ -234,6 +252,7 @@ mod tests {
         assert!(t.contains(&"Bidirectional DShot is on without DShot"), "{t:?}");
         assert!(t.iter().any(|t| t.starts_with("Spin when armed (0.15)")), "{t:?}");
         assert!(t.contains(&"No battery monitor"), "{t:?}");
+        assert!(t.contains(&"ESC passthrough is on without DShot"), "{t:?}");
         assert_eq!(v.checks[0].status, Status::Fail);
 
         let mut m = params();

@@ -1956,6 +1956,18 @@ function configView() {
     <div class="configgrid">
       <div>${groups}</div>
       <div>${diagram}
+        <div class="card"><h2>Configure the ESCs</h2>
+          <p class="muted">AM32, Bluejay and BLHeli_32 ESCs have their own settings (direction, timing, startup power, RPM telemetry), set with their own tool through the flight controller.</p>
+          <ol class="fieldlist">
+            <li>ESC passthrough on, ESC protocol DShot (left), written; remove the propellers.</li>
+            <li>Connect the flight battery so the ESCs have power.</li>
+            <li>Disconnect ArduTune: only one program can use the USB port.</li>
+            <li>In the tool, choose the flight controller's port and connect:
+              <ul class="plain"><li><b>AM32:</b> AM32 Configurator (am32.ca)</li><li><b>Bluejay, BLHeli_S:</b> esc-configurator.com (Chrome, needs ArduPilot 4.5+)</li><li><b>BLHeli_32:</b> BLHeliSuite32, interface "BLHeli32/AM32 Bootloader (Betaflight/Cleanflight)"</li></ul></li>
+            <li>Close the tool and reconnect ArduTune; run the motor test if you changed directions.</li>
+          </ol>
+          <p class="muted">A board with a safety switch needs it pressed (or BRD_SAFETY_DEFLT = 0). Outputs on an IOMCU (the MAIN outputs of Pixhawk-style boards) can't pass through.</p>
+          <div class="actions"><button class="btn" data-action="disconnect">Disconnect ArduTune</button></div></div>
         <div class="card"><h2>Battery voltages</h2><p class="muted">Cell count and low/critical voltages come from the pack: set them on Initial tune, which also sets the starting filters from the prop size.</p>
           <div class="actions"><button class="btn" data-action="go" data-view="tune">Initial tune</button></div></div>
       </div>

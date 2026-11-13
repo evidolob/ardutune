@@ -252,6 +252,10 @@
             set("MOT_SPIN_ARM", "Spin when armed", 0.1, "number", [[0, "Low"], [0.1, "Default"], [0.2, "High"]], { unit: "0-1", help: "Throttle the motors idle at once armed. Must be below Spin minimum." }),
             set("MOT_SPIN_MIN", "Spin minimum", 0.13, "number", [[0, "Low"], [0.15, "Default"], [0.25, "High"]], { unit: "0-1", help: "Lowest throttle in flight. About 0.03 above Spin when armed." }),
           ] },
+          { title: "ESC configuration", settings: [
+            set("SERVO_BLH_AUTO", "ESC passthrough", 1, "select", [[0, "Off"], [1, "On for the motor outputs"]], { reboot: true, help: "Lets ESC configuration tools (AM32 Configurator, esc-configurator.com for Bluejay, BLHeliSuite32) talk to the ESCs through the flight controller. Needs DShot." }),
+            set("SERVO_BLH_PORT", "Passthrough connection", 0, "select", [[0, "Console"], [1, "Mavlink Serial Channel1"], [2, "Mavlink Serial Channel2"]], { help: "Console is the USB port. A telemetry radio's MAVLink channel only if you configure the ESCs over the radio." }),
+          ] },
           { title: "Board", settings: [set("AHRS_ORIENTATION", "Board orientation", 0, "select", [[0, "None"], [1, "Yaw45"], [2, "Yaw90"], [4, "Yaw180"], [6, "Yaw270"], [8, "Roll180"]], { help: "None when its arrow points forward and it's the right way up." })] },
           { title: "Battery", settings: [
             set("BATT_MONITOR", "Battery monitor", 4, "select", [[0, "Disabled"], [3, "Analog Voltage Only"], [4, "Analog Voltage and Current"], [9, "ESC"]], { reboot: true }),
