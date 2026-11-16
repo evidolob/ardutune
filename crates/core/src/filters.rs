@@ -452,6 +452,22 @@ pub fn simulate(log: &Log, lag_ref_hz: f64) -> Result<FilterReport, String> {
         .min_by(|a, b| a.noise_rms.total_cmp(&b.noise_rms))
         .filter(|e| e.noise_rms < 0.8 * current.noise_rms)
         .cloned();
+    // A notch stuck above the motors is a setup error: fix its frequency even
+    // when nothing else is worth changing, as long as it isn't noisier.
+    let recommended = recommended.or_else(|| {
+        let n = current_settings.notches.first()?;
+        blocked_floor(n, &prep.hover)?;
+        evaluations
+            .iter()
+            .filter(|e| {
+                let c = &e.settings;
+                c.gyro_lpf_hz == current_settings.gyro_lpf_hz
+                    && c.notches.first().is_some_and(|m| m.mode == n.mode && m.options == n.options && m.harmonics == n.harmonics && m.freq_hz < n.freq_hz)
+            })
+            .filter(|e| e.noise_rms <= current.noise_rms * NOISE_TOLERANCE)
+            .min_by(|a, b| a.noise_rms.total_cmp(&b.noise_rms))
+            .cloned()
+    });
     let changes = recommended.as_ref().map_or_else(Vec::new, |r| diff(&current_settings, &r.settings, log));
     let quieter_changes = quieter.as_ref().map_or_else(Vec::new, |q| diff(&current_settings, &q.settings, log));
 
@@ -514,6 +530,24 @@ fn search(prep: &Prepared, current: &FilterSettings, motors_known: bool, lag_ref
     }
     let rest: Vec<NotchSettings> = current.notches.iter().skip(1).cloned().collect();
     let mut notch_sets: Vec<Vec<NotchSettings>> = vec![current.notches.clone()];
+    // A tracking notch never goes below FREQ × FM_RAT: when that is above the
+    // slowest motor, it can't reach the motors. Candidates use a frequency a
+    // little below the slowest motor instead.
+    let base = base.map(|mut b| {
+        if let Some(low) = blocked_floor(&b, &prep.hover).map(|(_, slowest)| (0.8 * slowest).round()) {
+            notes.push(format!(
+                "{}_FREQ × FM_RAT ({} Hz) is above the slowest motor at hover ({:.0} Hz): the notch can't go down to the motors \
+                 and misses them. The candidates use {} Hz instead.",
+                b.prefix,
+                format_value(b.freq_hz * b.min_ratio),
+                prep.hover.motors_hz.iter().copied().reduce(f64::min).unwrap_or(0.0),
+                format_value(low)
+            ));
+            b.bandwidth_hz = (b.bandwidth_hz * low / b.freq_hz).round();
+            b.freq_hz = low;
+        }
+        b
+    });
     if let Some(base) = base {
         let mut modes = vec![(base.mode, base.options)];
         let per_motor = (MODE_ESC, (base.options | OPT_PER_MOTOR | OPT_LOOP_RATE) & !(OPT_DOUBLE | OPT_TRIPLE));
@@ -549,6 +583,15 @@ fn search(prep: &Prepared, current: &FilterSettings, motors_known: bool, lag_ref
         }
     }
     out
+}
+
+/// For a notch that tracks motor speed: its floor (FREQ × FM_RAT) and the
+/// slowest motor at hover, when the floor is above that motor.
+fn blocked_floor(n: &NotchSettings, hover: &Context) -> Option<(f64, f64)> {
+    let tracking = matches!(n.mode, MODE_RPM | MODE_RPM2 | MODE_ESC) && n.reference > 0.0;
+    let slowest = hover.motors_hz.iter().copied().reduce(f64::min)?;
+    let floor = n.freq_hz * n.min_ratio.max(0.0);
+    (tracking && floor > slowest * 0.95).then_some((floor, slowest))
 }
 
 /// REF for a candidate notch: RPM and ESC modes only track with a positive
@@ -589,6 +632,31 @@ mod tests {
     use crate::synth::{sample_flight, Preset};
 
     const FS: f64 = 2000.0;
+
+    #[test]
+    fn notch_floor_above_the_motors_is_blocked() {
+        // The 15-inch: FREQ 80 Hz in ESC mode, motors at 56-62 Hz.
+        let n = NotchSettings {
+            prefix: "INS_HNTCH",
+            mode: MODE_ESC,
+            freq_hz: 80.0,
+            bandwidth_hz: 80.0,
+            attenuation_db: 40.0,
+            harmonics: 1,
+            options: 0,
+            min_ratio: 1.0,
+            reference: 1.0,
+        };
+        let hover = Context { motors_hz: vec![58.0, 57.0, 62.0, 56.0], ..Default::default() };
+        assert_eq!(blocked_floor(&n, &hover), Some((80.0, 56.0)));
+        assert_eq!(base_centers(&n, &hover), vec![80.0], "stuck at the floor");
+        let low = NotchSettings { freq_hz: 45.0, ..n.clone() };
+        assert_eq!(blocked_floor(&low, &hover), None);
+        assert!((base_centers(&low, &hover)[0] - 58.25).abs() < 1e-9, "follows the motors");
+        // Throttle mode and REF = 0 don't follow motor speed.
+        assert_eq!(blocked_floor(&NotchSettings { mode: MODE_THROTTLE, ..n.clone() }, &hover), None);
+        assert_eq!(blocked_floor(&NotchSettings { reference: 0.0, ..n }, &hover), None);
+    }
 
     #[test]
     fn low_pass_is_minus_3_db_at_cutoff_and_lags_90_degrees() {

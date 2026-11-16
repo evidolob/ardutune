@@ -333,6 +333,8 @@ pub struct Notch {
     pub mode: String,
     /// Approximate centre frequency at hover.
     pub hover_center_hz: Option<f64>,
+    /// For notches that follow motor speed: the lowest they go (FREQ × FM_RAT).
+    pub min_hz: Option<f64>,
     pub bandwidth_hz: Option<f64>,
     /// Harmonics of the centre frequency it filters (1 = fundamental).
     pub harmonics: Vec<u32>,
@@ -729,6 +731,23 @@ fn findings(peaks: &[Peak], per_motor: &[(u32, f64)], notches: &[Notch]) -> Vec<
             _ => {}
         }
     }
+    // A tracking notch whose floor is above the motors never reaches them.
+    if let Some(slowest) = per_motor.iter().map(|(_, f)| *f).reduce(f64::min) {
+        for n in notches {
+            if let Some(min) = n.min_hz.filter(|m| *m > slowest * 0.95) {
+                out.insert(
+                    0,
+                    format!(
+                        "{name} can't reach the motors: it never goes below {name}_FREQ × {name}_FM_RAT = {min:.0} Hz, but the slowest \
+                         motor runs at {slowest:.0} Hz in steady flight, so the notch sits above the motor noise. Set {name}_FREQ to about \
+                         {low:.0} Hz (a little below the slowest motor); the Filters page proposes it.",
+                        name = n.name,
+                        low = (0.8 * slowest).round()
+                    ),
+                );
+            }
+        }
+    }
     if let (Some(lo), Some(hi)) = (per_motor.iter().map(|(_, f)| *f).reduce(f64::min), per_motor.iter().map(|(_, f)| *f).reduce(f64::max)) {
         if per_motor.len() > 1 && hi / lo - 1.0 > MOTOR_SPREAD_WARN {
             let list: Vec<String> = per_motor.iter().map(|(m, f)| format!("motor {m} {:.0} RPM", f * 60.0)).collect();
@@ -755,6 +774,8 @@ fn notch_config(log: &Log, hover_motor_hz: Option<f64>) -> Vec<Notch> {
         let freq = p("FREQ");
         // REF = 0 turns tracking off in every mode (AP_Vehicle::update_dynamic_notch).
         let reference = p("REF").unwrap_or(0.0);
+        let tracks_motors = matches!(mode, 2 | 3 | 5) && reference > 0.0;
+        let min_hz = freq.map(|f| f * p("FM_RAT").unwrap_or(1.0)).filter(|_| tracks_motors);
         let hover_center_hz = match mode {
             _ if reference <= 0.0 => freq,
             0 => freq,
@@ -762,8 +783,8 @@ fn notch_config(log: &Log, hover_motor_hz: Option<f64>) -> Vec<Notch> {
                 (Some(f), Some(r), Some(h)) if r > 0.0 => Some(f * (h / r).sqrt()),
                 (f, _, _) => f,
             },
-            // RPM-based modes follow motor speed × REF, floored at INS_HNTCH_FREQ.
-            _ => hover_motor_hz.map(|m| m * reference).map(|m| freq.map_or(m, |f| m.max(f))).or(freq),
+            // RPM-based modes follow motor speed × REF, floored at FREQ × FM_RAT.
+            _ => hover_motor_hz.map(|m| m * reference).map(|m| min_hz.map_or(m, |f| m.max(f))).or(freq),
         };
         let mode_name = match mode {
             0 => "fixed frequency",
@@ -779,6 +800,7 @@ fn notch_config(log: &Log, hover_motor_hz: Option<f64>) -> Vec<Notch> {
             name: if name == "INS_HNTCH" { "INS_HNTCH" } else { "INS_HNTC2" },
             mode: format!("{mode_name} (mode {mode})"),
             hover_center_hz,
+            min_hz,
             bandwidth_hz: p("BW"),
             harmonics: (0..16).filter(|b| hmncs & (1 << b) != 0).map(|b| b + 1).collect(),
         });
@@ -790,6 +812,22 @@ fn notch_config(log: &Log, hover_motor_hz: Option<f64>) -> Vec<Notch> {
 mod tests {
     use super::*;
     use crate::synth::{sample_flight, Preset};
+
+    #[test]
+    fn notch_that_cant_reach_the_motors_is_reported_first() {
+        let notch = Notch {
+            name: "INS_HNTCH",
+            mode: "ESC telemetry (mode 3)".into(),
+            hover_center_hz: Some(80.0),
+            min_hz: Some(80.0),
+            bandwidth_hz: Some(80.0),
+            harmonics: vec![1],
+        };
+        let found = findings(&[], &[(1, 58.0), (2, 56.0)], std::slice::from_ref(&notch));
+        assert!(found[0].contains("can't reach the motors") && found[0].contains("about 45 Hz"), "{found:?}");
+        let fine = Notch { min_hz: Some(45.0), ..notch };
+        assert!(findings(&[], &[(1, 58.0), (2, 56.0)], &[fine]).is_empty());
+    }
 
     #[test]
     fn sine_lands_in_the_right_bin_with_the_right_power() {
