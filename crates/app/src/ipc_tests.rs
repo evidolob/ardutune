@@ -174,9 +174,14 @@ fn analyse_connect_download_write_and_reboot() {
     assert_eq!(written["results"][0]["value"], json!(16.0), "{written}");
     let last = tool(6, "last_write_result", json!({}));
     assert!(last["result"]["content"][0]["text"].as_str().unwrap().contains("SERIAL4_PROTOCOL"), "{last}");
+    let raw = tool(8, "log_query", json!({ "type": "RATE", "fields": ["R"], "max_rows": 5 }));
+    let text = raw["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("\"time_s\"") && text.contains("\"every_nth\""), "{text}");
+    let types = tool(9, "log_message_types", json!({}));
+    assert!(types["result"]["content"][0]["text"].as_str().unwrap().contains("\"RATE\""));
     let unknown = tool(7, "motor_test", json!({}));
     assert_eq!(unknown["result"]["isError"], json!(true));
-    assert_eq!(call("mcp_status", json!({})).unwrap()["activity"].as_array().unwrap().len(), 5);
+    assert_eq!(call("mcp_status", json!({})).unwrap()["activity"].as_array().unwrap().len(), 7);
     call("mcp_set_enabled", json!({ "enabled": false })).unwrap();
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err() || call("mcp_status", json!({})).unwrap()["running"] == json!(false));
     call("prepare_changes", json!({ "source": "edits", "label": "undo", "values": [["SERIAL4_PROTOCOL", -1.0]] })).unwrap();

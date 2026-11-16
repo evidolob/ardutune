@@ -507,6 +507,10 @@ Done:
     motor layout, AutoTune, initial tune;
   - logs: list and download (which opens the log), flight history, open a
     log, analyse it;
+  - raw log data (`core::rawlog`), to check the analyses against the data:
+    message types with fields and time spans; the rows of a type, filtered
+    by field values (instance) and time, thinned to a row limit, or
+    summarised as statistics; the parameters as recorded in the log;
   - changes: propose changes, propose ArduTune's own recommendation, last
     write result.
 - Proposals open the app's review dialog. A connect or an opened log shows

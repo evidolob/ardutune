@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ardutune_core::paramdoc;
+use ardutune_core::{paramdoc, rawlog};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -263,7 +263,7 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
 
 const INSTRUCTIONS: &str = "ArduTune is a desktop app for setting up, diagnosing and tuning ArduPilot multicopters. These tools read what the app reads: the connected vehicle (over USB), its parameters with ArduPilot's descriptions, live checks (setup guide, pre-arm, GPS, RC, serial ports, frame and hardware, AutoTune readiness) and flight logs with ArduTune's analyses (readiness, noise, filters, PIDs, crash diagnosis). \
 Changing anything goes through propose_changes or propose_recommendation: the changes open in the app for the user to review, untick and confirm, with a backup and read-back; nothing is written until they do. Ask last_write_result afterwards. You cannot arm, run motors, reboot, calibrate or flash firmware: tell the user to do that in the app. \
-Workflow: vehicle_status (connect_vehicle if needed), then the relevant check; for tuning, flight_history and analyse_log on the right flight. Make small changes, one area at a time, and say what to look for on the next flight.";
+Workflow: vehicle_status (connect_vehicle if needed), then the relevant check; for tuning, flight_history and analyse_log on the right flight. ArduTune's analyses can be wrong: when a result looks odd, check it against the raw messages with log_message_types, log_query and log_parameters. Make small changes, one area at a time, and say what to look for on the next flight.";
 
 /// Handles one JSON-RPC message; `None` for notifications.
 pub fn handle<R: Runtime>(app: &AppHandle<R>, request: Value) -> Option<Value> {
@@ -385,6 +385,32 @@ fn tools() -> Vec<Value> {
             &["kind"],
         ),
         tool(
+            "log_message_types",
+            "The open log's raw message types: rows, field names and time span of each (ATT, RATE, PIDR, GYR, IMU, VIBE, ESC, RCOU, BAT, CTUN, GPS, MSG, EV, MODE, ISBH/ISBD batches…), plus parse statistics. Use it to check ArduTune's analyses against the data.",
+            none.clone(),
+            &[],
+        ),
+        tool(
+            "log_query",
+            "Rows of one message type from the open log, as recorded (numbers in real units, time in seconds since boot). `fields` to pick columns (default all); `where` to keep rows whose fields equal values, e.g. {\"I\": 0} for the first IMU or {\"Instance\": 2} for an ESC; `from_s`/`to_s` for a time window; `max_rows` (default 200, at most 5000, evenly thinned beyond that); `stats: true` for count/min/max/mean/std per field instead of rows.",
+            json!({
+                "type": { "type": "string" },
+                "fields": { "type": "array", "items": { "type": "string" } },
+                "where": { "type": "object", "additionalProperties": { "type": "number" } },
+                "from_s": { "type": "number" },
+                "to_s": { "type": "number" },
+                "max_rows": { "type": "integer" },
+                "stats": { "type": "boolean" }
+            }),
+            &["type"],
+        ),
+        tool(
+            "log_parameters",
+            "The parameters recorded in the open log (as they were during that flight, not the vehicle's now), optionally only names containing `search`.",
+            json!({ "search": { "type": "string" } }),
+            &[],
+        ),
+        tool(
             "propose_changes",
             "Proposes parameter changes: they open in ArduTune for the user to review and confirm (with backup and read-back). Nothing is written until they do. `changes`: [{name, value, reason}]; `title` says what it's for.",
             json!({
@@ -460,6 +486,19 @@ fn call_tool<R: Runtime>(app: &AppHandle<R>, name: &str, args: &Value) -> Result
             // The plot (SVG) is for the app's pages; the numbers are in the report.
             let v = block(analysis::analysis(app, kind.to_owned()))?;
             Ok(v.get("report").cloned().unwrap_or(v))
+        }
+        "log_message_types" | "log_query" | "log_parameters" => {
+            let state = app.state::<AppState>();
+            let slot = lock(&state.log);
+            let loaded = slot.as_ref().ok_or("Open a log first (open_log or download_vehicle_log).")?;
+            match name {
+                "log_message_types" => Ok(rawlog::types(&loaded.log)),
+                "log_query" => {
+                    let q: rawlog::Query = serde_json::from_value(args.clone()).map_err(|e| format!("bad query: {e}"))?;
+                    rawlog::query(&loaded.log, &q)
+                }
+                _ => Ok(rawlog::params(&loaded.log, args.get("search").and_then(Value::as_str))),
+            }
         }
         "propose_changes" => {
             let title = args.get("title").and_then(Value::as_str).unwrap_or("changes from the AI assistant").to_owned();

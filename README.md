@@ -251,7 +251,9 @@ The desktop app can serve ArduTune to an AI assistant over MCP (Model
 Context Protocol). Claude, or any MCP client, can then help set up, tune
 and troubleshoot the vehicle with what ArduTune knows: the vehicle and its
 parameters with ArduPilot's descriptions, the checks, flight history and the
-log analyses. It can only **propose** changes. They open in the app's usual
+log analyses. It can also read the raw log messages (any type, filtered by
+time or instance, thinned or summarised) to check ArduTune's analyses
+against the data. It can only **propose** changes. They open in the app's usual
 review, where you confirm them, with backup and read-back. It can't arm,
 run motors, reboot, calibrate or flash firmware.
 

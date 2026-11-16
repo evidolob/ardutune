@@ -16,6 +16,7 @@ pub mod paramdoc;
 pub mod params;
 pub mod pid;
 pub mod plot;
+pub mod rawlog;
 pub mod rc;
 pub mod readiness;
 pub mod serial;
