@@ -496,6 +496,49 @@ log analyses.
 - **Before building:** make the app's commands callable from one place, so
   the UI and MCP share them. The Tauri commands are already that layer.
 
+## Localization: English and Ukrainian
+
+The app speaks English and Ukrainian: the desktop app, the web app and the
+CLI.
+
+- **What gets translated:**
+  - The UI's own text in `crates/app/ui/app.js`: navigation, pages,
+    buttons, dialogs, toasts.
+  - Almost every explanation the user reads comes from the Rust core:
+    check titles and advice, change reasons, setup steps, diagnosis
+    causes, GPS, serial and AutoTune checks. Those strings move to message
+    catalogs too, or the translated UI would show English advice.
+- **How:**
+  - One message catalog per language, keyed by id, with arguments ("{fs} µs
+    is not below {min} µs").
+  - Fluent (`fluent-rs` in Rust and Fluent's JS library in the UI) handles
+    Ukrainian plurals (one, few, many) and argument formatting. A plain
+    JSON catalog with a small plural helper would also do.
+  - The core returns ids plus arguments, or renders text in the requested
+    language. Either way the desktop app, the web app (WebAssembly) and the
+    CLI share the same catalogs.
+- **Language choice:**
+  - From the operating system or browser on first start, switchable in the
+    app and remembered.
+  - The CLI follows `LANG` or takes a `--lang` flag.
+- **Numbers and units:** Ukrainian uses a decimal comma and spaces between
+  thousands, so values are formatted per language. Parameter names, units
+  and the values written to the vehicle stay as they are.
+- **ArduPilot's parameter descriptions** (bundled from apm.pdef) are English
+  only. They stay English for now, with the app's own short hints in both
+  languages.
+- **Checks:**
+  - CI fails when a key is missing in either language or a catalog has
+    unused keys.
+  - A pseudo-locale (accented, longer text) exercises the layout.
+  - Screenshots of the main pages in both languages for review.
+- **Docs and stores:** a Ukrainian README section. The installers, Flatpak
+  metainfo and the web app manifest get Ukrainian names and descriptions.
+- **Order:**
+  1. UI strings first, while the structure is fresh.
+  2. Then the core's messages area by area (pre-arm, setup, GPS…).
+  3. Then the CLI.
+
 ## Before publishing on GitHub: license
 
 Done: GPL-3.0-or-later, like ArduPilot, Mission Planner and the Methodic
