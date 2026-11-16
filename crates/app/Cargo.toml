@@ -17,6 +17,7 @@ ardutune-core.workspace = true
 ardutune-link = { workspace = true, features = ["native"] }
 serde.workspace = true
 serde_json.workspace = true
+getrandom = "0.2"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 

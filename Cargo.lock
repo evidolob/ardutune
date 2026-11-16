@@ -103,6 +103,7 @@ version = "0.1.0"
 dependencies = [
  "ardutune-core",
  "ardutune-link",
+ "getrandom 0.2.17",
  "serde",
  "serde_json",
  "tauri",

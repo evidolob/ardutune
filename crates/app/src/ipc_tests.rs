@@ -32,6 +32,19 @@ fn invoke(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str, a
     .map_err(|e| e.as_str().map_or(e.to_string(), str::to_owned))
 }
 
+/// One HTTP POST to the AI assistant server: (status code, JSON body).
+fn mcp_post(port: u16, token: &str, body: &Value) -> (u16, Value) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let body = body.to_string();
+    write!(s, "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    let code = out.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+    let json = out.split_once("\r\n\r\n").map(|(_, b)| b).filter(|b| !b.is_empty()).and_then(|b| serde_json::from_str(b).ok()).unwrap_or(Value::Null);
+    (code, json)
+}
+
 #[test]
 fn analyse_connect_download_write_and_reboot() {
     let data = std::env::temp_dir().join(format!("ardutune-ipc-test-{}", std::process::id()));
@@ -119,6 +132,55 @@ fn analyse_connect_download_write_and_reboot() {
     assert!(rc["view"]["notes"].as_array().unwrap().iter().any(|n| n["title"] == "The radio isn't calibrated"));
     mock.state().gps_motion = (0.02, 50.4501, 30.5234);
     mock.state().prearm_failures.clear();
+
+    // The AI assistant (MCP): off until turned on; with the token it reads
+    // the vehicle and proposes changes, which wait for the app's review.
+    assert_eq!(call("mcp_status", json!({})).unwrap()["running"], json!(false));
+    let st = call("mcp_set_enabled", json!({ "enabled": true })).unwrap();
+    let url = st["url"].as_str().unwrap().to_owned();
+    let port: u16 = url.trim_start_matches("http://127.0.0.1:").trim_end_matches("/mcp").parse().unwrap();
+    let token = st["token"].as_str().unwrap().to_owned();
+    assert_eq!(mcp_post(port, "wrong", &json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).0, 401);
+    let (code, init) = mcp_post(
+        port,
+        &token,
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } }),
+    );
+    assert_eq!((code, init["result"]["serverInfo"]["name"].clone()), (200, json!("ardutune")), "{init}");
+    assert_eq!(mcp_post(port, &token, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).0, 202);
+    let (_, list) = mcp_post(port, &token, &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+    let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(
+        names.contains(&"propose_changes") && names.contains(&"analyse_log") && !names.iter().any(|n| n.contains("motor_test") || n.contains("reboot")),
+        "{names:?}"
+    );
+    let tool = |id: u64, name: &str, args: Value| {
+        mcp_post(port, &token, &json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name, "arguments": args } })).1
+    };
+    let status = tool(3, "vehicle_status", json!({}));
+    assert_eq!(status["result"]["isError"], json!(false), "{status}");
+    let params = tool(4, "get_parameters", json!({ "names": ["SERIAL4_PROTOCOL"] }));
+    let text = params["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("SERIAL4_PROTOCOL") && text.contains("\"matched\": 1"), "{text}");
+    let proposal = tool(
+        5,
+        "propose_changes",
+        json!({ "title": "ESC telemetry on SERIAL4", "changes": [{ "name": "SERIAL4_PROTOCOL", "value": 16, "reason": "ESC telemetry wire on SERIAL4" }] }),
+    );
+    let text = proposal["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("shown_for_review") && text.contains("ESC telemetry wire on SERIAL4"), "{text}");
+    assert_eq!(mock.state().params["SERIAL4_PROTOCOL"].0, -1.0, "nothing written by the proposal itself");
+    let written = call("apply_changes", json!({})).unwrap();
+    assert_eq!(written["results"][0]["value"], json!(16.0), "{written}");
+    let last = tool(6, "last_write_result", json!({}));
+    assert!(last["result"]["content"][0]["text"].as_str().unwrap().contains("SERIAL4_PROTOCOL"), "{last}");
+    let unknown = tool(7, "motor_test", json!({}));
+    assert_eq!(unknown["result"]["isError"], json!(true));
+    assert_eq!(call("mcp_status", json!({})).unwrap()["activity"].as_array().unwrap().len(), 5);
+    call("mcp_set_enabled", json!({ "enabled": false })).unwrap();
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err() || call("mcp_status", json!({})).unwrap()["running"] == json!(false));
+    call("prepare_changes", json!({ "source": "edits", "label": "undo", "values": [["SERIAL4_PROTOCOL", -1.0]] })).unwrap();
+    call("apply_changes", json!({})).unwrap();
 
     // AutoTune: checks for a 15-inch, settings for its size, writable.
     let at = call("autotune_status", json!({ "propIn": 15.0 })).unwrap();

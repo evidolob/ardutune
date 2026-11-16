@@ -298,6 +298,13 @@
       };
     },
     gps_accept_position: async () => null,
+    mcp_status: async () => window.mockMcp ?? (window.mockMcp = { enabled: false, running: false, url: null, token: "3f9a1c0d5e7b42a6981c0de4f5a6b7c8", activity: [] }),
+    mcp_set_enabled: async ({ enabled }) => {
+      const s = await commands.mcp_status();
+      Object.assign(s, { enabled, running: enabled, url: enabled ? "http://127.0.0.1:47653/mcp" : null, activity: enabled ? [{ time: "2026-11-16 09:12:03", tool: "gps_status", ok: true }, { time: "2026-11-16 09:11:58", tool: "vehicle_status", ok: true }] : s.activity });
+      return s;
+    },
+    mcp_new_token: async () => Object.assign(await commands.mcp_status(), { token: "a1b2c3d4e5f60718293a4b5c6d7e8f90" }),
     close_log: async () => null,
     gps_status: async () => {
       await sleep(600);

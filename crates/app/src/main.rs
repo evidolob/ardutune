@@ -10,6 +10,7 @@ mod firmware;
 mod history;
 #[cfg(test)]
 mod ipc_tests;
+mod mcp;
 mod vehicle;
 
 use std::path::PathBuf;
@@ -29,6 +30,7 @@ pub struct AppState {
     pub vehicle: Mutex<Option<vehicle::Connected>>,
     pub pending: Mutex<Option<vehicle::Pending>>,
     pub firmware: Mutex<Option<firmware::PendingFirmware>>,
+    pub mcp: Mutex<mcp::State>,
 }
 
 /// Locks a mutex, recovering the data if a panicking command poisoned it.
@@ -103,55 +105,64 @@ async fn pick_file<R: Runtime>(app: AppHandle<R>, kind: String) -> CmdResult<Opt
 
 /// State and commands, shared by the app and the tests.
 fn setup<R: Runtime>(builder: Builder<R>) -> Builder<R> {
-    builder.manage(AppState::default()).invoke_handler(tauri::generate_handler![
-        pick_file,
-        analysis::open_log,
-        analysis::close_log,
-        analysis::open_sample,
-        analysis::analysis,
-        vehicle::list_ports,
-        vehicle::connect,
-        vehicle::disconnect,
-        vehicle::vehicle_status,
-        vehicle::list_vehicle_logs,
-        vehicle::download_vehicle_log,
-        vehicle::delete_vehicle_log,
-        vehicle::erase_vehicle_logs,
-        vehicle::prepare_changes,
-        vehicle::apply_changes,
-        vehicle::reboot,
-        vehicle::arming_check,
-        vehicle::setup_guide,
-        vehicle::vehicle_pack,
-        vehicle::initial_tune,
-        vehicle::motor_layout,
-        vehicle::motor_test,
-        vehicle::motor_check,
-        vehicle::detect_switch,
-        vehicle::rc_status,
-        vehicle::rc_choices,
-        vehicle::gps_status,
-        vehicle::gps_accept_position,
-        vehicle::serial_status,
-        vehicle::vehicle_config,
-        vehicle::autotune_status,
-        vehicle::compass_cal_start,
-        vehicle::compass_cal_poll,
-        vehicle::compass_cal_finish,
-        vehicle::param_table,
-        firmware::firmware_info,
-        firmware::firmware_releases,
-        firmware::firmware_prepare,
-        firmware::firmware_flash,
-        backups::backup_params,
-        backups::list_backups,
-        backups::delete_backup,
-        backups::assign_backup,
-        drones::name_drone,
-        drones::list_drones,
-        history::flight_history,
-        history::import_log,
-    ])
+    builder
+        .manage(AppState::default())
+        .setup(|app| {
+            mcp::start_if_enabled(app.handle());
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            mcp::mcp_status,
+            mcp::mcp_set_enabled,
+            mcp::mcp_new_token,
+            pick_file,
+            analysis::open_log,
+            analysis::close_log,
+            analysis::open_sample,
+            analysis::analysis,
+            vehicle::list_ports,
+            vehicle::connect,
+            vehicle::disconnect,
+            vehicle::vehicle_status,
+            vehicle::list_vehicle_logs,
+            vehicle::download_vehicle_log,
+            vehicle::delete_vehicle_log,
+            vehicle::erase_vehicle_logs,
+            vehicle::prepare_changes,
+            vehicle::apply_changes,
+            vehicle::reboot,
+            vehicle::arming_check,
+            vehicle::setup_guide,
+            vehicle::vehicle_pack,
+            vehicle::initial_tune,
+            vehicle::motor_layout,
+            vehicle::motor_test,
+            vehicle::motor_check,
+            vehicle::detect_switch,
+            vehicle::rc_status,
+            vehicle::rc_choices,
+            vehicle::gps_status,
+            vehicle::gps_accept_position,
+            vehicle::serial_status,
+            vehicle::vehicle_config,
+            vehicle::autotune_status,
+            vehicle::compass_cal_start,
+            vehicle::compass_cal_poll,
+            vehicle::compass_cal_finish,
+            vehicle::param_table,
+            firmware::firmware_info,
+            firmware::firmware_releases,
+            firmware::firmware_prepare,
+            firmware::firmware_flash,
+            backups::backup_params,
+            backups::list_backups,
+            backups::delete_backup,
+            backups::assign_backup,
+            drones::name_drone,
+            drones::list_drones,
+            history::flight_history,
+            history::import_log,
+        ])
 }
 
 fn main() {

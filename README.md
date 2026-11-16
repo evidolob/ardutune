@@ -245,6 +245,26 @@ It attaches them all to a draft GitHub release, which you publish by hand.
 Running the workflow from the Actions tab builds the same files as workflow
 artifacts, without a release.
 
+## AI assistant (MCP)
+
+The desktop app can serve ArduTune to an AI assistant over MCP (Model
+Context Protocol). Claude, or any MCP client, can then help set up, tune
+and troubleshoot the vehicle with what ArduTune knows: the vehicle and its
+parameters with ArduPilot's descriptions, the checks, flight history and the
+log analyses. It can only **propose** changes. They open in the app's usual
+review, where you confirm them, with backup and read-back. It can't arm,
+run motors, reboot, calibrate or flash firmware.
+
+Turn it on under **AI assistant** in the app (it's off by default and only
+listens on 127.0.0.1, with a token). Then, for Claude Code:
+
+```bash
+claude mcp add --transport http ardutune http://127.0.0.1:47653/mcp --header "Authorization: Bearer <token>"
+```
+
+The page shows the command with your token, a configuration for other MCP
+clients, and the assistant's recent activity.
+
 ## Command line
 
 The connection defaults to `auto` (the single USB flight controller plugged

@@ -1090,6 +1090,17 @@ table.modes tr.activerow td {
   background: var(--code-bg);
 }
 
+pre.snippet {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 6px 0;
+}
+
 .configgrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;

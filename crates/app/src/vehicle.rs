@@ -77,6 +77,15 @@ impl Connected {
         self.link.vehicle().system_id
     }
 
+    /// A parameter's default, once read from the vehicle (Parameters page).
+    pub fn default_of(&self, name: &str) -> Option<f64> {
+        self.defaults.as_ref().and_then(|d| d.get(name)).map(|v| *v as f64)
+    }
+
+    pub fn defaults_unknown(&self) -> bool {
+        self.defaults.is_none()
+    }
+
     pub(crate) fn info(&self) -> VehicleInfo {
         let v = self.link.vehicle();
         VehicleInfo {
@@ -814,7 +823,10 @@ pub async fn apply_changes<R: Runtime>(app: AppHandle<R>, names: Option<Vec<Stri
                 Err(e) => results.push(WriteResult { name: ch.name.clone(), value: None, error: Some(e.to_string()) }),
             }
         }
-        Ok(ApplyView { backup: backup.map(|b| b.display().to_string()), results })
+        let view = ApplyView { backup: backup.map(|b| b.display().to_string()), results };
+        // For the AI assistant's last_write_result.
+        lock(&state.mcp).last_write = serde_json::to_value(&view).ok();
+        Ok(view)
     })
     .await
 }

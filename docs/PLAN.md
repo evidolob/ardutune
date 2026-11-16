@@ -496,6 +496,30 @@ log analyses.
 - **Before building:** make the app's commands callable from one place, so
   the UI and MCP share them. The Tauri commands are already that layer.
 
+Done:
+- The MCP server lives in the desktop app (`crates/app/src/mcp.rs`). It uses
+  Streamable HTTP on 127.0.0.1:47653 with a bearer token, rejects foreign
+  Origins, and is off until turned on (stored in
+  `Documents/ArduTune/mcp.json`).
+- Tools call the app's own commands:
+  - read: vehicle status, connect, parameters (filter, search, changed
+    only), setup guide, pre-arm, GPS, RC, serial ports, frame and hardware,
+    motor layout, AutoTune, initial tune;
+  - logs: list and download (which opens the log), flight history, open a
+    log, analyse it;
+  - changes: propose changes, propose ArduTune's own recommendation, last
+    write result.
+- Proposals open the app's review dialog. A connect or an opened log shows
+  in the window too.
+- The AI assistant page has the on/off switch, the token, the Claude Code
+  command, a config for other clients and recent activity.
+
+Not yet:
+- a Claude Desktop extension bundle and a Claude Code plugin with a tuning
+  skill;
+- MCP prompts and resources;
+- a read-only mode switch.
+
 ## Localization: English and Ukrainian
 
 The app speaks English and Ukrainian: the desktop app, the web app and the

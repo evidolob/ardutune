@@ -6,7 +6,7 @@ const invoke = (cmd, args = {}) => tauri.core.invoke(cmd, args);
 /** The web app (`crates/web`): log analysis, and the vehicle over Web Serial. */
 const WEB = !!window.ARDUTUNE_WEB;
 /** Pages the web app can't offer yet: they need the computer's files or firmware downloads. */
-const WEB_DESKTOP_ONLY = new Set(["firmware", "compass", "history", "params"]);
+const WEB_DESKTOP_ONLY = new Set(["firmware", "compass", "history", "params", "assistant"]);
 const DESKTOP_URL = "https://github.com/evidolob/ardutune/releases";
 
 /** Views that analyse the open log. */
@@ -24,6 +24,7 @@ const NAV = [
   ["Tuning", [["vlogs", "Logs on vehicle"], ["history", "Flight history"], ["autotune", "AutoTune"]]],
   ["Log analysis", ["log", ["overview", "Readiness"], ["noise", "Noise"], ["filters", "Filters"], ["pid", "PIDs"]]],
   ["Troubleshoot", [["prearm", "Pre-arm check"], ["diagnose", "Crash diagnosis"]]],
+  ["Assistant", [["assistant", "AI assistant"]]],
 ];
 /** Rows shown at once in the parameter list; refine the search for more. */
 const PARAM_ROWS = 300;
@@ -52,6 +53,7 @@ const state = {
   compass: { cal: null, running: false }, // compass calibration progress
   // RC channels page; modes: staged FLTMODEn changes; seen: per channel {lo, hi, vals} since the page opened
   autotune: { view: null, prop: "" }, // AutoTune page; prop: inches as typed
+  mcp: { status: null, showToken: false }, // AI assistant (MCP server) page
   config: { view: null, staged: {} }, // frame and hardware page; staged: setting edits
   serial: { view: null, polling: false }, // serial ports page (state.ports is the connection list)
   gps: { page: null, polling: false, staged: {}, showSettings: false }, // GPS page; staged: setting edits
@@ -139,6 +141,7 @@ function go(view) {
   if (view === "ports" && state.vehicle) pollPorts();
   if (view === "config" && state.vehicle) loadConfig();
   if (view === "autotune" && state.vehicle) loadAutotune();
+  if (view === "assistant") loadMcp();
   if (view === "allparams" && state.vehicle && !state.ptable && !state.vehicleBusy) loadParams();
   if (view === "firmware" && state.vehicle && !state.fw && !state.vehicleBusy) loadFirmware();
 }
@@ -436,6 +439,14 @@ async function writeValues(title, values) {
     set({ modal: { stage: "confirm", title, source: "edits", plan, selected: new Set(plan.rows.map((r) => r.name)) } });
   } catch (e) {
     set({ modal: null });
+    toast(e);
+  }
+}
+
+async function loadMcp() {
+  try {
+    set({ mcp: { ...state.mcp, status: await invoke("mcp_status") } });
+  } catch (e) {
     toast(e);
   }
 }
@@ -818,6 +829,30 @@ const actions = {
       toast(e);
     }
   },
+  mcpToggle: async (d) => {
+    try {
+      set({ mcp: { ...state.mcp, status: await invoke("mcp_set_enabled", { enabled: d.on === "true" }) } });
+    } catch (e) {
+      toast(e);
+    }
+  },
+  mcpNewToken: async () => {
+    try {
+      set({ mcp: { ...state.mcp, status: await invoke("mcp_new_token") } });
+      toast("New token: set the assistant up again with it.", "info");
+    } catch (e) {
+      toast(e);
+    }
+  },
+  mcpShowToken: () => set({ mcp: { ...state.mcp, showToken: !state.mcp.showToken } }),
+  copyText: async (d) => {
+    try {
+      await navigator.clipboard.writeText(d.text);
+      toast("Copied.", "info");
+    } catch {
+      toast("Couldn't copy: select the text and copy it instead.");
+    }
+  },
   rcStickMode: (d) => {
     try {
       localStorage.setItem("ardutune.stickMode", d.mode);
@@ -1002,6 +1037,18 @@ document.addEventListener("keydown", (e) => {
 // ---------- progress (updated in place: events arrive ten times a second) ----------
 
 let progressEl = null;
+
+// The AI assistant (MCP server): proposals open the usual review; what it
+// connects or opens shows up here too.
+tauri.event.listen("mcp-proposal", ({ payload: p }) => {
+  if (["writing", "planning"].includes(state.modal?.stage)) return;
+  set({ modal: { stage: "confirm", title: `${p.title} (proposed by the AI assistant)`, source: "mcp", plan: p.plan, selected: new Set(p.plan.rows.map((r) => r.name)) } });
+});
+tauri.event.listen("vehicle-changed", ({ payload }) => set({ vehicle: payload }));
+tauri.event.listen("log-opened", ({ payload }) => set({ log: payload, analyses: {}, loadingLog: null }));
+tauri.event.listen("mcp-activity", ({ payload }) => {
+  if (state.mcp.status) set({ mcp: { ...state.mcp, status: { ...state.mcp.status, activity: [payload, ...state.mcp.status.activity].slice(0, 40) } } });
+});
 
 tauri.event.listen("progress", ({ payload: p }) => {
   if (!progressEl) {
@@ -1951,6 +1998,62 @@ function autotuneView() {
     </div>`;
 }
 
+function assistantView() {
+  const head = `<h1>AI assistant</h1><p class="lead">Let Claude, or another AI assistant that speaks MCP, help set up, tune and troubleshoot the vehicle. It reads what ArduTune reads: the vehicle, its parameters, the checks and your flight logs with ArduTune's analyses. It can only propose changes: they open here for you to review and confirm, like any other write.</p>`;
+  const s = state.mcp.status;
+  if (!s) return head + busy("Reading the assistant settings…");
+  const token = state.mcp.showToken ? s.token : "•".repeat(32);
+  const url = s.url ?? "http://127.0.0.1:47653/mcp";
+  const claude = `claude mcp add --transport http ardutune ${url} --header "Authorization: Bearer ${s.token}"`;
+  const json = JSON.stringify({ mcpServers: { ardutune: { type: "http", url, headers: { Authorization: `Bearer ${s.token}` } } } }, null, 2);
+  const copy = (what, text) => `<button class="btn small" data-action="copyText" data-text="${esc(text)}">Copy</button>`;
+  return `${head}
+    <div class="card">
+      <h2>Server ${s.running ? chip("pass", "on") : chip("info", "off")}</h2>
+      <p class="muted">${
+        s.running
+          ? `Listening on <code>${esc(url)}</code>, on this computer only. Clients need the token below.`
+          : "Off: no AI assistant can reach ArduTune. Turn it on to connect one; it stays on across restarts until you turn it off."
+      }</p>
+      <div class="actions">
+        <button class="btn ${s.running ? "" : "primary"}" data-action="mcpToggle" data-on="${!s.running}">${s.running ? "Turn off" : "Turn on"}</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Connect an assistant</h2>
+      <div class="form gpsform">
+        <label>Token</label><div><code>${esc(token)}</code> <button class="link" data-action="mcpShowToken">${state.mcp.showToken ? "hide" : "show"}</button> ${copy("token", s.token)} <button class="link" data-action="mcpNewToken">new token</button></div>
+      </div>
+      <h3>Claude Code</h3>
+      <p class="muted">Run once in a terminal, then ask Claude about your drone.</p>
+      <pre class="snippet">${esc(claude.replace(s.token, state.mcp.showToken ? s.token : "<token>"))}</pre>
+      <div class="actions">${copy("command", claude)}</div>
+      <h3>Other MCP clients</h3>
+      <p class="muted">Streamable HTTP with a bearer token. Most clients take a configuration like this:</p>
+      <pre class="snippet">${esc(state.mcp.showToken ? json : json.replace(s.token, "<token>"))}</pre>
+      <div class="actions">${copy("config", json)}</div>
+      <p class="muted">A new token disconnects clients set up with the old one. The token lets a program on this computer read the vehicle and propose changes; keep it to yourself.</p>
+    </div>
+    <div class="card">
+      <h2>What it can do</h2>
+      <ul class="plain">
+        <li>Read the vehicle: status, parameters with ArduPilot's descriptions, setup guide, pre-arm, GPS, RC, serial ports, frame and hardware, AutoTune readiness.</li>
+        <li>Download logs from the vehicle, read your flight history and run ArduTune's analyses (readiness, noise, filters, PIDs, crash diagnosis).</li>
+        <li>Propose changes, which open here for review. It can't arm, run motors, reboot, calibrate or flash firmware.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Recent activity</h2>
+      ${
+        s.activity.length
+          ? `<table class="ports"><tr><th>Time (UTC)</th><th>Tool</th><th></th></tr>${s.activity
+              .map((a) => `<tr><td class="muted">${esc(a.time)}</td><td class="mono">${esc(a.tool)}</td><td>${a.ok ? chip("pass", "ok") : chip("warn", "error")}</td></tr>`)
+              .join("")}</table>`
+          : `<p class="muted">Nothing yet.</p>`
+      }
+    </div>`;
+}
+
 function configView() {
   const head = `<h1>Frame and hardware</h1><p class="lead">The settings every build needs: frame and motor layout, ESC protocol and motors, how the flight controller is mounted, and the battery monitor. Change what doesn't match your build, then write it all at once.</p>`;
   if (!state.vehicle) return head + notConnected("see its configuration");
@@ -2893,6 +2996,8 @@ function content() {
       return portsView();
     case "config":
       return configView();
+    case "assistant":
+      return assistantView();
     case "autotune":
       return autotuneView();
     case "history":
