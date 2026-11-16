@@ -456,13 +456,23 @@ pub fn simulate(log: &Log, lag_ref_hz: f64) -> Result<FilterReport, String> {
     // when nothing else is worth changing, as long as it isn't noisier.
     let recommended = recommended.or_else(|| {
         let n = current_settings.notches.first()?;
-        blocked_floor(n, &prep.hover)?;
+        let blocked = blocked_floor(n, &prep.hover).is_some();
+        let bad_ref = esc_reference_wrong(n);
+        if !blocked && !bad_ref {
+            return None;
+        }
         evaluations
             .iter()
             .filter(|e| {
                 let c = &e.settings;
                 c.gyro_lpf_hz == current_settings.gyro_lpf_hz
-                    && c.notches.first().is_some_and(|m| m.mode == n.mode && m.options == n.options && m.harmonics == n.harmonics && m.freq_hz < n.freq_hz)
+                    && c.notches.first().is_some_and(|m| {
+                        m.mode == n.mode
+                            && m.options == n.options
+                            && m.harmonics == n.harmonics
+                            && (!blocked || m.freq_hz < n.freq_hz)
+                            && (!bad_ref || m.reference == 1.0)
+                    })
             })
             .filter(|e| e.noise_rms <= current.noise_rms * NOISE_TOLERANCE)
             .min_by(|a, b| a.noise_rms.total_cmp(&b.noise_rms))
@@ -519,6 +529,14 @@ fn search(prep: &Prepared, current: &FilterSettings, motors_known: bool, lag_ref
         }
     };
     for n in &current.notches {
+        if esc_reference_wrong(n) {
+            notes.push(format!(
+                "{p}_REF is {r}: in ESC telemetry mode REF multiplies the motors' frequency, so the notch aims at {r} × the motors \
+                 (or sits at its floor, {p}_FREQ × FM_RAT). It should be 1; the candidates use 1.",
+                p = n.prefix,
+                r = format_value(n.reference)
+            ));
+        }
         if n.mode != MODE_FIXED && n.reference <= 0.0 {
             notes.push(format!(
                 "{}_REF is 0, so the notch doesn't track: it stays at {} Hz. Tracking modes need REF = 1 (RPM, ESC \
@@ -594,13 +612,21 @@ fn blocked_floor(n: &NotchSettings, hover: &Context) -> Option<(f64, f64)> {
     (tracking && floor > slowest * 0.95).then_some((floor, slowest))
 }
 
-/// REF for a candidate notch: RPM and ESC modes only track with a positive
-/// REF, and 1 uses the measured frequency as it is. Other modes keep theirs.
+/// REF for a candidate notch: ESC telemetry reports the motors' own speed,
+/// so REF is 1; RPM sensors only track with a positive REF (it may scale a
+/// sensor on another shaft). Other modes keep theirs.
 fn tracking_reference(mode: u32, current: f64) -> f64 {
     match mode {
-        MODE_RPM | MODE_RPM2 | MODE_ESC if current <= 0.0 => 1.0,
+        MODE_ESC => 1.0,
+        MODE_RPM | MODE_RPM2 if current <= 0.0 => 1.0,
         _ => current,
     }
+}
+
+/// An ESC-telemetry notch whose REF scales the motors' frequency away from
+/// them: a setup error (REF is a hover throttle in throttle mode, not here).
+fn esc_reference_wrong(n: &NotchSettings) -> bool {
+    n.mode == MODE_ESC && n.reference > 0.0 && (n.reference - 1.0).abs() > 0.01
 }
 
 /// Settings no other beats on both noise and delay, by increasing delay.
@@ -632,6 +658,29 @@ mod tests {
     use crate::synth::{sample_flight, Preset};
 
     const FS: f64 = 2000.0;
+
+    #[test]
+    fn esc_notch_reference_must_be_one() {
+        let n = NotchSettings {
+            prefix: "INS_HNTCH",
+            mode: MODE_ESC,
+            freq_hz: 31.0,
+            bandwidth_hz: 14.0,
+            attenuation_db: 20.0,
+            harmonics: 11,
+            options: 1,
+            min_ratio: 0.9,
+            reference: 0.324,
+        };
+        assert!(esc_reference_wrong(&n));
+        let hover = Context { motors_hz: vec![56.0, 40.0, 43.0, 54.0], ..Default::default() };
+        // 0.324 × 48 Hz is below the floor: the notch sits at 31 × 0.9.
+        assert!((base_centers(&n, &hover)[0] - 27.9).abs() < 1e-9);
+        assert_eq!(tracking_reference(MODE_ESC, 0.324), 1.0);
+        assert_eq!(tracking_reference(MODE_RPM, 0.5), 0.5, "an RPM sensor may sit on another shaft");
+        assert!(!esc_reference_wrong(&NotchSettings { reference: 1.0, ..n.clone() }));
+        assert!(!esc_reference_wrong(&NotchSettings { mode: MODE_THROTTLE, ..n }), "throttle mode's REF is the hover throttle");
+    }
 
     #[test]
     fn notch_floor_above_the_motors_is_blocked() {

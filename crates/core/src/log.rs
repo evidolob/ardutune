@@ -325,8 +325,17 @@ impl Log {
         if !armed.is_empty() {
             return (armed, FlightSource::Arming);
         }
-        let motors = self.motor_running_intervals();
+        let mut motors = self.motor_running_intervals();
         if !motors.is_empty() {
+            // A log that starts armed records only the disarm: the motors
+            // spin down after it, but the flight ended there.
+            let disarms = self.disarm_times();
+            for m in &mut motors {
+                if let Some(d) = disarms.iter().copied().find(|d| *d > m.start && *d < m.end) {
+                    m.end = d;
+                }
+            }
+            motors.retain(|i| i.duration() > 0.0);
             return (motors, FlightSource::MotorOutput);
         }
         (self.time_span().into_iter().collect(), FlightSource::WholeLog)
@@ -354,6 +363,19 @@ impl Log {
         }
         out.retain(|i| i.duration() >= MIN_LEN_S);
         out
+    }
+
+    /// When the vehicle disarmed, from ARM messages or EV events.
+    pub fn disarm_times(&self) -> Vec<f64> {
+        if let Some(arm) = self.table("ARM") {
+            if let (Some(t), Some(state)) = (arm.time_s(), arm.num("ArmState")) {
+                return t.into_iter().zip(state).filter(|(_, s)| **s == 0.0).map(|(t, _)| t).collect();
+            }
+        }
+        self.table("EV")
+            .and_then(|ev| Some((ev.time_s()?, ev.num("Id")?)))
+            .map(|(t, id)| t.into_iter().zip(id).filter(|(_, id)| **id == EV_DISARMED).map(|(t, _)| t).collect())
+            .unwrap_or_default()
     }
 
     /// Armed periods, from ARM messages (4.1+) or EV armed/disarmed events.

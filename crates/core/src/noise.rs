@@ -335,6 +335,9 @@ pub struct Notch {
     pub hover_center_hz: Option<f64>,
     /// For notches that follow motor speed: the lowest they go (FREQ × FM_RAT).
     pub min_hz: Option<f64>,
+    /// REF, and whether it scales ESC telemetry away from the motors.
+    pub reference: Option<f64>,
+    pub esc_reference_wrong: bool,
     pub bandwidth_hz: Option<f64>,
     /// Harmonics of the centre frequency it filters (1 = fundamental).
     pub harmonics: Vec<u32>,
@@ -673,7 +676,11 @@ fn classify(f: f64, motor_range: Option<(f64, f64)>, rows: &[BatchSpectrum], df:
             _ => None,
         }
     };
+    // Motors running at quite different speeds (an imbalance) smear the
+    // tracking test: a peak inside their range is one of them, not the frame.
+    let motors_disagree = hi / lo > 1.0 + MOTOR_SPREAD_WARN;
     match (harmonic, tracks) {
+        (true, Some(false)) if motors_disagree => PeakClass::MotorHarmonic { harmonic: k, tracks_rpm: None },
         (_, Some(false)) => PeakClass::FixedFrequency,
         (true, t) => PeakClass::MotorHarmonic { harmonic: k, tracks_rpm: t },
         (false, Some(true)) => PeakClass::MotorHarmonic { harmonic: k, tracks_rpm: Some(true) },
@@ -703,6 +710,17 @@ fn findings(peaks: &[Peak], per_motor: &[(u32, f64)], notches: &[Notch]) -> Vec<
                 p.prominence_db,
                 fmt_db(p.filter_reduction_db)
             )),
+            // Strong shaking at once per revolution: something on the motor turns unevenly.
+            PeakClass::MotorHarmonic { harmonic: 1, .. }
+                if p.prominence_db >= SIGNIFICANT_DB + 5.0 && p.filter_reduction_db.is_none_or(|r| r < WELL_FILTERED_DB) =>
+            {
+                out.push(format!(
+                    "Strong {} vibration at the motors' own speed ({:.0} Hz, {:.0} dB above the floor): a once-per-revolution shake, \
+                     usually an unbalanced prop (two-blade props especially), a bent shaft or a loose prop adapter or motor bell. \
+                     Balance the props and check the motors; filters only hide it.",
+                    p.axis, p.freq_hz, p.prominence_db
+                ));
+            }
             PeakClass::MotorHarmonic { harmonic, .. } if p.notch_covered == Some(false) => {
                 if p.filter_reduction_db.is_some_and(|r| r >= WELL_FILTERED_DB) {
                     continue;
@@ -730,6 +748,18 @@ fn findings(peaks: &[Peak], per_motor: &[(u32, f64)], notches: &[Notch]) -> Vec<
             )),
             _ => {}
         }
+    }
+    for n in notches.iter().filter(|n| n.esc_reference_wrong) {
+        out.insert(
+            0,
+            format!(
+                "{name}_REF is {r:.3}: in ESC telemetry mode REF multiplies the motors' frequency, so the notch aims at {r:.2} × the \
+                 motors, or sits at its floor ({name}_FREQ × FM_RAT), instead of on them. Set {name}_REF to 1 (a value below 1 is what \
+                 throttle mode uses, the hover throttle).",
+                name = n.name,
+                r = n.reference.unwrap_or(0.0)
+            ),
+        );
     }
     // A tracking notch whose floor is above the motors never reaches them.
     if let Some(slowest) = per_motor.iter().map(|(_, f)| *f).reduce(f64::min) {
@@ -801,6 +831,8 @@ fn notch_config(log: &Log, hover_motor_hz: Option<f64>) -> Vec<Notch> {
             mode: format!("{mode_name} (mode {mode})"),
             hover_center_hz,
             min_hz,
+            reference: p("REF"),
+            esc_reference_wrong: mode == 3 && reference > 0.0 && (reference - 1.0).abs() > 0.01,
             bandwidth_hz: p("BW"),
             harmonics: (0..16).filter(|b| hmncs & (1 << b) != 0).map(|b| b + 1).collect(),
         });
@@ -820,13 +852,19 @@ mod tests {
             mode: "ESC telemetry (mode 3)".into(),
             hover_center_hz: Some(80.0),
             min_hz: Some(80.0),
+            reference: Some(1.0),
+            esc_reference_wrong: false,
             bandwidth_hz: Some(80.0),
             harmonics: vec![1],
         };
         let found = findings(&[], &[(1, 58.0), (2, 56.0)], std::slice::from_ref(&notch));
         assert!(found[0].contains("can't reach the motors") && found[0].contains("about 45 Hz"), "{found:?}");
         let fine = Notch { min_hz: Some(45.0), ..notch };
-        assert!(findings(&[], &[(1, 58.0), (2, 56.0)], &[fine]).is_empty());
+        assert!(findings(&[], &[(1, 58.0), (2, 56.0)], std::slice::from_ref(&fine)).is_empty());
+        // The bi-blade 15-inch: ESC telemetry with REF 0.324.
+        let scaled = Notch { esc_reference_wrong: true, reference: Some(0.324), ..fine };
+        let found = findings(&[], &[(1, 58.0), (2, 56.0)], &[scaled]);
+        assert!(found[0].contains("INS_HNTCH_REF is 0.324") && found[0].contains("Set INS_HNTCH_REF to 1"), "{found:?}");
     }
 
     #[test]
