@@ -119,6 +119,7 @@ dependencies = [
  "ardutune-core",
  "ardutune-link",
  "clap",
+ "dirs",
  "serde_json",
 ]
 

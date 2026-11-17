@@ -388,12 +388,15 @@ fn esc_dropouts(log: &Log, onset: f64, findings: &mut Vec<Finding>, timeline: &m
     }
     let advice = if motors.len() > 1 && together {
         "Several ESCs dropping out together usually share a cause: one half or the power feed of a 4-in-1 ESC, \
-         a connector or ground, or the DShot output group they are on. Inspect that wiring and solder joints, \
-         and bench-test the motors at full throttle with props off. Lowering AutoTune aggressiveness \
-         (AUTOTUNE_AGGR) and ATC_ACCEL_*_MAX reduces current spikes while testing."
+         a connector or ground, the DShot output group they are on, or motor wires chafed through by the \
+         bells and shorting against each other or a carbon frame (look for bare copper; such a short is \
+         often intermittent and gone on the bench). Inspect that wiring and solder joints, and bench-test the \
+         motors at full throttle with props off. Lowering AutoTune aggressiveness (AUTOTUNE_AGGR) and \
+         ATC_ACCEL_*_MAX (ATC_ACC_*_MAX from 4.7) reduces current spikes while testing."
     } else {
         "An ESC that stops reporting has usually reset, desynced or lost its signal. Check the ESC, its motor \
-         and connectors; desyncs show up under hard acceleration, so test with full-throttle punches."
+         and connectors, and the motor wires for insulation worn through by the bell; desyncs show up under \
+         hard acceleration, so test with full-throttle punches."
     };
     findings.push(Finding {
         id: "esc_dropout",

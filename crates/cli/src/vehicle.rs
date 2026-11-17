@@ -74,7 +74,10 @@ pub fn fetch_params(link: &mut Link) -> Result<Params> {
 /// Saves all parameters so a change can be undone with `ardutune apply`.
 pub fn save_params(link: &mut Link, params: &Params, path: Option<&Path>) -> Result<PathBuf> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let path = path.map_or_else(|| PathBuf::from(format!("ardutune-backup-sys{}-{}.param", link.vehicle().system_id, file_stamp(now))), Path::to_path_buf);
+    let path = match path {
+        Some(p) => p.to_path_buf(),
+        None => free_name(&backups_dir()?, &format!("backup-sys{}-{}", link.vehicle().system_id, file_stamp(now))),
+    };
     // Same vehicle line as the desktop app's backups, so they can tell
     // which flight controller a file came from.
     let id = link.identity().ok().filter(|i| i.uid.is_some());
@@ -89,6 +92,23 @@ pub fn save_params(link: &mut Link, params: &Params, path: Option<&Path>) -> Res
     let text = params::write(&header, params.iter().map(|(n, p)| (n.as_str(), p.value)));
     std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
+}
+
+/// Documents/ArduTune/backups (or `$ARDUTUNE_DATA_DIR/backups`), where the
+/// desktop app keeps its backups too, so its Backups screen lists these.
+fn backups_dir() -> Result<PathBuf> {
+    let root = match std::env::var_os("ARDUTUNE_DATA_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => dirs::document_dir().context("no Documents folder; pass -o to choose where the backup goes")?.join("ArduTune"),
+    };
+    let dir = root.join("backups");
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// `stem.param` in `dir`, or `stem-1.param`… when that is taken.
+fn free_name(dir: &Path, stem: &str) -> PathBuf {
+    (0..).map(|n| dir.join(if n == 0 { format!("{stem}.param") } else { format!("{stem}-{n}.param") })).find(|p| !p.exists()).expect("a free file name")
 }
 
 /// A parameter value to write, with an optional reason to show.
@@ -253,4 +273,20 @@ pub fn download(link: &mut Link, id: Option<u16>, out: Option<&Path>) -> Result<
     std::fs::write(&path, &data).with_context(|| format!("writing {}", path.display()))?;
     println!("Saved log {} to {} in {:.0} s", entry.id, path.display(), start.elapsed().as_secs_f64());
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::free_name;
+
+    #[test]
+    fn backup_names_never_overwrite() {
+        let dir = std::env::temp_dir().join(format!("ardutune-free-name-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = free_name(&dir, "backup-sys1-20261117-101500");
+        assert_eq!(first, dir.join("backup-sys1-20261117-101500.param"));
+        std::fs::write(&first, "").unwrap();
+        assert_eq!(free_name(&dir, "backup-sys1-20261117-101500"), dir.join("backup-sys1-20261117-101500-1.param"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

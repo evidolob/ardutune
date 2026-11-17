@@ -185,6 +185,7 @@ enum Cmd {
     Connect,
     /// Save all of the vehicle's parameters to a .param file
     Params {
+        /// Where to save it (default: a new file in Documents/ArduTune/backups)
         #[arg(short, long, value_name = "FILE")]
         out: Option<PathBuf>,
         /// Instead, list the parameters that differ from their defaults
