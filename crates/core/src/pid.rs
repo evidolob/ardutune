@@ -469,9 +469,8 @@ pub fn analyse(log: &Log) -> Result<PidReport, String> {
                 .to_owned(),
         );
     }
-    let autotune = autotune_results(log);
-    let tuned: Vec<&str> = AXES.iter().filter(|a| autotune.iter().any(|s| s.name == format!("ATC_RAT_{}_P", a.param))).map(|a| a.name).collect();
-    if !tuned.is_empty() && tuned.len() < 3 {
+    let (autotune, tuned) = autotune_results(log);
+    if !autotune.is_empty() && !tuned.is_empty() && tuned.len() < 3 {
         notes.push(format!("AutoTune only finished {}; the other axes keep their current gains if you apply its results.", tuned.join(" and ")));
     }
     Ok(PidReport { sample_rate_hz: fs, axes, suggestions, autotune, notes })
@@ -580,25 +579,42 @@ fn suggest(ax: &AxisDef, g: &Gains, s: &StepResponse, osc: Option<&Oscillation>,
 /// Above this, a maximum acceleration is in centidegrees/s², not degrees/s².
 const MAX_ACCEL_DEG: f64 = 10_000.0;
 
-/// Gains printed by AutoTune for axes it finished, e.g.
-/// "AutoTune: Roll Rate: P:0.042, I:0.042, D:0.0031" and
+/// Gains printed by AutoTune for axes it finished and the vehicle doesn't
+/// have yet, e.g. "AutoTune: Roll Rate: P:0.042, I:0.042, D:0.0031" and
 /// "AutoTune: Roll Angle P:19.298, Max Accel:114972".
-fn autotune_results(log: &Log) -> Vec<Suggestion> {
-    let number_after = |s: &str, key: &str| -> Option<f64> {
+///
+/// The messages round the gains to a few digits, and the value saved can
+/// differ by one unit of the last digit printed (0.0543 printed as 0.054,
+/// 0.04575 as 0.045), so a gain within that of the log's parameter counts
+/// as saved.
+/// Also returns the axes AutoTune finished.
+fn autotune_results(log: &Log) -> (Vec<Suggestion>, Vec<&'static str>) {
+    // The number after `key`, and one unit of its last printed digit.
+    let number_after = |s: &str, key: &str| -> Option<(f64, f64)> {
         let rest = &s[s.find(key)? + key.len()..];
-        rest.trim_start().split(|c: char| c == ',' || c.is_whitespace()).next()?.parse().ok()
+        let text = rest.trim_start().split(|c: char| c == ',' || c.is_whitespace()).next()?;
+        let decimals = text.split_once('.').map_or(0, |(_, frac)| frac.len());
+        Some((text.parse().ok()?, 10f64.powi(-(decimals as i32))))
     };
     let mut found: Vec<Suggestion> = Vec::new();
+    let mut finished: Vec<&'static str> = Vec::new();
     for msg in log.text_messages() {
         let Some(body) = msg.strip_prefix("AutoTune:").map(str::trim) else { continue };
         let Some(ax) = AXES.iter().find(|a| body.to_lowercase().starts_with(a.name)) else { continue };
-        let mut add = |name: String, value: Option<f64>, what: &str| {
-            if let Some(v) = value {
-                found.retain(|s| s.name != name);
-                found.push(Suggestion { current: log.param(&name), name, value: v, reason: format!("{} {what} found by AutoTune", ax.name) });
+        let mut add = |name: String, printed: Option<(f64, f64)>, what: &str| {
+            let Some((value, unit)) = printed else { return };
+            found.retain(|s| s.name != name);
+            let current = log.param(&name);
+            // A little slack for the 32-bit float the vehicle stores.
+            let saved = current.is_some_and(|c| (c - value).abs() <= unit * (1.0 + 1e-6) + 1e-9);
+            if !saved {
+                found.push(Suggestion { current, name, value, reason: format!("{} {what} found by AutoTune", ax.name) });
             }
         };
         if body.contains("Rate:") {
+            if !finished.contains(&ax.name) {
+                finished.push(ax.name);
+            }
             for (key, field) in [("P:", "P"), ("I:", "I"), ("D:", "D")] {
                 add(format!("ATC_RAT_{}_{field}", ax.param), number_after(body, key), &format!("rate {field}"));
             }
@@ -609,13 +625,13 @@ fn autotune_results(log: &Log) -> Vec<Suggestion> {
             let new_name = format!("ATC_ACC_{}_MAX", ax.accel);
             if log.param(&new_name).is_some() {
                 // Values this large are centidegrees, as older AutoTune prints them.
-                add(new_name, accel.map(|v| if v >= MAX_ACCEL_DEG { v / 100.0 } else { v }), "max acceleration");
+                add(new_name, accel.map(|(v, unit)| if v >= MAX_ACCEL_DEG { (v / 100.0, unit / 100.0) } else { (v, unit) }), "max acceleration");
             } else {
                 add(format!("ATC_ACCEL_{}_MAX", ax.accel), accel, "max acceleration");
             }
         }
     }
-    found
+    (found, finished)
 }
 
 impl Suggestion {
@@ -734,6 +750,34 @@ mod tests {
     }
 
     #[test]
+    fn autotune_gains_saved_to_the_printed_precision_are_not_listed() {
+        // A real 4.7 tune: the saved values against the rounded messages.
+        let mut w = LogWriter::new();
+        let parm = w.define("PARM", "QNff", "TimeUS,Name,Value,Default");
+        let msg = w.define("MSG", "QZ", "TimeUS,Message");
+        for (name, value) in [
+            ("ATC_RAT_PIT_P", 0.045_748_636_f32),
+            ("ATC_RAT_PIT_I", 0.045_748_636),
+            ("ATC_RAT_PIT_D", 0.002_740_561_7),
+            ("ATC_ANG_PIT_P", 1.967_559_8),
+            ("ATC_ACC_P_MAX", 258.742_95),
+            ("ATC_RAT_RLL_P", 0.054_299_87),
+            ("ATC_RAT_RLL_I", 0.054_299_87),
+            ("ATC_RAT_RLL_D", 0.001_5),
+        ] {
+            w.write(parm, &[V::I(1), V::S(name), V::F(f64::from(value)), V::F(0.0)]);
+        }
+        w.write(msg, &[V::I(2), V::S("AutoTune: Pitch Rate: P:0.045, I:0.045, D:0.0027")]);
+        w.write(msg, &[V::I(3), V::S("AutoTune: Pitch Angle P:1.968, Max Accel:258.74")]);
+        w.write(msg, &[V::I(4), V::S("AutoTune: Roll Rate: P:0.054, I:0.054, D:0.0032")]);
+        let (found, finished) = autotune_results(&Log::from_bytes(&w.into_bytes()));
+        assert_eq!(finished, ["pitch", "roll"]);
+        // Only roll D wasn't saved (0.0015 on the vehicle).
+        let names: Vec<&str> = found.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["ATC_RAT_RLL_D"]);
+    }
+
+    #[test]
     fn autotune_accel_uses_the_4_7_name_and_units() {
         let mut w = LogWriter::new();
         let parm = w.define("PARM", "QNff", "TimeUS,Name,Value,Default");
@@ -741,7 +785,7 @@ mod tests {
         w.write(parm, &[V::I(1), V::S("ATC_ACC_R_MAX"), V::F(1100.0), V::F(1100.0)]);
         w.write(msg, &[V::I(2), V::S("AutoTune: Roll Angle P:19.298, Max Accel:114972")]);
         let log = Log::from_bytes(&w.into_bytes());
-        let found = autotune_results(&log);
+        let (found, _) = autotune_results(&log);
         let accel = found.iter().find(|s| s.name.starts_with("ATC_ACC")).unwrap();
         assert_eq!((accel.name.as_str(), accel.value, accel.current), ("ATC_ACC_R_MAX", 1149.72, Some(1100.0)));
     }
