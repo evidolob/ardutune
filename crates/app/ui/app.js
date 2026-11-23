@@ -206,6 +206,7 @@ async function refreshVehicleLogs() {
 async function downloadLog(id) {
   const path = await vehicleTask(`Downloading log ${id}…`, () => invoke("download_vehicle_log", { id: Number(id) }));
   if (path) {
+    if (!WEB) set({ vehicleLogs: state.vehicleLogs?.map((l) => (String(l.id) === String(id) ? { ...l, downloaded: path } : l)) ?? null });
     toast(WEB ? `Downloaded ${path.split("/").pop()} (in your browser's downloads). Opening it…` : `Saved to ${path}`, "info");
     await openLog(path);
   }
@@ -1608,14 +1609,20 @@ function vehicleLogsView() {
         !logs
           ? `<div class="muted">No list yet.</div>`
           : logs.length
-            ? `<table><tr><th class="num">ID</th><th>Date (UTC)</th><th class="num">Size</th><th></th></tr>
+            ? `<table><tr><th class="num">ID</th><th>Date (UTC)</th><th class="num">Size</th><th>${WEB ? "" : "On this computer"}</th><th></th></tr>
           ${logs
             .slice()
             .reverse()
             .map(
               (l) =>
                 `<tr><td class="num">${l.id}</td><td>${esc(l.date ?? "no GPS time")}</td><td class="num">${num(l.size_mb, 1)} MB</td>
-                <td class="num"><button class="btn" data-action="downloadLog" data-id="${l.id}" ${state.vehicleBusy ? "disabled" : ""}>Download and open</button>
+                <td>${l.downloaded ? `<span title="${esc(l.downloaded)}">${chip("pass", "downloaded")}</span>` : ""}</td>
+                <td class="num">${
+                  l.downloaded
+                    ? `<button class="btn primary" data-action="openHistoryLog" data-path="${esc(l.downloaded)}">Open</button>
+                       <button class="btn" data-action="downloadLog" data-id="${l.id}" title="Download it again from the vehicle" ${state.vehicleBusy ? "disabled" : ""}>Download again</button>`
+                    : `<button class="btn" data-action="downloadLog" data-id="${l.id}" ${state.vehicleBusy ? "disabled" : ""}>Download and open</button>`
+                }
                 <button class="btn danger" data-action="askDelete" data-id="${l.id}" ${state.vehicleBusy ? "disabled" : ""}>Delete</button></td></tr>`,
             )
             .join("")}</table>`

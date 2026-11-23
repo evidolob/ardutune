@@ -220,6 +220,10 @@ pub struct LogView {
     id: u16,
     size_mb: f64,
     date: Option<String>,
+    /// A copy already in Documents/ArduTune/logs, if any.
+    downloaded: Option<String>,
+    #[serde(skip)]
+    bytes: u64,
 }
 
 #[tauri::command]
@@ -227,16 +231,16 @@ pub async fn list_vehicle_logs<R: Runtime>(app: AppHandle<R>) -> CmdResult<Vec<L
     blocking(app, |app| {
         let state = app.state::<AppState>();
         let mut slot = lock(&state.vehicle);
-        log_list(&mut slot)
+        log_list(app, &mut slot)
     })
     .await
 }
 
 /// The vehicle's logs, without the empty entries deleted files leave behind.
-fn log_list(slot: &mut Option<Connected>) -> CmdResult<Vec<LogView>> {
+fn log_list<R: Runtime>(app: &AppHandle<R>, slot: &mut Option<Connected>) -> CmdResult<Vec<LogView>> {
     let r = connected(slot)?.link.list_logs();
     let entries = check(slot, r)?;
-    Ok(entries
+    let mut logs: Vec<LogView> = entries
         .iter()
         .filter(|e| e.size > 0)
         // The flight controller's clock: wrong until GPS had a fix, so
@@ -245,8 +249,31 @@ fn log_list(slot: &mut Option<Connected>) -> CmdResult<Vec<LogView>> {
             id: e.id,
             size_mb: e.size as f64 / 1e6,
             date: ardutune_core::history::plausible_time(i64::from(e.time_utc), now() as i64).then(|| date_time(e.time_utc as u64)),
+            downloaded: None,
+            bytes: u64::from(e.size),
         })
-        .collect())
+        .collect();
+    mark_downloaded(app, &mut logs);
+    Ok(logs)
+}
+
+/// Marks the logs that already have a copy on this computer. A download is
+/// exactly the log's size in bytes, which also finds a log again after the
+/// vehicle renumbers its logs, and copies of it imported under another name.
+fn mark_downloaded<R: Runtime>(app: &AppHandle<R>, logs: &mut [LogView]) {
+    let Ok(dir) = data_dir(app, "logs") else { return };
+    let Ok(files) = std::fs::read_dir(dir) else { return };
+    let mut by_size: std::collections::HashMap<u64, std::path::PathBuf> = std::collections::HashMap::new();
+    for f in files.flatten() {
+        let path = f.path();
+        let is_log = path.extension().is_some_and(|x| x.eq_ignore_ascii_case("bin"));
+        if let (true, Ok(meta)) = (is_log, f.metadata()) {
+            by_size.entry(meta.len()).or_insert(path);
+        }
+    }
+    for log in logs {
+        log.downloaded = by_size.get(&log.bytes).map(|p| p.display().to_string());
+    }
 }
 
 /// Deletes one log from the flight controller and returns the new list.
@@ -265,7 +292,7 @@ pub async fn delete_vehicle_log<R: Runtime>(app: AppHandle<R>, id: u16, reboot_f
         }
         let r = connected(&mut slot)?.link.delete_log(id, rebooted);
         check(&mut slot, r)?;
-        log_list(&mut slot)
+        log_list(app, &mut slot)
     })
     .await
 }
@@ -278,7 +305,7 @@ pub async fn erase_vehicle_logs<R: Runtime>(app: AppHandle<R>) -> CmdResult<Vec<
         let mut slot = lock(&state.vehicle);
         let r = connected(&mut slot)?.link.erase_all_logs();
         check(&mut slot, r)?;
-        log_list(&mut slot)
+        log_list(app, &mut slot)
     })
     .await
 }

@@ -338,11 +338,17 @@ fn analyse_connect_download_write_and_reboot() {
 
     // Download the vehicle's log (default logging: not enough for tuning) and open it.
     let logs = call("list_vehicle_logs", json!({})).unwrap();
+    assert!(logs.as_array().unwrap().iter().all(|l| l["downloaded"].is_null()), "nothing downloaded yet: {logs}");
     let id = logs[0]["id"].clone();
     let path = call("download_vehicle_log", json!({ "id": id })).unwrap();
     let path = path.as_str().unwrap();
     assert!(Path::new(path).starts_with(data.join("logs")));
     assert!(path.ends_with("_boot11_kakuteh7-bdshot-353533.bin"), "named by power-up and vehicle: {path}");
+    // The list now points at the copy, and only for that log.
+    let logs = call("list_vehicle_logs", json!({})).unwrap();
+    let marked: Vec<_> = logs.as_array().unwrap().iter().filter(|l| !l["downloaded"].is_null()).collect();
+    assert_eq!(marked.len(), 1, "{logs}");
+    assert_eq!((marked[0]["id"].clone(), marked[0]["downloaded"].as_str()), (id.clone(), Some(path)));
     let overview = call("open_log", json!({ "path": path })).unwrap();
     assert_eq!(overview["readiness"]["filter_ready"], json!(false));
     assert_eq!(overview["vehicle"]["label"], "KakuteH7-bdshot …353533");

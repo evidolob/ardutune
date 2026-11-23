@@ -369,7 +369,7 @@ fn tools() -> Vec<Value> {
             json!({ "prop_in": { "type": "number" }, "cells": { "type": "integer" }, "chemistry": { "type": "string" } }),
             &["prop_in"],
         ),
-        tool("list_vehicle_logs", "Logs on the vehicle's SD card: id, size and date (only when the vehicle's clock could be right).", none.clone(), &[]),
+        tool("list_vehicle_logs", "Logs on the vehicle's SD card: id, size, date (only when the vehicle's clock could be right) and the path of a copy already downloaded to this computer, which open_log can open without downloading again.", none.clone(), &[]),
         tool(
             "download_vehicle_log",
             "Downloads log `id` from the vehicle to Documents/ArduTune/logs and opens it in the app for analysis. Big logs take minutes over USB.",
