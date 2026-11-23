@@ -20,6 +20,8 @@ pub const SCRIPTING1: f64 = 300.0;
 /// Copter modes.
 const ALTHOLD: f64 = 2.0;
 const AUTOTUNE_MODE: f64 = 15.0;
+const LOITER: f64 = 5.0;
+const POSHOLD: f64 = 16.0;
 /// Props from this size get 10 Hz rate filters before AutoTune (ArduPilot docs).
 const LARGE_PROP_IN: f64 = 13.0;
 /// A learned hover throttle at or below this leaves little room below it.
@@ -71,6 +73,9 @@ pub struct Switches {
     /// Flight mode positions (1-6) with AltHold and with AutoTune.
     pub althold: Vec<u8>,
     pub autotune_mode: Vec<u8>,
+    /// Positions with Loiter or PosHold: AutoTune started from them holds
+    /// position (ArduPilot's mode_autotune.cpp).
+    pub position_hold: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,6 +141,12 @@ pub fn view(param: impl Fn(&str) -> Option<f64>, prop_in: Option<f64>, log: Opti
         mode_channel: p("FLTMODE_CH").unwrap_or(5.0) as u8,
         althold: modes_with(p, ALTHOLD),
         autotune_mode: modes_with(p, AUTOTUNE_MODE),
+        position_hold: {
+            let mut v = modes_with(p, LOITER);
+            v.extend(modes_with(p, POSHOLD));
+            v.sort_unstable();
+            v
+        },
     };
 
     // The tuning path.
@@ -147,7 +158,8 @@ pub fn view(param: impl Fn(&str) -> Option<f64>, prop_in: Option<f64>, log: Opti
     };
     let notch = p("INS_HNTCH_ENABLE") == Some(1.0) && p("INS_HNTCH_MODE").is_some_and(|m| m != 0.0);
     let quik = quiktune(p);
-    let ready = !switches.althold.is_empty() && (switches.autotune.is_some() || !switches.autotune_mode.is_empty());
+    let hover_mode = !switches.althold.is_empty() || !switches.position_hold.is_empty();
+    let ready = hover_mode && (switches.autotune.is_some() || !switches.autotune_mode.is_empty());
     let log_result = log.map(log_result);
     let steps = vec![
         Step { id: "initial", title: "Starting values", state: initial_state.0, detail: initial_state.1, view: "tune" },
@@ -174,9 +186,9 @@ pub fn view(param: impl Fn(&str) -> Option<f64>, prop_in: Option<f64>, log: Opti
             title: "AutoTune",
             state: if log_result.as_ref().is_some_and(|l| !l.saved.is_empty()) { "done" } else { "todo" },
             detail: if ready {
-                "AltHold and AutoTune are on switches: ready to fly the tune.".to_owned()
+                "A hover mode (Loiter or AltHold) and AutoTune are on switches: ready to fly the tune.".to_owned()
             } else {
-                "Put AltHold and AutoTune on switches (checks below).".to_owned()
+                "Put Loiter or AltHold, and AutoTune, on switches (checks below).".to_owned()
             },
             view: "autotune",
         },
@@ -191,12 +203,21 @@ pub fn view(param: impl Fn(&str) -> Option<f64>, prop_in: Option<f64>, log: Opti
 
     // Checks before flying.
     let mut checks = Vec::new();
-    if switches.althold.is_empty() {
+    if !hover_mode {
         let mut c = check(
             "althold",
             Status::Fail,
-            "AltHold isn't on the flight mode switch",
-            "AutoTune is started from a hover in AltHold, so the vehicle holds its height while it twitches. Set one mode switch position to AltHold (RC channels page).",
+            "Neither Loiter nor AltHold is on the flight mode switch",
+            "AutoTune is started from a hover that holds its height. From Loiter (or PosHold) it also holds position, so it doesn't drift with the wind while it twitches; AltHold works without GPS. Set a mode switch position to one of them (RC channels page).",
+        );
+        c.view = Some("rc");
+        checks.push(c);
+    } else if switches.position_hold.is_empty() {
+        let mut c = check(
+            "loiter",
+            Status::Info,
+            "Loiter isn't on the flight mode switch",
+            "Started from AltHold, AutoTune doesn't hold position: it drifts with the wind and every correction pauses it, which makes the tune longer. Started from Loiter (or PosHold) with a good GPS fix, it holds position itself.",
         );
         c.view = Some("rc");
         checks.push(c);
@@ -455,8 +476,18 @@ mod tests {
         m.insert("MOT_HOVER_LEARN".into(), 0.0);
         assert!(view(|n| m.get(n).copied(), Some(5.0), None).checks.iter().all(|c| c.id != "hover_low"), "not learned: no verdict");
 
-        // No AltHold on the mode switch.
+        // Loiter alone is enough to start from (and holds position).
         let mut m = params();
+        m.insert("FLTMODE4".into(), 0.0);
+        let v = view(|n| m.get(n).copied(), Some(5.0), None);
+        assert_eq!((v.readiness, v.switches.position_hold.clone()), ("ready", vec![6]));
+        // AltHold alone: ready, with a hint that Loiter holds position.
+        let mut m = params();
+        m.insert("FLTMODE6".into(), 0.0);
+        let v = view(|n| m.get(n).copied(), Some(5.0), None);
+        assert_eq!(v.readiness, "ready");
+        assert!(v.checks.iter().any(|c| c.id == "loiter" && c.status == Status::Info), "{:?}", v.checks);
+        // Neither.
         m.insert("FLTMODE4".into(), 0.0);
         assert_eq!(view(|n| m.get(n).copied(), Some(5.0), None).readiness, "not_ready");
     }
@@ -480,6 +511,7 @@ mod tests {
         let mut m = params();
         m.insert("RC7_OPTION".into(), 0.0);
         m.insert("FLTMODE4".into(), 0.0);
+        m.insert("FLTMODE6".into(), 0.0);
         m.insert("INS_HNTCH_ENABLE".into(), 0.0);
         let v = view(|n| m.get(n).copied(), Some(15.0), None);
         let ids: Vec<&str> = v.checks.iter().map(|c| c.id).collect();

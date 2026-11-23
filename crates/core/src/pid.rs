@@ -375,8 +375,11 @@ fn subtract(a: &[Interval], cut: &[Interval]) -> Vec<Interval> {
     out
 }
 
-fn gains(log: &Log, ax: &AxisDef) -> Gains {
-    let p = |s: &str| log.param(&format!("ATC_RAT_{}_{s}", ax.param));
+/// The rate and angle gains flown: `flown` holds earlier values where the
+/// gains changed after the flight started.
+fn gains(log: &Log, ax: &AxisDef, flown: &std::collections::HashMap<String, f64>) -> Gains {
+    let get = |name: String| flown.get(&name).copied().or_else(|| log.param(&name));
+    let p = |s: &str| get(format!("ATC_RAT_{}_{s}", ax.param));
     Gains {
         p: p("P"),
         i: p("I"),
@@ -386,8 +389,35 @@ fn gains(log: &Log, ax: &AxisDef) -> Gains {
         fltt: p("FLTT"),
         flte: p("FLTE"),
         smax: p("SMAX"),
-        angle_p: log.param(&format!("ATC_ANG_{}_P", ax.param)),
+        angle_p: get(format!("ATC_ANG_{}_P", ax.param)),
     }
+}
+
+fn is_gain(name: &str) -> bool {
+    name.starts_with("ATC_RAT_") || name.starts_with("ATC_ANG_")
+}
+
+/// The first time at or after `from` that a rate or angle gain was changed
+/// (AutoTune saving its gains at the disarm, or a change made in flight),
+/// with the values the gains had before.
+fn gain_change(log: &Log, from: f64) -> Option<(f64, std::collections::HashMap<String, f64>)> {
+    let parm = log.table("PARM")?;
+    let (names, values, times) = (parm.text("Name")?, parm.num("Value")?, parm.time_s()?);
+    let mut before: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for ((name, value), t) in names.iter().zip(values).zip(&times) {
+        if !is_gain(name) {
+            continue;
+        }
+        match before.get(name) {
+            // Compared as the vehicle stores them: 32-bit floats.
+            Some(old) if *t >= from && *old as f32 != *value as f32 => return Some((*t, before)),
+            Some(_) => {}
+            None => {
+                before.insert(name.clone(), *value);
+            }
+        }
+    }
+    None
 }
 
 pub fn analyse(log: &Log) -> Result<PidReport, String> {
@@ -400,6 +430,10 @@ pub fn analyse(log: &Log) -> Result<PidReport, String> {
         return Err(format!("RATE is logged at only {fs:.0} Hz; step-response analysis needs loop-rate logging (ATTITUDE_FAST in LOG_BITMASK)"));
     }
     let (flight, _) = log.flight();
+    // Gains changed after take-off: the flight flew the earlier ones, and
+    // suggestions against the new ones would be wrong.
+    let changed = flight.first().and_then(|f| gain_change(log, f.start));
+    let flown = changed.as_ref().map(|(_, before)| before.clone()).unwrap_or_default();
     let autotune = mode_intervals(log, MODE_AUTOTUNE);
     let normal = subtract(&flight, &autotune);
     let mut notes = Vec::new();
@@ -439,10 +473,10 @@ pub fn analyse(log: &Log) -> Result<PidReport, String> {
         });
 
         let terms = term_stats(log, &ax, &normal, &flight, fs);
-        let g = gains(log, &ax);
+        let g = gains(log, &ax, &flown);
         let mut findings = Vec::new();
         axis_findings(&ax, &g, step.as_ref(), includes_autotune, oscillation.as_ref(), &terms, &mut findings);
-        if !includes_autotune {
+        if !includes_autotune && changed.is_none() {
             if let Some(s) = &step {
                 suggest(&ax, &g, s, oscillation.as_ref(), &mut suggestions);
             }
@@ -468,6 +502,21 @@ pub fn analyse(log: &Log) -> Result<PidReport, String> {
              test with stick snaps in AltHold for a clean measurement."
                 .to_owned(),
         );
+    }
+    if let Some((t, _)) = &changed {
+        let landed = flight.last().is_some_and(|f| *t >= f.end - 1.0);
+        notes.push(if landed {
+            format!(
+                "The gains were changed at {t:.0} s, after the flight (AutoTune saves its gains at the disarm): the \
+                 flight flew the earlier gains, shown here. Its step response says nothing about the new gains, so \
+                 there are no suggestions. Fly the new gains (outside AutoTune) and open that log."
+            )
+        } else {
+            format!(
+                "The gains were changed at {t:.0} s, during the flight: the step response mixes the earlier gains, \
+                 shown here, with the new ones, so there are no suggestions. Fly the new gains and open that log."
+            )
+        });
     }
     let (autotune, tuned) = autotune_results(log);
     if !autotune.is_empty() && !tuned.is_empty() && tuned.len() < 3 {
@@ -649,6 +698,11 @@ mod tests {
     /// Flight where the rate loop behaves as a second-order system with
     /// damping `zeta`, natural frequency `fn_hz` and a delay, driven by steps.
     fn second_order_log(zeta: f64, fn_hz: f64, delay_s: f64, autotune: bool) -> Log {
+        second_order_log_with(zeta, fn_hz, delay_s, autotune, &[])
+    }
+
+    /// The same, with parameter changes written at the given times.
+    fn second_order_log_with(zeta: f64, fn_hz: f64, delay_s: f64, autotune: bool, later: &[(f64, &str, f64)]) -> Log {
         let fs = 400.0;
         let dur = 60.0;
         let mut w = LogWriter::new();
@@ -696,7 +750,28 @@ mod tests {
             w.write(rate, &[us(t), V::F(target), V::F(y), V::F(0.1), V::F(0.0), V::F(0.0), V::F(0.0), V::F(0.0), V::F(0.0), V::F(0.0)]);
         }
         w.write(ev, &[us(1.0 + dur), V::I(11)]);
+        for (t, n, v) in later {
+            w.write(parm, &[us(*t), V::S(n), V::F(*v), V::F(*v)]);
+        }
         Log::from_bytes(&w.into_bytes())
+    }
+
+    #[test]
+    fn gains_saved_after_the_flight_get_no_suggestions() {
+        // AutoTune saves at the disarm (61 s): the flight flew P 0.1, and its
+        // overshoot says nothing about the new 0.05.
+        let log = second_order_log_with(0.4, 8.0, 0.01, false, &[(61.5, "ATC_RAT_RLL_P", 0.05), (61.5, "ATC_RAT_RLL_D", 0.002)]);
+        let r = analyse(&log).unwrap();
+        let roll = r.axes.iter().find(|a| a.axis == "roll").unwrap();
+        let f32_of = |v: Option<f64>| v.map(|x| x as f32);
+        assert_eq!((f32_of(roll.gains.p), f32_of(roll.gains.d)), (Some(0.1), Some(0.004)), "the gains flown");
+        assert!(roll.findings.iter().any(|f| f.contains("overshoots")), "{:?}", roll.findings);
+        assert!(r.suggestions.iter().all(|s| s.name != "ATC_RAT_RLL_P"), "{:?}", r.suggestions);
+        assert!(r.notes.iter().any(|n| n.contains("after the flight")), "{:?}", r.notes);
+
+        // The same values written again change nothing.
+        let log = second_order_log_with(0.4, 8.0, 0.01, false, &[(61.5, "ATC_RAT_RLL_P", 0.1)]);
+        assert!(analyse(&log).unwrap().suggestions.iter().any(|s| s.name == "ATC_RAT_RLL_P"));
     }
 
     #[test]

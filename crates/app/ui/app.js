@@ -1989,12 +1989,13 @@ function autotuneView() {
   const start = sw.autotune ? `flip channel ${sw.autotune} high` : sw.autotune_mode.length ? `switch to AutoTune (mode position ${sw.autotune_mode[0]})` : "turn AutoTune on (put it on a switch first)";
   const stop = sw.autotune ? `channel ${sw.autotune} low` : "switch out of AutoTune";
   const althold = sw.althold.length ? `AltHold (mode position ${sw.althold.join(" or ")})` : "AltHold";
+  const loiter = sw.position_hold.length ? `Loiter (mode position ${sw.position_hold.join(" or ")})` : "Loiter";
   const field = `<div class="card"><h2>On the field</h2>
     <ol class="fieldlist">
       <li>A calm day and a big open space. Transmitter trims at zero, otherwise the sticks never count as centred and nothing happens.</li>
-      <li>Take off and climb to a comfortable height in <b>${esc(althold)}</b>. Never start AutoTune from Stabilize: it starts from any mode the moment it's switched on.</li>
+      <li>Take off and climb to a comfortable height, then hover in <b>${esc(loiter)}</b> with a good GPS fix: started from Loiter (or PosHold), AutoTune holds position itself, so you don't have to correct the drift, which pauses it. Without a good GPS, use <b>${esc(althold)}</b> and keep it in place with small corrections between twitches. Never start AutoTune from Stabilize: it starts from any mode the moment it's switched on.</li>
       <li>Turn the vehicle side-on to the wind (nose into the wind for roll), then <b>${esc(start)}</b>.</li>
-      <li>It twitches left and right for a few minutes, then forward and back, then yaw. Moving the sticks pauses it and flies on the old gains; let go and it carries on. Keep it from drifting away with small corrections between twitches.</li>
+      <li>It twitches left and right for a few minutes, then forward and back, then yaw. Moving the sticks pauses it and flies on the old gains; let go and it carries on.</li>
       <li>To stop at any time and get the old gains back: <b>${esc(stop)}</b>.</li>
       <li>When it's done it flies on the old gains again. Flip ${sw.autotune ? `channel ${sw.autotune}` : "the switch"} low and high again to try the new ones.</li>
       <li><b>To keep them: land with ${sw.autotune ? `channel ${sw.autotune}` : "AutoTune"} still high and disarm.</b> Low before disarming throws the tune away.</li>
