@@ -396,7 +396,12 @@ documentation.
   - the notch is on;
   - battery voltage compensation and thrust curve are set;
   - spin minimum isn't too low;
-  - 10 Hz rate filters for props of 13 inches and more.
+  - 10 Hz rate filters for props of 13 inches and more;
+  - the learned hover throttle isn't at the bottom of the range (a real
+    crash: motors dropped to minimum during the twitches);
+  - tuning logs are on, so the AutoTune flight can be checked.
+- Readiness in the sidebar: a badge on AutoTune (ready, check, not ready),
+  updated on connect and after every write.
 - Settings by size:
   - AUTOTUNE_AGGR 0.1, or 0.075 for 13 inches and up (ArduTune's own
     suggestion; the docs give 0.05-0.1);
@@ -407,6 +412,23 @@ documentation.
   and save, discard, plus an optional test-gains switch (option 180).
 - After the flight: which axes the open log saved, and the docs' optional
   changes (softer gains if too stiff, ATC_THR_MIX_MAX 0.9 on large props).
+
+### Logging: tuning logs and normal logs
+
+Done: a switch on the Logs on vehicle page, with the current mode as a
+sidebar badge.
+- Tuning logs: the LOG_BITMASK bits the analyses need (fast attitude, PID,
+  control tuning, IMU, motor outputs) and gyro before and after the filters
+  (INS_RAW_LOG_OPT 9 on 4.5+, the batch sampler before that), the same
+  changes the setup guide and log readiness recommend.
+- Normal logs: ArduCopter's default LOG_BITMASK (176126) and high-rate
+  gyro logging off.
+- Switching goes through the usual review; AutoTune asks for tuning logs.
+
+Not possible: the SD card's size and free space. ArduPilot only uses them
+internally (it deletes the oldest logs below LOG_FILE_MB_FREE) and sends
+them to no ground station: STORAGE_INFORMATION is only forwarded for
+MAVLink cameras.
 
 Not yet:
 - uploading the QuikTune script over MAVFTP;

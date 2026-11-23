@@ -7,6 +7,7 @@
 use serde::Serialize;
 
 use crate::log::Log;
+use crate::logging;
 use crate::readiness::{ParamChange, Status};
 use crate::setup::{change, Param};
 use crate::tune;
@@ -21,6 +22,8 @@ const ALTHOLD: f64 = 2.0;
 const AUTOTUNE_MODE: f64 = 15.0;
 /// Props from this size get 10 Hz rate filters before AutoTune (ArduPilot docs).
 const LARGE_PROP_IN: f64 = 13.0;
+/// A learned hover throttle at or below this leaves little room below it.
+const LOW_HOVER: f64 = 0.15;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Step {
@@ -95,6 +98,9 @@ pub struct View {
     pub log: Option<LogResult>,
     /// Optional changes after a tune (stiffness, throttle mix).
     pub after: Vec<ParamChange>,
+    /// "ready" (no problems found), "check" (warnings only) or "not_ready"
+    /// (something AutoTune needs is missing), for the badge in the sidebar.
+    pub readiness: &'static str,
 }
 
 fn channel_with(p: Param, option: f64) -> Option<u8> {
@@ -262,6 +268,30 @@ pub fn view(param: impl Fn(&str) -> Option<f64>, prop_in: Option<f64>, log: Opti
             checks.push(c);
         }
     }
+    if let Some(hover) = p("MOT_THST_HOVER").filter(|h| *h <= LOW_HOVER && p("MOT_HOVER_LEARN") != Some(0.0)) {
+        checks.push(check(
+            "hover_low",
+            Status::Warn,
+            "It hovers near the bottom of the throttle range",
+            format!(
+                "The learned hover throttle is {} (MOT_THST_HOVER). AutoTune's twitches then drive some motors to the minimum, \
+                 where they respond slowly or stop, and the controller has little room left. Heavier batteries, smaller props or \
+                 lower-KV motors bring the hover up; at least make sure MOT_SPIN_MIN keeps every motor turning firmly.",
+                fmt(hover)
+            ),
+        ));
+    }
+    let logs = logging::view(p);
+    if logs.mode != logging::Mode::Tuning {
+        let mut c = check(
+            "logging",
+            Status::Warn,
+            "Switch to tuning logs for the AutoTune flight",
+            "With them, the log shows the step response before and after, and the noise, so the tune can be checked. Switch back to normal logs when tuning is finished.",
+        );
+        c.changes = logs.tuning;
+        checks.push(c);
+    }
     checks.sort_by_key(|c| match c.status {
         Status::Fail => 0,
         Status::Warn => 1,
@@ -299,7 +329,14 @@ pub fn view(param: impl Fn(&str) -> Option<f64>, prop_in: Option<f64>, log: Opti
         after.extend(change(p, "ATC_THR_MIX_MAX", 0.9, "Less pitch overshoot in AltHold on large props, after a good tune"));
     }
 
-    View { prop_in: prop, steps, checks, recommended, recommended_note: note, quiktune: quik, switches, log: log_result, after }
+    let readiness = if checks.iter().any(|c| c.status == Status::Fail) {
+        "not_ready"
+    } else if checks.iter().any(|c| c.status == Status::Warn) {
+        "check"
+    } else {
+        "ready"
+    };
+    View { prop_in: prop, steps, checks, recommended, recommended_note: note, quiktune: quik, switches, log: log_result, after, readiness }
 }
 
 fn fmt(v: f64) -> String {
@@ -382,6 +419,11 @@ mod tests {
             ("ATC_RAT_PIT_FLTD", 20.0),
             ("ATC_THR_MIX_MAX", 0.5),
             ("SCR_ENABLE", 0.0),
+            // Tuning logs: the default set plus fast attitude and PIDs, raw gyro.
+            ("LOG_BITMASK", 176_126.0 + 1.0 + 4096.0),
+            ("INS_RAW_LOG_OPT", 9.0),
+            ("INS_LOG_BAT_MASK", 0.0),
+            ("INS_LOG_BAT_OPT", 0.0),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), *v))
@@ -390,6 +432,33 @@ mod tests {
             m.entry(format!("RC{c}_OPTION")).or_insert(0.0);
         }
         m
+    }
+
+    #[test]
+    fn readiness_summary() {
+        let mut m = params();
+        assert_eq!(view(|n| m.get(n).copied(), Some(5.0), None).readiness, "ready");
+
+        // Normal logs: a warning whose fix turns tuning logs on.
+        m.insert("INS_RAW_LOG_OPT".into(), 0.0);
+        m.insert("LOG_BITMASK".into(), 176_126.0);
+        let v = view(|n| m.get(n).copied(), Some(5.0), None);
+        assert_eq!(v.readiness, "check");
+        let logging = v.checks.iter().find(|c| c.id == "logging").expect("logging check");
+        assert!(logging.changes.iter().any(|c| c.name == "INS_RAW_LOG_OPT" && c.value == 9.0), "{:?}", logging.changes);
+
+        // A vehicle hovering near minimum output (the crash this check comes from: 0.125).
+        let mut m = params();
+        m.insert("MOT_THST_HOVER".into(), 0.125);
+        let v = view(|n| m.get(n).copied(), Some(5.0), None);
+        assert!(v.checks.iter().any(|c| c.id == "hover_low"), "{:?}", v.checks);
+        m.insert("MOT_HOVER_LEARN".into(), 0.0);
+        assert!(view(|n| m.get(n).copied(), Some(5.0), None).checks.iter().all(|c| c.id != "hover_low"), "not learned: no verdict");
+
+        // No AltHold on the mode switch.
+        let mut m = params();
+        m.insert("FLTMODE4".into(), 0.0);
+        assert_eq!(view(|n| m.get(n).copied(), Some(5.0), None).readiness, "not_ready");
     }
 
     #[test]

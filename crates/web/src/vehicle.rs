@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use ardutune_core::sources::{self, Wanted};
-use ardutune_core::{arming, autotune, config, gps, motors, paramdoc, rc, serial, setup, switch, tune};
+use ardutune_core::{arming, autotune, config, gps, logging, motors, paramdoc, rc, serial, setup, switch, tune};
 use ardutune_link::{plan, Link, Params};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -214,6 +214,7 @@ fn run(s: &mut Session, cmd: &str, args: &Value, log: Option<&Loaded>) -> Result
         }
         "vehicle_config" => to_value(config::view(s.p()))?,
         "autotune_status" => to_value(autotune::view(s.p(), arg(args, "propIn")?, log.map(|l| &l.log)))?,
+        "logging_status" => to_value(logging::view(s.p()))?,
         "vehicle_pack" => {
             let (cells, chemistry, from_vehicle) = tune::vehicle_pack(s.p());
             json!({ "cells": cells, "chemistry": chemistry, "from_vehicle": from_vehicle })

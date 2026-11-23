@@ -10,6 +10,7 @@ pub mod form;
 pub mod gps;
 pub mod history;
 pub mod log;
+pub mod logging;
 pub mod motors;
 pub mod noise;
 pub mod paramdoc;

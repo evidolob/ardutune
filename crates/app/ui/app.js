@@ -52,7 +52,8 @@ const state = {
   setup: null, // latest setup guide
   compass: { cal: null, running: false }, // compass calibration progress
   // RC channels page; modes: staged FLTMODEn changes; seen: per channel {lo, hi, vals} since the page opened
-  autotune: { view: null, prop: "" }, // AutoTune page; prop: inches as typed
+  autotune: { view: null, prop: "" }, // AutoTune page and its sidebar badge; prop: inches as typed
+  logging: null, // tuning or normal logs on the vehicle, and the changes to switch
   mcp: { status: null, showToken: false }, // AI assistant (MCP server) page
   config: { view: null, staged: {} }, // frame and hardware page; staged: setting edits
   serial: { view: null, polling: false }, // serial ports page (state.ports is the connection list)
@@ -130,6 +131,7 @@ function go(view) {
   if (["diagnose", "noise", "filters", "pid"].includes(view)) analyse(view);
   if (view === "connection" && !state.ports) refreshPorts();
   if (view === "vlogs" && state.vehicle && !state.vehicleLogs) refreshVehicleLogs();
+  if (view === "vlogs" && state.vehicle) refreshSummary();
   if (view === "params") refreshBackups();
   if (view === "history") refreshHistory();
   if (view === "prearm" && state.vehicle && !state.arming && !state.vehicleBusy) armingCheck();
@@ -158,8 +160,9 @@ async function connect() {
   set({ connecting: true });
   try {
     const vehicle = await invoke("connect", { address: state.address });
-    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, compass: { cal: null, running: false }, motors: { ...state.motors, layout: null, seen: [], verdict: null, propsOff: false }, tune: { ...state.tune, pack: null, result: null, cells: null, chemistry: null }, ptable: null, staged: {}, popen: null, fw: null, releases: null });
+    set({ vehicle, connecting: false, vehicleLogs: null, arming: null, setup: null, compass: { cal: null, running: false }, motors: { ...state.motors, layout: null, seen: [], verdict: null, propsOff: false }, tune: { ...state.tune, pack: null, result: null, cells: null, chemistry: null }, ptable: null, staged: {}, popen: null, fw: null, releases: null, autotune: { ...state.autotune, view: null }, logging: null });
     toast(`Connected: ${vehicle.kind}, ${vehicle.params} parameters read.`, "info");
+    refreshSummary();
   } catch (e) {
     set({ connecting: false });
     toast(e);
@@ -170,7 +173,7 @@ async function connect() {
 
 async function disconnect() {
   await invoke("disconnect");
-  set({ vehicle: null, vehicleLogs: null });
+  set({ vehicle: null, vehicleLogs: null, autotune: { ...state.autotune, view: null }, logging: null });
 }
 
 async function refreshStatus() {
@@ -462,6 +465,18 @@ async function loadAutotune() {
   }
 }
 
+/** The AutoTune readiness and logging mode the sidebar shows, after a connect or a write. */
+async function refreshSummary() {
+  if (!state.vehicle) return;
+  const prop = state.autotune.prop || state.tune.prop || "";
+  const [view, logging] = await Promise.all([
+    invoke("autotune_status", { propIn: prop === "" ? null : Number(prop) }).catch(() => null),
+    invoke("logging_status").catch(() => null),
+  ]);
+  if (!state.vehicle) return;
+  set({ autotune: { ...state.autotune, prop, view: view ?? state.autotune.view }, logging: logging ?? state.logging });
+}
+
 async function loadConfig() {
   try {
     set({ config: { ...state.config, view: await invoke("vehicle_config") } });
@@ -656,6 +671,7 @@ async function confirmWrite(backup) {
       loadMotors();
     }
     if (state.view === "params") refreshBackups();
+    refreshSummary();
   } catch (e) {
     set({ modal: { ...m, stage: "confirm" } });
     toast(e);
@@ -1044,7 +1060,10 @@ tauri.event.listen("mcp-proposal", ({ payload: p }) => {
   if (["writing", "planning"].includes(state.modal?.stage)) return;
   set({ modal: { stage: "confirm", title: `${p.title} (proposed by the AI assistant)`, source: "mcp", plan: p.plan, selected: new Set(p.plan.rows.map((r) => r.name)) } });
 });
-tauri.event.listen("vehicle-changed", ({ payload }) => set({ vehicle: payload }));
+tauri.event.listen("vehicle-changed", ({ payload }) => {
+  set({ vehicle: payload });
+  refreshSummary();
+});
 tauri.event.listen("log-opened", ({ payload }) => set({ log: payload, analyses: {}, loadingLog: null }));
 tauri.event.listen("mcp-activity", ({ payload }) => {
   if (state.mcp.status) set({ mcp: { ...state.mcp, status: { ...state.mcp.status, activity: [payload, ...state.mcp.status.activity].slice(0, 40) } } });
@@ -1106,6 +1125,14 @@ function badge(id) {
   if (id === "overview" && state.log) {
     const r = state.log.readiness;
     return r.filter_ready && r.pid_ready ? chip("pass", "ready") : chip("warn", "check");
+  }
+  if (id === "autotune" && state.vehicle && state.autotune.view) {
+    const r = state.autotune.view.readiness;
+    return r === "ready" ? chip("pass", "ready") : r === "check" ? chip("warn", "check") : chip("fail", "not ready");
+  }
+  if (id === "vlogs" && state.vehicle && state.logging) {
+    const m = state.logging.mode;
+    return m === "tuning" ? chip("info", "tuning") : m === "normal" ? chip("info", "normal") : chip("warn", "mixed");
   }
   if (id === "diagnose") {
     const d = state.analyses.diagnose?.data?.report;
@@ -1575,6 +1602,7 @@ function vehicleLogsView() {
   const logs = state.vehicleLogs;
   return `${head}
     ${state.vehicleBusy ? busy(state.vehicleBusy) : ""}
+    ${loggingCard()}
     <div class="card">
       ${
         !logs
@@ -1596,6 +1624,24 @@ function vehicleLogsView() {
       <div class="actions"><button class="btn" data-action="refreshVehicleLogs" ${state.vehicleBusy ? "disabled" : ""}>Refresh list</button>
         ${logs?.length ? `<button class="btn danger" data-action="askErase" ${state.vehicleBusy ? "disabled" : ""}>Erase all logs…</button>` : ""}</div>
     </div>`;
+}
+
+/** Tuning or normal logs: the vehicle's logging, with a switch between the two presets. */
+function loggingCard() {
+  const l = state.logging;
+  if (!l) return "";
+  const off = state.vehicleBusy ? "disabled" : "";
+  const option = (mode, label) =>
+    `<button class="${l.mode === mode ? "on" : ""}" ${l.mode === mode ? "disabled" : `data-action="write" data-source="logging:${mode}" data-title="${label.toLowerCase()}" ${off}`}>${label}</button>`;
+  return `<div class="card">
+    <h2>Logging <span class="seg">${option("tuning", "Tuning logs")}${option("normal", "Normal logs")}</span></h2>
+    <p>${l.mode === "partial" ? chip("warn", "mixed") : chip("info", l.mode)} ${esc(l.summary)}</p>
+    <p class="muted">${
+      l.mode === "tuning"
+        ? "Switch back to normal logs when tuning is finished: tuning logs fill the SD card fast."
+        : "Tuning logs add fast attitude, PID and high-rate gyro data, which the noise, filter and PID analyses and the AutoTune check need. Logs get much larger, so use them for tuning flights only."
+    } Switching shows the changes to review before anything is written.</p>
+  </div>`;
 }
 
 function paramValueText(row, v) {

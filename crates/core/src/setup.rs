@@ -718,7 +718,7 @@ fn sensors(p: Param, live: &Live) -> Step {
 // ---------- 7. Logging for tuning ----------
 
 /// Whether pre- and post-filter gyro logging is set up (raw IMU or batch sampler).
-fn gyro_logging(p: Param) -> (bool, String) {
+pub(crate) fn gyro_logging(p: Param) -> (bool, String) {
     let raw = int(p, "INS_RAW_LOG_OPT");
     let bat_mask = int(p, "INS_LOG_BAT_MASK").unwrap_or(0);
     let bat_opt = int(p, "INS_LOG_BAT_OPT").unwrap_or(0);

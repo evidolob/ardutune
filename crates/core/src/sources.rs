@@ -2,7 +2,7 @@
 //! worked out from the vehicle's live parameters. Shared by the desktop app
 //! and the web app; sources that need a log or a file are theirs.
 
-use crate::{arming, autotune, gps, motors, rc, serial, setup, switch};
+use crate::{arming, autotune, gps, logging, motors, rc, serial, setup, switch};
 
 /// A parameter, the value to write and why.
 pub type Wanted = (String, f64, Option<String>);
@@ -82,6 +82,15 @@ pub fn from_params(param: impl Fn(&str) -> Option<f64>, source: &str, ctx: &Cont
             [ch, tune, min, max] => rc::tuning_knob(p, ch as u8, tune, min, max).map(wanted),
             _ => Err("bad knob source".to_owned()),
         }),
+        // A logging preset: "logging:tuning" or "logging:normal".
+        "logging" => {
+            let v = logging::view(p);
+            match rest {
+                "tuning" => Ok(wanted(v.tuning)),
+                "normal" => Ok(wanted(v.normal)),
+                _ => Err(format!("unknown logging preset {rest}")),
+            }
+        }
         // A setup guide step's changes, from the live values.
         "setup" => {
             let guide = setup::assess(p, &setup::Live::default());

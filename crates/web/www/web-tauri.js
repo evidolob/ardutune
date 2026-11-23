@@ -93,7 +93,7 @@
 
   // Commands the web version runs on the vehicle (the rest need the desktop app).
   const VEHICLE = new Set([
-    "list_ports", "vehicle_status", "param_table", "prepare_changes", "apply_changes", "reboot", "vehicle_config", "autotune_status",
+    "list_ports", "vehicle_status", "param_table", "prepare_changes", "apply_changes", "reboot", "vehicle_config", "autotune_status", "logging_status",
     "vehicle_pack", "initial_tune", "motor_layout", "motor_test", "motor_check", "rc_status", "rc_choices", "detect_switch", "gps_status",
     "serial_status", "arming_check", "setup_guide", "list_vehicle_logs", "erase_vehicle_logs", "delete_vehicle_log",
   ]);

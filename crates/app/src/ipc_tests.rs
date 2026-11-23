@@ -244,6 +244,24 @@ fn analyse_connect_download_write_and_reboot() {
     let plan = call("prepare_changes", json!({ "source": "setup:logging", "label": "writing logging for tuning" })).unwrap();
     assert!(!plan["rows"].as_array().unwrap().is_empty());
 
+    // Logging presets: the simulated quad has ArduPilot's default (normal)
+    // logging; switching to tuning logs is written and read back, AutoTune
+    // then no longer asks for it, and normal logs undo it.
+    let logs = call("logging_status", json!({})).unwrap();
+    assert_eq!(logs["mode"], "normal", "{logs}");
+    assert!(logs["normal"].as_array().unwrap().is_empty(), "{logs}");
+    let at = call("autotune_status", json!({ "prop_in": 9.0 })).unwrap();
+    assert!(at["checks"].as_array().unwrap().iter().any(|c| c["id"] == "logging"), "{at}");
+    call("prepare_changes", json!({ "source": "logging:tuning", "label": "writing tuning logs" })).unwrap();
+    let applied = call("apply_changes", json!({ "backup": false })).unwrap();
+    assert!(applied["results"].as_array().unwrap().iter().all(|r| r["error"].is_null()), "{applied}");
+    assert_eq!(call("logging_status", json!({})).unwrap()["mode"], "tuning");
+    let at = call("autotune_status", json!({ "prop_in": 9.0 })).unwrap();
+    assert!(at["checks"].as_array().unwrap().iter().all(|c| c["id"] != "logging"), "{at}");
+    call("prepare_changes", json!({ "source": "logging:normal", "label": "writing normal logs" })).unwrap();
+    call("apply_changes", json!({ "backup": false })).unwrap();
+    assert_eq!(call("logging_status", json!({})).unwrap()["mode"], "normal");
+
     // Initial tune from prop size: calculated, then planned like any write.
     let pack = call("vehicle_pack", json!({})).unwrap();
     assert!(pack["cells"].as_u64().unwrap() >= 1, "{pack}");

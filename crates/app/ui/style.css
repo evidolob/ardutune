@@ -1433,6 +1433,11 @@ h2 .seg button.on {
   font-weight: 600;
 }
 
+h2 .seg button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
 .modal h3 {
   font-size: 13px;
   margin: 16px 0 6px;

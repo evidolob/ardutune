@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ardutune_core::utc::{date_time, file_stamp};
-use ardutune_core::{arming, autotune, config, gps, motors, paramdoc, params, rc, serial, setup, switch, tune};
+use ardutune_core::{arming, autotune, config, gps, logging, motors, paramdoc, params, rc, serial, setup, switch, tune};
 use ardutune_link::{plan, ports, CompassCal, Link, Params};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
@@ -620,6 +620,19 @@ pub async fn gps_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<gps::Page> {
         }
         c.last_gps = Some(page.clone());
         Ok(page)
+    })
+    .await
+}
+
+/// Which logging the vehicle has (tuning or normal logs), and the changes to
+/// switch between them.
+#[tauri::command]
+pub async fn logging_status<R: Runtime>(app: AppHandle<R>) -> CmdResult<logging::View> {
+    blocking(app, move |app| {
+        let state = app.state::<AppState>();
+        let mut slot = lock(&state.vehicle);
+        let c = connected(&mut slot)?;
+        Ok(logging::view(|n| c.params.get(n).map(|p| p.value as f64)))
     })
     .await
 }
